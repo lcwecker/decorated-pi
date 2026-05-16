@@ -1,6 +1,6 @@
 {
   "name": "decorated-pi",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "description": "Essential utilities for pi: safety gates, secret redaction, smart @ completion, dynamic AGENTS loading, image fallback, and LSP tools",
   "keywords": [
     "pi",
