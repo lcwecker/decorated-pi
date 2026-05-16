@@ -1,0 +1,4 @@
+test/
+vitest.config.ts
+.mcp.json
+*.tgz
