@@ -63,7 +63,7 @@ Supported languages:
 
 ### 4. Auxiliary Models (Image + Compact)
 
-Uses cheaper models for auxiliary tasks, configured via `/extend-model`:
+Uses cheaper models for auxiliary tasks, configured via `/dp-model`:
 
 - **Image read fallback** — when the model reads an image file, detects type via magic bytes, calls a configured vision-capable model, and replaces the read result with image analysis text (jpeg, png, gif, webp)
 - **Compact model** — uses a configured model for context compaction (instead of the main model), auto-resumes after compaction.
@@ -103,6 +103,30 @@ Runtime settings are stored in:
 ```text
 ~/.pi/agent/decorated-pi.json
 ```
+
+### Module Loading
+
+Modules can be toggled on/off. Changes take effect after `/reload`.
+
+| Module | Default | Effect when disabled |
+| -------- | --------- | --------------------- |
+| `safety` | `true` | No command guard, no protected path check, no secret redaction |
+| `lsp` | `true` | All `lsp_*` tools unregistered — no diagnostics, hover, etc. |
+| `smart-at` | `true` | Fallback to Pi's built-in `@` file completion |
+
+Use `/dp-settings` to toggle, or edit the config file directly:
+
+```json
+{
+  "modules": {
+    "safety": true,
+    "lsp": false,
+    "smart-at": true
+  }
+}
+```
+
+Omitted keys default to `true` (enabled).
 
 ## License
 

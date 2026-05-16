@@ -3,7 +3,7 @@
  */
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { setupSafety } from "./safety";
+import { setupSafety } from "./safety/index.js";
 import { setupExtendModel } from "./extend-model";
 import { setupSlash } from "./slash";
 import { setupSubdirAgents } from "./subdir-agents";
@@ -12,15 +12,19 @@ import { setupGuidance } from "./guidance";
 import { setupLsp } from "./lsp/index";
 import { setupProviders } from "./providers/index";
 import { setupSmartAt } from "./smart-at";
+import { isModuleEnabled } from "./settings";
 
 export default function (pi: ExtensionAPI) {
-  setupSafety(pi);
-  setupExtendModel(pi);
+  // Always loaded — core commands and providers
   setupSlash(pi);
+  setupProviders(pi);
+  setupExtendModel(pi);
   setupSubdirAgents(pi);
   setupSessionTitle(pi);
   setupGuidance(pi);
-  setupLsp(pi);
-  setupProviders(pi);
-  setupSmartAt(pi);
+
+  // Configurable modules
+  if (isModuleEnabled("safety"))    setupSafety(pi);
+  if (isModuleEnabled("lsp"))       setupLsp(pi);
+  if (isModuleEnabled("smart-at"))  setupSmartAt(pi);
 }

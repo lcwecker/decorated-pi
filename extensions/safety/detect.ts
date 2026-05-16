@@ -1,23 +1,14 @@
 /**
- * Safety — 安全防护模块
+ * Safety Detection — 纯逻辑层（零 Pi 依赖）
  *
- * - Command Guard:   拦截危险 bash 命令（rm, sudo, npm publish, git push 等）
- * - Redirect Guard:  bash 覆盖写入（>）提示确认，保护路径额外警告敏感信息
- * - Protected Paths: write/edit 写入保护路径需确认，提示敏感信息
- * - Read Guard:      read/cat 等读取保护路径需确认，提示敏感信息
- * - Write Guard:     覆盖非空文件禁止 write 工具，建议用 edit
- * - Secret Redact:   API Key / Token 自动掩码
+ * - Command Guard:   危险命令检测 + 覆盖写入检测 + 读取保护路径检测
+ * - Secret Detection: 40+ 高置信模式 + 熵分析 V3+Dict + 安全模式排除
+ *
+ * 本模块可独立测试，不依赖 Pi API。
  */
 
-import type {
-  ExtensionAPI,
-  ExtensionContext,
-  ToolResultEvent,
-} from "@earendil-works/pi-coding-agent";
 import * as fs from "node:fs";
 import { resolve } from "node:path";
-
-// ─── 危险命令枚举 ──────────────────────────────────────────────────────────
 
 const DANGEROUS_COMMANDS: [string, string[]][] = [
   ["rm", []],
@@ -56,7 +47,7 @@ const READ_COMMANDS = new Set([
   "file", "strings", "grep", "rg", "ag", "ack",
 ]);
 
-function checkProtectedPath(filePath: string): string | null {
+export function checkProtectedPath(filePath: string): string | null {
   const normalized = filePath.replace(/\\/g, "/");
   const filename = normalized.split("/").pop() ?? "";
   for (const seg of PROTECTED_PATH_SEGMENTS) {
@@ -73,7 +64,7 @@ function checkProtectedPath(filePath: string): string | null {
 
 // ─── Shell tokenizer ────────────────────────────────────────────────────────
 
-function tokenizeShell(command: string): string[] {
+export function tokenizeShell(command: string): string[] {
   const tokens: string[] = [];
   let current = "";
   let quote: "'" | '"' | null = null;
@@ -164,13 +155,13 @@ function isExistingRegularFile(target: string, cwd: string): boolean {
 
 // ─── Bash danger analysis ───────────────────────────────────────────────────
 
-interface BashDanger {
+export interface BashDanger {
   reason: string;
   /** Whether the danger involves a protected (sensitive) path */
   protectedPath?: string;
 }
 
-function collectBashDangers(command: string, cwd: string): BashDanger[] {
+export function collectBashDangers(command: string, cwd: string): BashDanger[] {
   const tokens = tokenizeShell(command);
   const dangers: BashDanger[] = [];
   const seen = new Set<string>();
@@ -261,7 +252,7 @@ function collectBashDangers(command: string, cwd: string): BashDanger[] {
   return dangers;
 }
 
-function formatBashDangers(dangers: BashDanger[]): string | null {
+export function formatBashDangers(dangers: BashDanger[]): string | null {
   if (dangers.length === 0) return null;
   if (dangers.length === 1) return dangers[0]!.reason;
   return `dangerous operations detected:\n- ${dangers.map(d => d.reason).join("\n- ")}`;
@@ -290,9 +281,6 @@ function formatBashDangers(dangers: BashDanger[]): string | null {
 // - dictRatio: dictionary word coverage penalizes identifiers/English text
 // - hexPenalty: -2.5 only if >90% hex AND contains '-' (UUID-like format)
 
-type ToolTextContent = Extract<NonNullable<ToolResultEvent["content"]>[number], { type: "text" }>;
-
-// ── Entropy Analysis v3+Dict ─────────────────────────────────────────────────
 //
 // Based on opencode-secrets-protect by Jared Scheel
 // https://github.com/jscheel/opencode-secrets-protect (MIT License)
@@ -312,7 +300,7 @@ type ToolTextContent = Extract<NonNullable<ToolResultEvent["content"]>[number], 
 //   6. hexPenalty: -2.5 only if >90% hex AND contains '-' (UUID-like format)
 
 /** Character class: U=uppercase, L=lowercase, D=digit, S=dash, X=other */
-function charClass(c: string): "U" | "L" | "D" | "S" | "X" {
+export function charClass(c: string): "U" | "L" | "D" | "S" | "X" {
   const code = c.charCodeAt(0);
   if (code >= 65 && code <= 90) return "U";
   if (code >= 97 && code <= 122) return "L";
@@ -325,7 +313,7 @@ function charClass(c: string): "U" | "L" | "D" | "S" | "X" {
  * Shannon entropy: measures average information content per character.
  * H(X) = -Σ p(x) · log₂(p(x))
  */
-function shannonEntropy(data: string): number {
+export function shannonEntropy(data: string): number {
   if (data.length === 0) return 0;
   const freq = new Map<string, number>();
   for (const char of data) {
@@ -349,7 +337,7 @@ function shannonEntropy(data: string): number {
  *   - Case switch AbA pattern (≥2 uppercase + ≥1 lowercase) → 0.8
  *   - Otherwise → 0
  */
-function trigramScore(c1: string, c2: string, c3: string): number {
+export function trigramScore(c1: string, c2: string, c3: string): number {
   const cls: string[] = [charClass(c1), charClass(c2), charClass(c3)];
 
   // Any X-class character → skip
@@ -380,7 +368,7 @@ function trigramScore(c1: string, c2: string, c3: string): number {
  * Split a token by X-class characters into independent segments.
  * This prevents `://`, `@`, `.` etc. from diluting trigram density.
  */
-function splitByXClass(token: string): string[] {
+export function splitByXClass(token: string): string[] {
   const segments: string[] = [];
   let current = "";
   for (const c of token) {
@@ -398,7 +386,7 @@ function splitByXClass(token: string): string[] {
 /**
  * Compute average trigram density for a single segment.
  */
-function segmentDensity(segment: string): number {
+export function segmentDensity(segment: string): number {
   if (segment.length < 3) return 0;
   let totalScore = 0;
   for (let i = 0; i <= segment.length - 3; i++) {
@@ -411,7 +399,7 @@ function segmentDensity(segment: string): number {
  * Compute the maximum segment density across all X-split segments.
  * The segment with the highest density is the most likely secret region.
  */
-function maxSegmentDensity(token: string): number {
+export function maxSegmentDensity(token: string): number {
   const segments = splitByXClass(token);
   if (segments.length === 0) return 0;
   let maxD = 0;
@@ -427,7 +415,7 @@ function maxSegmentDensity(token: string): number {
  * lowercase fragments ≥3 characters. Natural language words reduce
  * the likelihood of being a secret.
  */
-function computeWordRatio(token: string): number {
+export function computeWordRatio(token: string): number {
   // Split by class boundaries
   const segments: string[] = [];
   let current = "";
@@ -461,7 +449,7 @@ function computeWordRatio(token: string): number {
  * Hex ratio: fraction of characters that are hex characters (0-9, a-f, A-F, -).
  * Values >0.9 indicate UUIDs or hex hashes which are safe.
  */
-function computeHexRatio(token: string): number {
+export function computeHexRatio(token: string): number {
   let hexChars = 0;
   for (const c of token) {
     if (/[0-9a-fA-F\-]/.test(c)) hexChars++;
@@ -493,7 +481,7 @@ const DICT_WORDS: ReadonlySet<string> = new Set(
  * "devstral-small-2" → finds "dev", "str", "small" → covers 11/16 chars
  * "aB3xK9mPqR7wN"   → no words found → dictRatio = 0
  */
-function computeDictRatio(token: string): number {
+export function computeDictRatio(token: string): number {
   // Extract lowercase letter sequences (>= 3 chars)
   const lowerSeqs: string[] = [];
   let current = "";
@@ -535,19 +523,19 @@ function computeDictRatio(token: string): number {
 
 // ── Entropy Constants ────────────────────────────────────────────────────────
 
-const ENTROPY_THRESHOLD = 5.5;
-const MIN_ENTROPY_TOKEN_LENGTH = 16;
-const W1_DENSITY = 3.0;      // trigram density weight
-const W2_WORD = 3.0;        // vowel-word penalty weight
-const W3_DICT = 4.0;        // dictionary word penalty weight
-const HEX_PENALTY = 2.5;    // penalty for >90% hex chars
-const HEX_RATIO_THRESHOLD = 0.9;
+export const ENTROPY_THRESHOLD = 5.5;
+export const MIN_ENTROPY_TOKEN_LENGTH = 16;
+export const W1_DENSITY = 3.0;
+export const W2_WORD = 3.0;
+export const W3_DICT = 4.0;
+export const HEX_PENALTY = 2.5;
+export const HEX_RATIO_THRESHOLD = 0.9;
 
 /**
  * Adjusted entropy v3+Dict:
  *   adjusted = baseShannon + trigramDensity×W1 - wordRatio×W2 - dictRatio×W3 - hexPenalty
  */
-function calculateAdjustedEntropy(data: string): number {
+export function calculateAdjustedEntropy(data: string): number {
   const base = shannonEntropy(data);
   const density = maxSegmentDensity(data);
   const wordRatio = computeWordRatio(data);
@@ -563,7 +551,7 @@ function calculateAdjustedEntropy(data: string): number {
   return base + densityBoost - wordPenalty - dictPenalty - hp;
 }
 
-function isHighEntropy(data: string): boolean {
+export function isHighEntropy(data: string): boolean {
   if (data.length < MIN_ENTROPY_TOKEN_LENGTH) return false;
   if (isSafeContent(data)) return false;
   return calculateAdjustedEntropy(data) > ENTROPY_THRESHOLD;
@@ -573,14 +561,14 @@ function isHighEntropy(data: string): boolean {
  * Split by whitespace only — the most conservative tokenization.
  * This preserves JSON structure, URLs, and connection strings.
  */
-function findHighEntropyTokens(content: string): string[] {
+export function findHighEntropyTokens(content: string): string[] {
   const tokens = content.split(/[\s\[\]{}"',\/\\|()&#@!<>?]+/);
   return tokens.filter(t => t.length >= MIN_ENTROPY_TOKEN_LENGTH && isHighEntropy(t));
 }
 
 // ── Known Secret Patterns ────────────────────────────────────────────────────
 
-interface SecretPattern {
+export interface SecretPattern {
   name: string;
   pattern: RegExp;
   minLength: number;
@@ -589,7 +577,7 @@ interface SecretPattern {
   highConfidence: boolean;
 }
 
-const SECRET_PATTERNS: SecretPattern[] = [
+export const SECRET_PATTERNS: SecretPattern[] = [
   // AWS
   { name: "AWS Access Key ID",         pattern: /AKIA[0-9A-Z]{16}/,                                                minLength: 16,  allowsSpaces: false, highConfidence: true },
   { name: "AWS Secret Access Key",    pattern: /(?:aws)?_?(?:secret)?_?(?:access)?_?key['"\s:=]+['"]?[0-9a-zA-Z/+]{40}['"]?/i, minLength: 30, allowsSpaces: false, highConfidence: true },
@@ -646,7 +634,7 @@ const SECRET_PATTERNS: SecretPattern[] = [
 
 // ── Safe Patterns (exclude from detection to reduce false positives) ─────────
 
-const SAFE_PATTERNS: RegExp[] = [
+export const SAFE_PATTERNS: RegExp[] = [
   /^https?:\/\/[a-zA-Z0-9.-]+(?:\/[a-zA-Z0-9.\/_\-?&=#%]*)?$/,  // URLs without credentials
   /^\.\.?\/[a-zA-Z0-9_\-./]+$/,                                 // Relative file paths
   /^\/[a-zA-Z0-9_\-./]+$/,                                       // Absolute Unix paths
@@ -660,7 +648,7 @@ const SAFE_PATTERNS: RegExp[] = [
   /^@[a-z0-9-]+\/[a-z0-9-]+$/,                                   // npm scoped packages
 ];
 
-function isSafeContent(content: string): boolean {
+export function isSafeContent(content: string): boolean {
   for (const pat of SAFE_PATTERNS) {
     if (pat.test(content)) return true;
   }
@@ -669,7 +657,7 @@ function isSafeContent(content: string): boolean {
 
 // ── Detector ─────────────────────────────────────────────────────────────────
 
-interface SecretMatch {
+export interface SecretMatch {
   name: string;
   start: number;
   end: number;
@@ -678,7 +666,7 @@ interface SecretMatch {
 
 const MIN_SCAN_LENGTH = 10;
 
-function detectSecrets(content: string): SecretMatch[] {
+export function detectSecrets(content: string): SecretMatch[] {
   if (content.length < MIN_SCAN_LENGTH) return [];
   const matches: SecretMatch[] = [];
   const seen = new Set<string>(); // deduplicate by position
@@ -741,136 +729,8 @@ function detectSecrets(content: string): SecretMatch[] {
   return matches.sort((a, b) => b.start - a.start);
 }
 
-function maskSecret(text: string): string {
+export function maskSecret(text: string): string {
   if (text.length <= 8) return "********";
   return text.slice(0, 4) + "********" + text.slice(-4);
 }
 
-// ─── Setup ──────────────────────────────────────────────────────────────────
-
-export function setupSafety(pi: ExtensionAPI) {
-  // ── Command Guard + Protected Paths + Write Guard (tool_call) ─────────
-
-  pi.on("tool_call", async (event, ctx) => {
-
-    // Gate 1: 危险命令 + 覆盖写入 + 读取保护路径
-    if (event.toolName === "bash") {
-      const command = (event.input as { command?: string }).command;
-      if (command) {
-        const dangers = collectBashDangers(command, ctx.cwd);
-        if (dangers.length > 0) {
-          const message = formatBashDangers(dangers)!;
-          if (!ctx.hasUI) {
-            return { block: true, reason: `\u26D4 ${message} (non-interactive)` };
-          }
-          const choice = await ctx.ui.select(
-            `\u26A0\uFE0F  ${message}\n\nAllow execution?`,
-            ["Block", "Allow once"],
-          );
-          if (!choice || choice === "Block") {
-            return { block: true, reason: `\u26D4 ${message}` };
-          }
-        }
-      }
-    }
-
-    // Gate 2: write/edit 写入保护路径
-    if (event.toolName === "write" || event.toolName === "edit") {
-      const filePath = (event.input as any).path ?? (event.input as any).file ?? (event.input as any).file_path;
-      if (filePath) {
-        const danger = checkProtectedPath(filePath);
-        if (danger) {
-          if (!ctx.hasUI) {
-            return { block: true, reason: `\uD83D\uDD10 ${danger}\nmay contain sensitive information` };
-          }
-          const choice = await ctx.ui.select(
-            `\uD83D\uDD10 ${danger}\nmay contain sensitive information\n\nProceed?`,
-            ["Block", "Allow once"],
-          );
-          if (!choice || choice === "Block") {
-            return { block: true, reason: `\uD83D\uDD10 ${danger}\nmay contain sensitive information` };
-          }
-        }
-      }
-    }
-
-    // Gate 3: 写保护（已有内容的文件禁止 write，直接返回信息给 agent）
-    if (event.toolName === "write") {
-      const filePath = (event.input as any).path ?? (event.input as any).file ?? (event.input as any).file_path;
-      if (filePath) {
-        try {
-          const abs = resolve(ctx.cwd, filePath);
-          if (fs.existsSync(abs) && fs.readFileSync(abs, "utf8").length > 0) {
-            return { block: true, reason: "Overwriting a non-empty file is dangerous, use the edit tool instead!" };
-          }
-        } catch { /* file doesn't exist */ }
-      }
-    }
-
-    // Gate 4: read 工具读取保护路径（bash 读取已在 Gate 1 处理）
-    if (event.toolName === "read") {
-      const filePath = (event.input as any).path ?? (event.input as any).file ?? (event.input as any).file_path;
-      if (filePath) {
-        const danger = checkProtectedPath(filePath);
-        if (danger) {
-          if (!ctx.hasUI) {
-            return { block: true, reason: `\uD83D\uDD10 Reading protected file: ${danger}\nmay contain sensitive information` };
-          }
-          const choice = await ctx.ui.select(
-            `\uD83D\uDD10 Reading protected file: ${danger}\nmay contain sensitive information\n\nProceed?`,
-            ["Block", "Allow once"],
-          );
-          if (!choice || choice === "Block") {
-            return { block: true, reason: `\uD83D\uDD10 Reading protected file: ${danger}\nmay contain sensitive information` };
-          }
-        }
-      }
-    }
-  });
-
-  // ── Secret Redact (tool_result) ────────────────────────────────────────
-
-  const handleToolResult = async (
-    event: ToolResultEvent,
-    ctx: ExtensionContext,
-  ): Promise<{ content?: NonNullable<ToolResultEvent["content"]> } | void> => {
-    if (!event.content || !Array.isArray(event.content)) return;
-
-    // Only scan read tool output — other tools (bash, write, edit) are either
-    // covered by path guards or produce git/diff noise that causes false positives.
-    if (event.toolName !== "read") return;
-
-    const textParts: Array<{ index: number; text: string; item: ToolTextContent }> = [];
-    for (let i = 0; i < event.content.length; i++) {
-      const item = event.content[i];
-      if (item.type === "text" && typeof item.text === "string" && item.text.length > 0) {
-        textParts.push({ index: i, text: item.text, item });
-      }
-    }
-    if (textParts.length === 0) return;
-
-    let totalCount = 0;
-    const newContent = [...event.content];
-
-    for (const { index, text, item } of textParts) {
-      const matches = detectSecrets(text);
-      if (matches.length === 0) continue;
-
-      totalCount += matches.length;
-      let redacted = text;
-      for (const { start, end } of matches) {
-        const original = redacted.slice(start, end);
-        redacted = redacted.slice(0, start) + maskSecret(original) + redacted.slice(end);
-      }
-      const updatedItem: ToolTextContent = { ...item, text: redacted };
-      newContent[index] = updatedItem;
-    }
-
-    if (totalCount === 0) return;
-    const label = totalCount === 1 ? "1 secret" : `${totalCount} secrets`;
-    ctx.ui.notify(`\uD83D\uDD10 Redacted ${label} in ${event.toolName} output`, "warning");
-    return { content: newContent };
-  };
-
-  pi.on("tool_result", handleToolResult);
-}

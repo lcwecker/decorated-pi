@@ -25,10 +25,17 @@ export interface ProviderCache {
   models: ProviderModelEntry[];
 }
 
+export interface ModuleSettings {
+  safety?: boolean;
+  lsp?: boolean;
+  "smart-at"?: boolean;
+}
+
 export interface DecoratedPiConfig {
   imageModelKey?: string | null;
   compactModelKey?: string | null;
   providers?: Record<string, ProviderCache>;
+  modules?: ModuleSettings;
 }
 
 export function loadConfig(): DecoratedPiConfig {
@@ -96,4 +103,28 @@ export function setImageModelKey(key: string | null) {
 
 export function setCompactModelKey(key: string | null) {
   saveConfig({ compactModelKey: key });
+}
+
+// ─── Module Switches ──────────────────────────────────────────────────────────
+
+const DEFAULT_MODULES: Required<ModuleSettings> = {
+  safety: true,
+  lsp: true,
+  "smart-at": true,
+};
+
+export function isModuleEnabled(name: keyof ModuleSettings): boolean {
+  const modules = loadConfig().modules ?? {};
+  return modules[name] ?? DEFAULT_MODULES[name] ?? true;
+}
+
+export function setModuleEnabled(name: keyof ModuleSettings, enabled: boolean) {
+  const modules = { ...loadConfig().modules };
+  modules[name] = enabled;
+  saveConfig({ modules });
+}
+
+export function getAllModuleSettings(): Required<ModuleSettings> {
+  const modules = loadConfig().modules ?? {};
+  return { ...DEFAULT_MODULES, ...modules };
 }
