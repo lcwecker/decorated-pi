@@ -1,3 +1,11 @@
+/**
+ * LSP Server Config — language detection, server commands, workspace roots
+ *
+ * Based on @spences10/pi-lsp by Scott Spence
+ * https://github.com/spences10/my-pi/tree/main/packages/pi-lsp (MIT License)
+ *
+ * Modifications: added C/C++ (clangd) and Lua support
+ */
 import { existsSync } from "node:fs";
 import { dirname, extname, isAbsolute, join, resolve } from "node:path";
 
@@ -31,7 +39,7 @@ const EXTENSION_LANGUAGES: Record<string, string> = {
   ".svelte": "svelte",
 };
 
-type LanguageConfig = {
+export type LanguageConfig = {
   language: string;
   command: string;
   args: string[];

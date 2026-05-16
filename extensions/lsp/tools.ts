@@ -1,3 +1,11 @@
+/**
+ * LSP Tool Definitions — diagnostics, hover, definition, references, symbols, rename
+ *
+ * Based on @spences10/pi-lsp by Scott Spence
+ * https://github.com/spences10/my-pi/tree/main/packages/pi-lsp (MIT License)
+ *
+ * Modifications: added lsp_find_symbol, lsp_rename, multi-file lsp_diagnostics
+ */
 import { defineTool, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { list_supported_languages } from "./servers.js";

@@ -1,3 +1,11 @@
+/**
+ * LSP Client — JSON-RPC over stdio transport
+ *
+ * Based on @spences10/pi-lsp by Scott Spence
+ * https://github.com/spences10/my-pi/tree/main/packages/pi-lsp (MIT License)
+ *
+ * Modifications: added rename() method, simplified type exports
+ */
 import { spawn, ChildProcess } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { pathToFileURL } from "node:url";
@@ -204,7 +212,10 @@ export class LspClient extends EventEmitter {
   async ensure_document_open(uri: string, text: string): Promise<void> {
     const existing = this.#open_docs.get(uri);
     if (existing) {
-      if (existing.text === text) return;
+      // Always force-sync: the file may have been modified externally
+      // (e.g. by pi's edit/write tools), and even if text matches the
+      // cached version, diagnostics may be stale due to changes in
+      // other files. Never skip the sync based on text comparison.
       const next_version = existing.version + 1;
       this.#open_docs.set(uri, { version: next_version, text });
       this.#diagnostics_by_uri.delete(uri);

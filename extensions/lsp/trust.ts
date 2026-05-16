@@ -1,3 +1,9 @@
+/**
+ * LSP Binary Trust Store — project-local binary trust management
+ *
+ * Based on @spences10/pi-lsp by Scott Spence
+ * https://github.com/spences10/my-pi/tree/main/packages/pi-lsp (MIT License)
+ */
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import {
   is_project_subject_trusted,

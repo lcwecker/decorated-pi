@@ -387,12 +387,7 @@ export function setupExtendModel(pi: ExtensionAPI) {
           auth.apiKey ?? "", auth.headers, signal, customInstructions, previousSummary);
       }
 
-      const readFiles = [...fileOps.read].filter(f => !fileOps.edited.has(f) && !fileOps.written.has(f)).sort();
-      const modifiedFiles = [...new Set([...fileOps.edited, ...fileOps.written])].sort();
-      if (readFiles.length > 0) summary += `\n\n<read-files>\n${readFiles.join("\n")}\n</read-files>`;
-      if (modifiedFiles.length > 0) summary += `\n\n<modified-files>\n${modifiedFiles.join("\n")}\n</modified-files>`;
-
-      return { compaction: { summary, firstKeptEntryId, tokensBefore, details: { readFiles, modifiedFiles } } };
+      return { compaction: { summary, firstKeptEntryId, tokensBefore } };
     } catch (err) {
       if (signal.aborted) return;
       ctx.ui.notify(`Compact failed: ${err instanceof Error ? err.message : err}`, "error");

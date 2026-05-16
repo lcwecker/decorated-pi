@@ -1,3 +1,9 @@
+/**
+ * LSP Extension Entry Point
+ *
+ * Based on @spences10/pi-lsp by Scott Spence
+ * https://github.com/spences10/my-pi/tree/main/packages/pi-lsp (MIT License)
+ */
 import { LspServerManager } from "./server-manager.js";
 import { register_lsp_tools } from "./tools.js";
 import { setup_lsp_prompt } from "./prompt.js";

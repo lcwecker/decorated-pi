@@ -1,3 +1,9 @@
+/**
+ * LSP Output Formatting — diagnostics, hover, locations, symbols
+ *
+ * Based on @spences10/pi-lsp by Scott Spence
+ * https://github.com/spences10/my-pi/tree/main/packages/pi-lsp (MIT License)
+ */
 import { fileURLToPath } from "node:url";
 import type { LspDiagnostic, LspHover, LspLocation, LspDocumentSymbol } from "./client.js";
 import { LspClientStartError } from "./client.js";

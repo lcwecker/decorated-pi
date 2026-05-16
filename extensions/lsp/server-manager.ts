@@ -1,3 +1,9 @@
+/**
+ * LSP Server Manager — lifecycle, per-language instances, project-local trust
+ *
+ * Based on @spences10/pi-lsp by Scott Spence
+ * https://github.com/spences10/my-pi/tree/main/packages/pi-lsp (MIT License)
+ */
 import { resolve_project_trust } from "@spences10/pi-project-trust";
 import { readFile } from "node:fs/promises";
 import { isAbsolute, resolve } from "node:path";

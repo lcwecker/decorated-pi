@@ -1,3 +1,9 @@
+/**
+ * LSP System Prompt — injects LSP guidance into agent system prompt
+ *
+ * Based on @spences10/pi-lsp by Scott Spence
+ * https://github.com/spences10/my-pi/tree/main/packages/pi-lsp (MIT License)
+ */
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { list_supported_languages } from "./servers.js";
 

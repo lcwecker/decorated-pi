@@ -200,9 +200,13 @@ export function setupSmartAt(pi: ExtensionAPI) {
 
         const { dirs, files } = getFileAndDirList(cwd);
         const results = smartSearch(dirs, files, prefix.slice(1));
-        ctx.ui.setWidget("smart-at", ["[2mpowered by decorated-pi[0m"]);
 
-        if (!results.length) return null;
+        if (!results.length) {
+          ctx.ui.setWidget("smart-at", undefined);
+          return null;
+        }
+
+        ctx.ui.setWidget("smart-at", ["[2mpowered by decorated-pi[0m"]);
         return Promise.resolve({
           items: results.map((f: string) => ({
             value: "@" + f,
@@ -213,7 +217,10 @@ export function setupSmartAt(pi: ExtensionAPI) {
         });
       },
       // ⚠️ 必须 .bind(orig)
-      applyCompletion: orig.applyCompletion.bind(orig),
+      applyCompletion: (...args: any[]) => {
+        ctx.ui.setWidget("smart-at", undefined);
+        return orig.applyCompletion.apply(orig, args);
+      },
       shouldTriggerFileCompletion: orig.shouldTriggerFileCompletion?.bind(orig),
     }));
   });
