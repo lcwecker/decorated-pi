@@ -124,6 +124,7 @@ dist
 
 # Stores VSCode versions used for testing VSCode extensions
 .vscode-test
+.mcp.json
 
 # pnpm
 .pnpm-store

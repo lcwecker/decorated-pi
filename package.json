@@ -3,9 +3,23 @@
   "version": "0.1.0",
   "description": "Essential utilities for pi: safety gates, secret redaction, smart @ completion, dynamic AGENTS loading, image fallback, and LSP tools",
   "keywords": [
-    "pi-package"
+    "pi",
+    "pi-package",
+    "pi-extension",
+    "safety",
+    "security",
+    "lsp",
+    "language-server",
+    "autocomplete",
+    "secretlint"
   ],
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/lcwecker/decorated-pi.git"
+  },
+  "homepage": "https://github.com/lcwecker/decorated-pi#readme",
+  "bugs": "https://github.com/lcwecker/decorated-pi/issues",
   "dependencies": {
     "@secretlint/node": "^13.0.0",
     "@secretlint/secretlint-rule-azure": "^13.0.0",
@@ -13,12 +27,12 @@
     "@secretlint/secretlint-rule-secp256k1-privatekey": "^13.0.0",
     "@spences10/pi-child-env": "0.1.4",
     "@spences10/pi-project-trust": "0.0.6",
-    "openai": "^6.37.0",
-    "typebox": "^1.1.38"
+    "openai": "^6.37.0"
   },
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": "*",
-    "@earendil-works/pi-tui": "*"
+    "@earendil-works/pi-tui": "*",
+    "typebox": "*"
   },
   "pi": {
     "extensions": [
