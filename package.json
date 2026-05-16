@@ -1,6 +1,6 @@
 {
   "name": "decorated-pi",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Essential utilities for pi: safety gates, secret redaction, smart @ completion, dynamic AGENTS loading, image fallback, and LSP tools",
   "keywords": [
     "pi",
@@ -30,6 +30,7 @@
     "openai": "^6.37.0"
   },
   "peerDependencies": {
+    "@earendil-works/pi-ai": "*",
     "@earendil-works/pi-coding-agent": "*",
     "@earendil-works/pi-tui": "*",
     "typebox": "*"

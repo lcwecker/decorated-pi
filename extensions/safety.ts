@@ -20,6 +20,7 @@ import { resolve } from "node:path";
 const DANGEROUS_COMMANDS: [string, string[]][] = [
   ["rm", []],
   ["sudo", []],
+  ["npm", ["publish"]],
   ["svn", ["commit", "revert"]],
   ["git", ["reset", "restore", "clean", "push", "revert"]],
 ];

@@ -8,12 +8,27 @@ import * as path from "node:path";
 import * as os from "node:os";
 import type { Model } from "@earendil-works/pi-ai";
 
-const CONFIG_DIR = path.join(os.homedir(), ".pi", "agent", "extensions");
+const CONFIG_DIR = path.join(os.homedir(), ".pi", "agent");
 const CONFIG_FILE = path.join(CONFIG_DIR, "decorated-pi.json");
+
+export interface ProviderModelEntry {
+  id: string;
+  name: string;
+  reasoning: boolean;
+  contextWindow: number;
+  maxTokens: number;
+  input: ("text" | "image")[];
+}
+
+export interface ProviderCache {
+  lastSynced?: string;
+  models: ProviderModelEntry[];
+}
 
 export interface DecoratedPiConfig {
   imageModelKey?: string | null;
   compactModelKey?: string | null;
+  providers?: Record<string, ProviderCache>;
 }
 
 export function loadConfig(): DecoratedPiConfig {
@@ -39,6 +54,28 @@ export function parseModelKey(key: string): { provider: string; modelId: string 
   const i = key.indexOf("/");
   if (i === -1) return null;
   return { provider: key.slice(0, i), modelId: key.slice(i + 1) };
+}
+
+// ─── Provider ────────────────────────────────────────────────────────────────
+
+export function loadProvider(name: string): ProviderCache | null {
+  return loadConfig().providers?.[name] ?? null;
+}
+
+export function saveProvider(name: string, data: ProviderCache) {
+  if (!fs.existsSync(CONFIG_DIR)) fs.mkdirSync(CONFIG_DIR, { recursive: true });
+  const current = loadConfig();
+  if (!current.providers) current.providers = {};
+  current.providers[name] = data;
+  fs.writeFileSync(CONFIG_FILE, JSON.stringify(current, null, 2) + "\n", "utf-8");
+}
+
+export function removeProvider(name: string) {
+  const current = loadConfig();
+  if (current.providers?.[name]) {
+    delete current.providers[name];
+    fs.writeFileSync(CONFIG_FILE, JSON.stringify(current, null, 2) + "\n", "utf-8");
+  }
 }
 
 // ─── Getter ─────────────────────────────────────────────────────────────────

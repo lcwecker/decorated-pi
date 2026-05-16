@@ -10,6 +10,7 @@ import { setupSubdirAgents } from "./subdir-agents";
 import { setupSessionTitle } from "./session-title";
 import { setupGuidance } from "./guidance";
 import { setupLsp } from "./lsp/index";
+import { setupProviders } from "./providers/index";
 import { setupSmartAt } from "./smart-at";
 
 export default function (pi: ExtensionAPI) {
@@ -20,5 +21,6 @@ export default function (pi: ExtensionAPI) {
   setupSessionTitle(pi);
   setupGuidance(pi);
   setupLsp(pi);
+  setupProviders(pi);
   setupSmartAt(pi);
 }
