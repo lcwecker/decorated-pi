@@ -8,6 +8,7 @@ import { setupExtendModel } from "./extend-model";
 import { setupSlash } from "./slash";
 import { setupSubdirAgents } from "./subdir-agents";
 import { setupSessionTitle } from "./session-title";
+import { setupIO } from "./io";
 import { setupGuidance } from "./guidance";
 import { setupLsp } from "./lsp/index";
 import { setupProviders } from "./providers/index";
@@ -22,6 +23,8 @@ export default function (pi: ExtensionAPI) {
   setupSubdirAgents(pi);
   setupSessionTitle(pi);
   setupGuidance(pi);
+
+  setupIO(pi);
 
   // Configurable modules
   if (isModuleEnabled("safety"))    setupSafety(pi);
