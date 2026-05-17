@@ -3,8 +3,8 @@
  *
  * - Command Guard:   拦截危险 bash 命令
  * - Redirect Guard:  bash 覆盖写入提示确认
- * - Protected Paths: write/edit/read 保护路径提示确认
- * - Write Guard:     覆盖非空文件禁止 write
+ * - Protected Paths: write/edit/patch/read 保护路径提示确认
+ * - Write Guard:     覆盖非空文件禁止 write (提示使用 patch)
  * - Secret Redact:   API Key / Token 自动掩码
  */
 
@@ -53,10 +53,13 @@ export function setupSafety(pi: ExtensionAPI) {
       }
     }
 
-    // Gate 2: write/edit 写入保护路径
-    if (event.toolName === "write" || event.toolName === "edit") {
-      const filePath = (event.input as any).path ?? (event.input as any).file ?? (event.input as any).file_path;
-      if (filePath) {
+    // Gate 2: write/edit/patch 写入保护路径
+    if (event.toolName === "write" || event.toolName === "edit" || event.toolName === "patch") {
+      // For write/edit, path is a single field; for patch, check all patches[].path
+      const filePaths: string[] = event.toolName === "patch"
+        ? (event.input as any).patches?.filter((p: any) => p?.path).map((p: any) => p.path) ?? []
+        : [(event.input as any).path ?? (event.input as any).file ?? (event.input as any).file_path].filter(Boolean);
+      for (const filePath of filePaths) {
         const danger = checkProtectedPath(filePath);
         if (danger) {
           if (!ctx.hasUI) {
@@ -69,6 +72,7 @@ export function setupSafety(pi: ExtensionAPI) {
           if (!choice || choice === "Block") {
             return { block: true, reason: `🔒 ${danger}\nmay contain sensitive information` };
           }
+          break; // User approved — skip remaining paths
         }
       }
     }
@@ -80,7 +84,7 @@ export function setupSafety(pi: ExtensionAPI) {
         try {
           const abs = resolve(ctx.cwd, filePath);
           if (fs.existsSync(abs) && fs.readFileSync(abs, "utf8").length > 0) {
-            return { block: true, reason: "Overwriting a non-empty file is dangerous, use the edit tool instead!" };
+            return { block: true, reason: "Overwriting a non-empty file is dangerous, use the patch tool instead!" };
           }
         } catch { /* file doesn't exist */ }
       }

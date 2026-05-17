@@ -2,7 +2,7 @@
  * Slash — 所有扩展命令
  *
  * /dp-model    → 模型选择器 (TAB 切换 Image/Compact)
- * /dp-settings → 模块开关 (safety / lsp / smart-at)
+ * /dp-settings → 模块开关 (patch / safety / lsp / smart-at)
  * /retry       → 中断后继续
  */
 
@@ -60,12 +60,14 @@ function setupDpModelCommand(pi: ExtensionAPI) {
 // ─── /dp-settings ──────────────────────────────────────────────────────────
 
 const MODULE_LABELS: Record<keyof ModuleSettings, string> = {
+  patch: "Patch Tool",
   safety: "Safety Layer",
   lsp: "LSP Tools",
   "smart-at": "Smart @ Search",
 };
 
 const MODULE_DESCS: Record<keyof ModuleSettings, string> = {
+  patch: "Replace edit/write with patch tool (old_str/new_str replacement + overwrite)",
   safety: "Command guard, protected paths, read guard, secret redaction",
   lsp: "Language server diagnostics, hover, definition, references, symbols, rename",
   "smart-at": "Project-aware file search replacing default autocomplete",

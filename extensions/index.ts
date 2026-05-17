@@ -24,9 +24,8 @@ export default function (pi: ExtensionAPI) {
   setupSessionTitle(pi);
   setupGuidance(pi);
 
-  setupIO(pi);
-
   // Configurable modules
+  if (isModuleEnabled("patch"))     setupIO(pi);
   if (isModuleEnabled("safety"))    setupSafety(pi);
   if (isModuleEnabled("lsp"))       setupLsp(pi);
   if (isModuleEnabled("smart-at"))  setupSmartAt(pi);

@@ -29,6 +29,7 @@ export interface ModuleSettings {
   safety?: boolean;
   lsp?: boolean;
   "smart-at"?: boolean;
+  patch?: boolean;
 }
 
 export interface DecoratedPiConfig {
@@ -111,6 +112,7 @@ const DEFAULT_MODULES: Required<ModuleSettings> = {
   safety: true,
   lsp: true,
   "smart-at": true,
+  patch: true,
 };
 
 export function isModuleEnabled(name: keyof ModuleSettings): boolean {
