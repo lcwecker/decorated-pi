@@ -1,6 +1,6 @@
 # decorated-pi
 
-`decorated-pi` is a Pi extension that adds safety gates, LSP tools, image/compaction model helpers, smarter `@` file search, dynamic subdirectory `AGENTS.md` loading, and a few workflow quality-of-life improvements.
+`decorated-pi` is a Pi extension that adds stronger edit tool, safety gates, LSP tools, image/compaction model helpers, smarter `@` file search, dynamic subdirectory `AGENTS.md` loading, and a few workflow quality-of-life improvements.
 
 ## Install
 
@@ -31,7 +31,7 @@ Replaces Pi's default file search with a faster, project-aware search strategy:
 
 ### 3. LSP Tool Suite
 
-Based on [@spences10/pi-lsp](https://github.com/spences10/my-pi/tree/main/packages/pi-lsp) by Scott Spence (MIT License), with major additions:
+Based on [@spences10/pi-lsp](https://github.com/spences10/my-pi/tree/main/packages/pi-lsp), with major additions:
 
 - C/C++ and Lua support
 - `lsp_find_symbol`, `lsp_rename`, multi-file support merged into `lsp_diagnostics`
@@ -60,7 +60,8 @@ Uses cheaper models for auxiliary tasks, configured via `/dp-model`:
 - **Protected paths**
   - Blocks read/write access (via `write`/`edit`/`read` tools or `cat`/`head`/`tail`/`grep`/`rg` etc. bash commands) to sensitive locations such as `.env`, `.git/`, `.ssh/`, `*.pem`, `*.key`, etc.
 - **Secret redaction**
-  - Dual-layer detection: 40+ known-format patterns (AWS, GitHub, OpenAI, etc.) + Adjusted Shannon Entropy analysis for unknown formats. Based on [opencode-secrets-protect](https://github.com/jscheel/opencode-secrets-protect) (MIT)
+  - Three-layer detection: high-confidence known-format patterns (AWS, GitHub, OpenAI, etc.), config-key regex matching, and adjusted Shannon entropy heuristics for unknown secret-like values.
+  - Based on [opencode-secrets-protect](https://github.com/jscheel/opencode-secrets-protect)
 
 ### 6. Dynamic Subdirectory `AGENTS.md` / `CLAUDE.md`
 
