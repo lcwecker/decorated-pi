@@ -198,7 +198,7 @@ describe("index.ts — conditional loading structure", () => {
     // These should NOT be behind isModuleEnabled
     expect(indexSrc).toContain("setupSlash(pi)");
     expect(indexSrc).toContain("setupProviders(pi)");
-    expect(indexSrc).toContain("setupExtendModel(pi)");
+    expect(indexSrc).toContain("setupModelIntegration(pi)");
     expect(indexSrc).toContain("setupSubdirAgents(pi)");
     expect(indexSrc).toContain("setupSessionTitle(pi)");
     expect(indexSrc).toContain("setupGuidance(pi)");

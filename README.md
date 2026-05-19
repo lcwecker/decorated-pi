@@ -5,9 +5,9 @@
 ## Install
 
 ```bash
-pi install /path/to/decorated-pi #local
-pi install npm:decorated-pi #npm
-pi install git:github.com/lcwecker/decorated-pi #github
+pi install npm:decorated-pi
+pi install git:github.com/lcwecker/decorated-pi
+pi install /path/to/decorated-pi
 ```
 
 ## Features
@@ -16,10 +16,9 @@ pi install git:github.com/lcwecker/decorated-pi #github
 
 Replaces Pi's built-in `edit` / `write` with a safer `patch` tool:
 
-- **Anchor mechanism** — narrows the search range by specifying a unique string that appears before `old_str`, preventing mismatches in files with repeated patterns
-- **Mtime tracking** — records file modification time on `read`, rejects `patch` if the file changed since last read, preventing blind or stale edits
-- **Explicit overwrite** — offer atomic `overwrite: true` mode for overwrite files or full-file creation
-- **Multi-file atomic** — patches multiple files in a single call
+- **anchor mechanism** — narrows the search range by specifying a unique string that appears before `old_str`, preventing mismatches in files with repeated patterns
+- **mtime tracking** — records file modification time on `read`, rejects `patch` if the file changed since last read, preventing blind or stale edits
+- **explicit overwrite** — offer atomic `overwrite: true` mode for overwrite files or full-file creation to prevent unintened overwrite
 
 ### 2. Smart `@` File Search
 

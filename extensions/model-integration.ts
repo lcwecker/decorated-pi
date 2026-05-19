@@ -1,5 +1,5 @@
 /**
- * Extend Model — 模型 SDK
+ * Model Integration — 模型集成
  *
  * 对外接口:
  *   analyzeImage(model, base64, mediaType, apiKey, headers) → Promise<string>
@@ -22,13 +22,14 @@ import {
 } from "@earendil-works/pi-tui";
 import OpenAI from "openai";
 import { fileTypeFromFile } from "file-type";
-import type { Model } from "@earendil-works/pi-ai";
+import { isContextOverflow, type Model } from "@earendil-works/pi-ai";
 import {
   loadConfig, saveConfig, parseModelKey, formatModelKey,
   getImageModelKey, getCompactModelKey,
   setImageModelKey, setCompactModelKey,
 } from "./settings.js";
 import * as fs from "node:fs";
+import * as os from "node:os";
 import { extname, resolve } from "node:path";
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -349,15 +350,134 @@ function getConfiguredCompactModel(registry: any): Model<any> | null {
   return registry.find(parsed.provider, parsed.modelId) ?? null;
 }
 
+interface PiCompactionSettings {
+  enabled: boolean;
+  reserveTokens: number;
+}
+
+interface AutoCompactionCandidate {
+  messages: any[];
+  usage: { tokens: number | null; contextWindow: number } | undefined;
+}
+
+const DEFAULT_PI_COMPACTION_SETTINGS: PiCompactionSettings = {
+  enabled: true,
+  reserveTokens: 16_384,
+};
+
+function readJsonObject(filePath: string): any | undefined {
+  try {
+    if (!fs.existsSync(filePath)) return undefined;
+    const parsed = JSON.parse(fs.readFileSync(filePath, "utf-8"));
+    return parsed && typeof parsed === "object" ? parsed : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function loadPiCompactionSettings(cwd: string): PiCompactionSettings {
+  const globalSettings = readJsonObject(resolve(os.homedir(), ".pi", "agent", "settings.json"));
+  const projectSettings = readJsonObject(resolve(cwd, ".pi", "settings.json"));
+  const merged = {
+    ...DEFAULT_PI_COMPACTION_SETTINGS,
+    ...(globalSettings?.compaction ?? {}),
+    ...(projectSettings?.compaction ?? {}),
+  };
+  return {
+    enabled: merged.enabled !== false,
+    reserveTokens: typeof merged.reserveTokens === "number" ? merged.reserveTokens : DEFAULT_PI_COMPACTION_SETTINGS.reserveTokens,
+  };
+}
+
+function getLastAssistantMessage(messages: any[]): any | undefined {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    if (messages[i]?.role === "assistant") return messages[i];
+  }
+  return undefined;
+}
+
+function shouldExpectAutoCompaction(
+  messages: any[],
+  usage: { tokens: number | null; contextWindow: number } | undefined,
+  settings: PiCompactionSettings,
+): boolean {
+  if (!settings.enabled) return false;
+
+  const lastAssistant = getLastAssistantMessage(messages);
+  if (!lastAssistant) return false;
+
+  const contextWindow = usage?.contextWindow ?? 0;
+  if (contextWindow > 0 && isContextOverflow(lastAssistant, contextWindow)) {
+    return true;
+  }
+
+  if (!usage || usage.tokens === null) return false;
+  return usage.tokens > usage.contextWindow - settings.reserveTokens;
+}
+
+function shouldAutoResumeCompaction(
+  prePromptCompactionPending: boolean,
+  postAgentEndCandidate: AutoCompactionCandidate | null,
+  settings: PiCompactionSettings,
+  customInstructions?: string,
+): boolean {
+  if (customInstructions !== undefined) return false;
+  if (prePromptCompactionPending) return true;
+  if (!postAgentEndCandidate) return false;
+  return shouldExpectAutoCompaction(postAgentEndCandidate.messages, postAgentEndCandidate.usage, settings);
+}
+
+export const __modelIntegrationTest = {
+  shouldExpectAutoCompaction,
+  shouldAutoResumeCompaction,
+};
+
 // ═══════════════════════════════════════════════════════════════════════════
 // 主入口（注册所有事件）
 // ═══════════════════════════════════════════════════════════════════════════
 
-export function setupExtendModel(pi: ExtensionAPI) {
+export function setupModelIntegration(pi: ExtensionAPI) {
   setupImageReadFallback(pi);
+
+  let prePromptCompactionPending = false;
+  let postAgentEndCandidate: AutoCompactionCandidate | null = null;
+  let currentCompactionIsAuto = false;
+
+  pi.on("input", () => {
+    prePromptCompactionPending = true;
+    postAgentEndCandidate = null;
+  });
+
+  pi.on("before_agent_start", () => {
+    prePromptCompactionPending = false;
+    postAgentEndCandidate = null;
+  });
+
+  pi.on("agent_start", () => {
+    prePromptCompactionPending = false;
+    postAgentEndCandidate = null;
+  });
+
+  pi.on("agent_end", (event, ctx) => {
+    prePromptCompactionPending = false;
+    postAgentEndCandidate = {
+      messages: event.messages,
+      usage: ctx.getContextUsage(),
+    };
+  });
 
   // 自定义压缩模型
   pi.on("session_before_compact", async (event, ctx) => {
+    const compactionSettings = loadPiCompactionSettings(ctx.cwd);
+    currentCompactionIsAuto = shouldAutoResumeCompaction(
+      prePromptCompactionPending,
+      postAgentEndCandidate,
+      compactionSettings,
+      event.customInstructions,
+    );
+    prePromptCompactionPending = false;
+    postAgentEndCandidate = null;
+
     const model = getConfiguredCompactModel(ctx.modelRegistry);
     if (!model) return; // 没配 → Pi 默认
 
@@ -394,8 +514,11 @@ export function setupExtendModel(pi: ExtensionAPI) {
     }
   });
 
-  // 压缩后自动继续
+  // 压缩后自动继续（仅自动压缩）
   pi.on("session_compact", () => {
+    const shouldResume = currentCompactionIsAuto;
+    currentCompactionIsAuto = false;
+    if (!shouldResume) return;
     pi.sendMessage({
       customType: "auto_compact_resume",
       content: "The context was just auto-compacted. Continue the current task based on the summary above. Do not repeat completed work. If unsure about progress, briefly summarize current state then continue.",

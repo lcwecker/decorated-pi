@@ -4,7 +4,7 @@
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { setupSafety } from "./safety/index.js";
-import { setupExtendModel } from "./extend-model";
+import { setupModelIntegration } from "./model-integration";
 import { setupSlash } from "./slash";
 import { setupSubdirAgents } from "./subdir-agents";
 import { setupSessionTitle } from "./session-title";
@@ -19,7 +19,7 @@ export default function (pi: ExtensionAPI) {
   // Always loaded — core commands and providers
   setupSlash(pi);
   setupProviders(pi);
-  setupExtendModel(pi);
+  setupModelIntegration(pi);
   setupSubdirAgents(pi);
   setupSessionTitle(pi);
   setupGuidance(pi);

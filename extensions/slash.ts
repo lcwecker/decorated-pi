@@ -6,10 +6,10 @@
  * /retry       → 中断后继续
  */
 
-import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { ModelPickerComponent } from "./extend-model.js";
+import type { ExtensionAPI, ExtensionContext, Theme as PiTheme } from "@earendil-works/pi-coding-agent";
+import { ModelPickerComponent } from "./model-integration.js";
 import { getAllModuleSettings, setModuleEnabled, type ModuleSettings } from "./settings.js";
-import { Container, SettingsList, type TUI, type Theme as PiTheme, type SettingsListTheme, type Component } from "@earendil-works/pi-tui";
+import { Container, SettingsList, type TUI, type SettingsListTheme, type Component } from "@earendil-works/pi-tui";
 
 // ─── Border component (matches native DynamicBorder) ────────────────────────
 
