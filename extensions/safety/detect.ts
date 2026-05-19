@@ -8,7 +8,7 @@
  */
 
 import * as fs from "node:fs";
-import { resolve } from "node:path";
+import { basename, extname, resolve } from "node:path";
 
 const DANGEROUS_COMMANDS: [string, string[]][] = [
   ["rm", []],
@@ -332,7 +332,7 @@ export function shannonEntropy(data: string): number {
  * Trigram (3-character sliding window) scoring.
  * Rules (user-specified):
  *   - Pure digits → 0
- *   - Letter↔Digit switch (digit in first 2 positions, e.g. 4Vi, K9m, a9t) → 1.0
+ *   - Letter↔Digit switch (digit in first position, e.g. 4Vi) → 1.0
  *   - Contains '-' with ≥3 distinct classes → 1.0
  *   - Case switch AbA pattern (≥2 uppercase + ≥1 lowercase) → 0.8
  *   - Otherwise → 0
@@ -351,10 +351,10 @@ export function trigramScore(c1: string, c2: string, c3: string): number {
   // Contains '-' (S-class) with ≥3 distinct classes → 1.0
   if (cls.includes("S") && unique.size >= 3) return 1.0;
 
-  // Letter↔Digit: digit must be in first 2 positions
+  // Letter↔Digit: digit must be in first position
   const hasDigit = cls.includes("D");
   const hasLetter = cls.includes("L") || cls.includes("U");
-  if (hasDigit && hasLetter && (cls[0] === "D" || cls[1] === "D")) return 1.0;
+  if (hasDigit && hasLetter && cls[0] === "D") return 1.0;
 
   // AbA pattern: ≥2 uppercase + ≥1 lowercase (e.g. KeA, but not API)
   const uCount = cls.filter(c => c === "U").length;
@@ -412,35 +412,26 @@ export function maxSegmentDensity(token: string): number {
 
 /**
  * Word ratio: fraction of token that consists of vowel-containing
- * lowercase fragments ≥3 characters. Natural language words reduce
- * the likelihood of being a secret.
+ * alphabetic fragments ≥3 characters, case-insensitive. Natural language
+ * words reduce the likelihood of being a secret.
  */
 export function computeWordRatio(token: string): number {
-  // Split by class boundaries
-  const segments: string[] = [];
+  const letterSeqs: string[] = [];
   let current = "";
-  let prevClass = "";
   for (const c of token) {
     const cls = charClass(c);
-    if (cls === "X") {
-      if (current.length > 0) { segments.push(current); current = ""; }
-      prevClass = "";
-      continue;
-    }
-    if (cls !== prevClass && current.length > 0) {
-      segments.push(current);
+    if (cls === "L" || cls === "U") {
+      current += c.toLowerCase();
+    } else {
+      if (current.length >= 3) letterSeqs.push(current);
       current = "";
     }
-    current += c;
-    prevClass = cls;
   }
-  if (current.length > 0) segments.push(current);
+  if (current.length >= 3) letterSeqs.push(current);
 
   let wordLen = 0;
-  for (const seg of segments) {
-    if (seg.length >= 3 && /^[a-z]+$/.test(seg)) {
-      if (/[aeiou]/.test(seg)) wordLen += seg.length;
-    }
+  for (const seq of letterSeqs) {
+    if (/[aeiou]/.test(seq)) wordLen += seq.length;
   }
   return token.length > 0 ? wordLen / token.length : 0;
 }
@@ -474,20 +465,22 @@ const DICT_WORDS: ReadonlySet<string> = new Set(
 /**
  * Dictionary word ratio: fraction of token characters covered by dictionary words.
  *
- * Extracts lowercase letter sequences from the token, then greedily matches
- * the longest dictionary word at each position. Returns matched character
+ * Extracts alphabetic sequences from the token (case-insensitive), then greedily
+ * matches the longest dictionary word at each position. Returns matched character
  * count / token length.
  *
  * "devstral-small-2" → finds "dev", "str", "small" → covers 11/16 chars
- * "aB3xK9mPqR7wN"   → no words found → dictRatio = 0
+ * "NET_CHANNEL_INFO_REPORT_V20" → finds "net", "channel", "info", "report"
+ * "aB3xK9mPqR7wN" → no words found → dictRatio = 0
  */
 export function computeDictRatio(token: string): number {
-  // Extract lowercase letter sequences (>= 3 chars)
+  // Extract alphabetic sequences (>= 3 chars), case-insensitive
   const lowerSeqs: string[] = [];
   let current = "";
   for (const c of token) {
-    if (/[a-z]/.test(c)) {
-      current += c;
+    const cls = charClass(c);
+    if (cls === "L" || cls === "U") {
+      current += c.toLowerCase();
     } else {
       if (current.length >= 3) lowerSeqs.push(current);
       current = "";
@@ -524,7 +517,7 @@ export function computeDictRatio(token: string): number {
 // ── Entropy Constants ────────────────────────────────────────────────────────
 
 export const ENTROPY_THRESHOLD = 5.5;
-export const MIN_ENTROPY_TOKEN_LENGTH = 16;
+export const MIN_ENTROPY_TOKEN_LENGTH = 32;
 export const W1_DENSITY = 3.0;
 export const W2_WORD = 3.0;
 export const W3_DICT = 4.0;
@@ -657,19 +650,118 @@ export function isSafeContent(content: string): boolean {
 
 // ── Detector ─────────────────────────────────────────────────────────────────
 
+export type SecretMatchSource = "pattern" | "regex" | "entropy";
+
 export interface SecretMatch {
   name: string;
   start: number;
   end: number;
   original: string;
+  source: SecretMatchSource;
+}
+
+export interface DetectSecretsOptions {
+  filePath?: string;
+}
+
+interface ConfigStringEntry {
+  key: string;
+  normalizedKey: string;
+  value: string;
+  start: number;
+  end: number;
 }
 
 const MIN_SCAN_LENGTH = 10;
+const CONFIG_VALUE_MIN_LENGTH = 32;
+const CONFIG_FILE_EXTENSIONS = new Set([
+  ".json", ".jsonc", ".env", ".toml", ".yaml", ".yml",
+  ".ini", ".cfg", ".conf", ".properties",
+]);
+const CONFIG_BASENAME_REGEX = /^\.env(?:\..+)?$/i;
+const SENSITIVE_CONFIG_KEY_REGEX = /(?:^|_)(?:apikey|api_(?:key|secret|token)|access_(?:key|token)|refresh_token|client_secret|secret(?:_key)?|private_key|bearer_token|auth(?:orization|_token)?|pass(?:word|wd)?|pwd|token|webhook_secret)(?:_|$)/i;
+const PLACEHOLDER_VALUE_REGEX = /^(?:\$\{[^}]+\}|\{\{[^}]+\}\}|<[^>]+>|xxx+|placeholder|example|sample|demo|test|changeme|your[_-]?(?:api[_-]?)?key(?:[_-]?here)?)$/i;
+const CONFIG_STRING_PATTERNS: RegExp[] = [
+  /(?<key>"[^"\r\n]+"|'[^'\r\n]+'|[A-Za-z0-9_.-]+)\s*[:=]\s*"(?<value>(?:\\.|[^"\\])*)"/g,
+  /(?<key>"[^"\r\n]+"|'[^'\r\n]+'|[A-Za-z0-9_.-]+)\s*[:=]\s*'(?<value>(?:\\.|[^'\\])*)'/g,
+  /(?<key>[A-Za-z0-9_.-]+)\s*=\s*(?<value>[^\r\n#;]+)/g,
+];
 
-export function detectSecrets(content: string): SecretMatch[] {
+function normalizeConfigKey(key: string): string {
+  return key
+    .trim()
+    .replace(/^['"]|['"]$/g, "")
+    .replace(/([A-Z]+)([A-Z][a-z])/g, "$1_$2")
+    .replace(/([a-z0-9])([A-Z])/g, "$1_$2")
+    .toLowerCase()
+    .replace(/[.\-\s]+/g, "_")
+    .replace(/_+/g, "_")
+    .replace(/^_+|_+$/g, "");
+}
+
+function isConfigLikeFile(filePath?: string): boolean {
+  if (!filePath) return false;
+  const name = basename(filePath);
+  if (CONFIG_BASENAME_REGEX.test(name)) return true;
+  return CONFIG_FILE_EXTENSIONS.has(extname(name).toLowerCase());
+}
+
+function looksLikeSensitiveConfigValue(value: string): boolean {
+  const trimmed = value.trim();
+  if (!trimmed) return false;
+  if (PLACEHOLDER_VALUE_REGEX.test(trimmed)) return false;
+  if (isSafeContent(trimmed)) return false;
+  if (/^(?:true|false|null)$/i.test(trimmed)) return false;
+  if (/^[+-]?\d+(?:\.\d+)?$/.test(trimmed)) return false;
+  return trimmed.length >= CONFIG_VALUE_MIN_LENGTH;
+}
+
+function extractConfigStringEntries(content: string): ConfigStringEntry[] {
+  const entries: ConfigStringEntry[] = [];
+  const seen = new Set<string>();
+
+  for (const pattern of CONFIG_STRING_PATTERNS) {
+    for (const match of content.matchAll(pattern)) {
+      const key = match.groups?.key;
+      const value = match.groups?.value;
+      if (!key || value === undefined || match.index === undefined) continue;
+      const full = match[0] ?? "";
+      const rel = full.indexOf(value);
+      if (rel < 0) continue;
+      const start = match.index + rel;
+      const end = start + value.length;
+      const dedupeKey = `${start}-${end}`;
+      if (seen.has(dedupeKey)) continue;
+      seen.add(dedupeKey);
+      entries.push({
+        key,
+        normalizedKey: normalizeConfigKey(key),
+        value,
+        start,
+        end,
+      });
+    }
+  }
+
+  return entries;
+}
+
+function addMatch(matches: SecretMatch[], seen: Set<string>, match: SecretMatch): void {
+  const key = `${match.start}-${match.end}`;
+  if (seen.has(key)) return;
+  seen.add(key);
+  matches.push(match);
+}
+
+function isCoveredByExistingMatch(matches: SecretMatch[], start: number, end: number): boolean {
+  return matches.some((existing) => !(end <= existing.start || start >= existing.end));
+}
+
+export function detectSecrets(content: string, options: DetectSecretsOptions = {}): SecretMatch[] {
   if (content.length < MIN_SCAN_LENGTH) return [];
   const matches: SecretMatch[] = [];
-  const seen = new Set<string>(); // deduplicate by position
+  const seen = new Set<string>();
+  const configLike = isConfigLikeFile(options.filePath);
 
   // Pass 1: High-confidence pattern matching (specific prefixes like ghp_, AKIA)
   for (const sp of SECRET_PATTERNS) {
@@ -677,60 +769,63 @@ export function detectSecrets(content: string): SecretMatch[] {
     if (content.length < sp.minLength) continue;
     for (const m of content.matchAll(new RegExp(sp.pattern.source, sp.pattern.flags + "g"))) {
       const text = m[0];
-      if (!text) continue;
+      if (!text || m.index === undefined) continue;
       if (!sp.allowsSpaces && text.includes(" ")) continue;
-      const key = `${m.index}-${m.index + text.length}`;
-      if (seen.has(key)) continue;
-      seen.add(key);
-      matches.push({ name: sp.name, start: m.index!, end: m.index! + text.length, original: text });
+      addMatch(matches, seen, {
+        name: sp.name,
+        start: m.index,
+        end: m.index + text.length,
+        original: text,
+        source: "pattern",
+      });
     }
   }
 
-  // Pass 2: Low-confidence pattern matching (generic assignments like secret=xxx)
-  // Skip ranges already covered by high-confidence matches
-  for (const sp of SECRET_PATTERNS) {
-    if (sp.highConfidence) continue;
-    if (content.length < sp.minLength) continue;
-    for (const m of content.matchAll(new RegExp(sp.pattern.source, sp.pattern.flags + "g"))) {
-      const text = m[0];
-      if (!text) continue;
-      if (!sp.allowsSpaces && text.includes(" ")) continue;
-      // Check against safe patterns to reduce false positives
-      if (isSafeContent(text)) continue;
-      // Also check surrounding context (e.g. "your_api_key=xxx" is a placeholder)
-      const contextStart = Math.max(0, m.index! - 10);
-      const context = content.slice(contextStart, m.index! + text.length);
-      if (isSafeContent(context)) continue;
-      // Skip if range already covered by a high-confidence match
-      const start = m.index!, end = m.index! + text.length;
-      if (matches.some(hc => hc.start <= start && hc.end >= end)) continue;
-      const key = `${start}-${end}`;
-      if (seen.has(key)) continue;
-      seen.add(key);
-      matches.push({ name: sp.name, start, end, original: text });
-    }
-  }
+  if (configLike) {
+    const entries = extractConfigStringEntries(content);
 
-  // Pass 3: Entropy analysis (catches unknown formats like third-party sk- keys)
-  const highEntropyTokens = findHighEntropyTokens(content);
-  for (const token of highEntropyTokens) {
-    if (isSafeContent(token)) continue;
-    const idx = content.indexOf(token);
-    if (idx === -1) continue;
-    // Skip if already covered by a pattern match
-    if (matches.some(m => m.start <= idx && m.end >= idx + token.length)) continue;
-    const key = `${idx}-${idx + token.length}`;
-    if (seen.has(key)) continue;
-    seen.add(key);
-    matches.push({ name: "High Entropy String", start: idx, end: idx + token.length, original: token });
+    // Pass 2: Regex key-name matching for config-like files only
+    for (const entry of entries) {
+      if (!SENSITIVE_CONFIG_KEY_REGEX.test(entry.normalizedKey)) continue;
+      if (!looksLikeSensitiveConfigValue(entry.value)) continue;
+      if (isCoveredByExistingMatch(matches, entry.start, entry.end)) continue;
+      addMatch(matches, seen, {
+        name: `Sensitive config key: ${entry.normalizedKey}`,
+        start: entry.start,
+        end: entry.end,
+        original: entry.value,
+        source: "regex",
+      });
+    }
+
+    // Pass 3: Entropy analysis for config-like files only
+    for (const entry of entries) {
+      if (isCoveredByExistingMatch(matches, entry.start, entry.end)) continue;
+      if (!looksLikeSensitiveConfigValue(entry.value)) continue;
+      if (!isHighEntropy(entry.value)) continue;
+      addMatch(matches, seen, {
+        name: "High Entropy String",
+        start: entry.start,
+        end: entry.end,
+        original: entry.value,
+        source: "entropy",
+      });
+    }
   }
 
   // Sort by start position descending for safe right-to-left replacement
   return matches.sort((a, b) => b.start - a.start);
 }
 
-export function maskSecret(text: string): string {
-  if (text.length <= 8) return "********";
-  return text.slice(0, 4) + "********" + text.slice(-4);
+function getMaskChar(source?: SecretMatchSource): string {
+  if (source === "regex") return "#";
+  if (source === "entropy") return "?";
+  return "*";
+}
+
+export function maskSecret(text: string, source?: SecretMatchSource): string {
+  const maskChar = getMaskChar(source);
+  if (text.length <= 6) return maskChar.repeat(text.length);
+  return text.slice(0, 3) + maskChar.repeat(text.length - 6) + text.slice(-3);
 }
 

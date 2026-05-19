@@ -333,8 +333,8 @@ describe("trigramScore", () => {
     expect(trigramScore("3", "A", "b")).toBe(1.0);
   });
 
-  it("returns 1.0 for Letter↔Digit with digit in second position", () => {
-    expect(trigramScore("A", "3", "b")).toBe(1.0);
+  it("returns 0 for Letter↔Digit with digit in second position", () => {
+    expect(trigramScore("A", "3", "b")).toBe(0);
   });
 
   it("returns 0 for Letter↔Digit with digit only in third position", () => {
@@ -422,7 +422,7 @@ describe("computeWordRatio", () => {
   });
 
   it("returns > 0 for English words", () => {
-    // "password" is 8 chars, all lowercase, has vowels
+    // "password" is 8 chars, has vowels
     expect(computeWordRatio("password12345678")).toBeGreaterThan(0);
   });
 
@@ -431,8 +431,12 @@ describe("computeWordRatio", () => {
     expect(ratio).toBeGreaterThan(0.5);
   });
 
-  it("returns 0 for mixed case with no long lowercase segments", () => {
+  it("returns 0 for mixed case with no alphabetic word segments", () => {
     expect(computeWordRatio("aB3xK9mPqR7wN2")).toBe(0);
+  });
+
+  it("treats uppercase words case-insensitively", () => {
+    expect(computeWordRatio("NET_CHANNEL_INFO_REPORT_V20")).toBeGreaterThan(0.5);
   });
 });
 
@@ -473,6 +477,10 @@ describe("computeDictRatio", () => {
     expect(computeDictRatio("password-secret-token")).toBeGreaterThan(0);
   });
 
+  it("treats uppercase words case-insensitively", () => {
+    expect(computeDictRatio("NET_CHANNEL_INFO_REPORT_V20")).toBeGreaterThan(0.5);
+  });
+
   it("returns high ratio for model names with known words", () => {
     // "devstral-small" → "dev", "str", "small" are in dict
     const ratio = computeDictRatio("devstral-small-2");
@@ -490,7 +498,7 @@ describe("computeDictRatio", () => {
 
 describe("calculateAdjustedEntropy", () => {
   it("is high for random-looking secrets", () => {
-    const e = calculateAdjustedEntropy("aB3xK9mPqR7wN2tLuV8zY4fH");
+    const e = calculateAdjustedEntropy("7aB9cD2eF4gH6jK8mN1pQ3rT5uV7xY9zA1bC3dE");
     expect(e).toBeGreaterThan(ENTROPY_THRESHOLD);
   });
 
@@ -535,14 +543,18 @@ describe("isHighEntropy", () => {
     expect(isHighEntropy("abc123def456789abc123def456789abc123def4")).toBe(false);
   });
 
-  it("returns true for random mixed-case 16+ char strings", () => {
-    expect(isHighEntropy("aB3xK9mPqR7wN2tL")).toBe(true);
+  it("returns true for random mixed-case 32+ char strings", () => {
+    expect(isHighEntropy("7aB9cD2eF4gH6jK8mN1pQ3rT5uV7xY9zA1bC3dE")).toBe(true);
+  });
+
+  it("exports the raised minimum entropy token length", () => {
+    expect(MIN_ENTROPY_TOKEN_LENGTH).toBe(32);
   });
 });
 
 describe("findHighEntropyTokens", () => {
   it("extracts high-entropy tokens from text", () => {
-    const tokens = findHighEntropyTokens('api_key="aB3xK9mPqR7wN2tLuV8zY4fH"');
+    const tokens = findHighEntropyTokens('api_key="7aB9cD2eF4gH6jK8mN1pQ3rT5uV7xY9zA1bC3dE"');
     expect(tokens.length).toBeGreaterThan(0);
   });
 
@@ -552,9 +564,9 @@ describe("findHighEntropyTokens", () => {
 
   it("splits by whitespace and code punctuation", () => {
     // Quotes and = are split chars, so token between them is extracted
-    const tokens = findHighEntropyTokens('key="aB3xK9mPqR7wN2tLuV8zY4fH"');
+    const tokens = findHighEntropyTokens('key="7aB9cD2eF4gH6jK8mN1pQ3rT5uV7xY9zA1bC3dE"');
     expect(tokens.length).toBeGreaterThan(0);
-    expect(tokens.some(t => t.includes("aB3xK9"))).toBe(true);
+    expect(tokens.some(t => t.includes("7aB9cD2e"))).toBe(true);
   });
 });
 
@@ -634,32 +646,50 @@ describe("detectSecrets — Pattern Layer (high confidence)", () => {
     it(label, () => {
       const matches = detectSecrets(input);
       expect(matches.length).toBeGreaterThan(0);
-      expect(matches.some(m => m.name === expectedName)).toBe(true);
+      expect(matches.some(m => m.name === expectedName && m.source === "pattern")).toBe(true);
     });
   }
 });
 
-describe("detectSecrets — Pattern Layer (low confidence)", () => {
-  it("detects Bearer token with non-safe value", () => {
-    // Bearer token is low-confidence, needs non-safe value after Bearer
-    const matches = detectSecrets(['Authorization: Bearer ', 'ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijkl'].join(''));
-    // Should be caught either by Bearer pattern or by GitHub PAT pattern
-    expect(matches.length).toBeGreaterThan(0);
+describe("detectSecrets — Regex Layer (config key matching)", () => {
+  it("detects api_key in config files only", () => {
+    const matches = detectSecrets('{"api_key":"abcdefghijklmnopqrstuvwxyz123456"}', { filePath: "config.json" });
+    expect(matches.some(m => m.source === "regex" && m.original === "abcdefghijklmnopqrstuvwxyz123456")).toBe(true);
   });
 
-  it("detects api_key assignment", () => {
-    const matches = detectSecrets('api_key="abcdefghijklmnopqrstuvwxyz123456"');
-    expect(matches.some(m => m.name === "API Key Assignment")).toBe(true);
+  it("detects password assignments in env files when values are 32+ chars", () => {
+    const matches = detectSecrets("DB_PASSWORD=s3cret_val_1234567890_extra_chars", { filePath: ".env" });
+    expect(matches.some(m => m.source === "regex" && m.original === "s3cret_val_1234567890_extra_chars")).toBe(true);
   });
 
-  it("detects password assignment", () => {
-    const matches = detectSecrets("password=s3cret_val!123");
-    expect(matches.some(m => m.name === "Secret Assignment")).toBe(true);
+  it("detects camelCase sensitive keys", () => {
+    const matches = detectSecrets('{"clientSecret":"abcdefghijklmnopqrstuvwxyz123456"}', { filePath: "config.json" });
+    expect(matches.some(m => m.source === "regex" && m.original === "abcdefghijklmnopqrstuvwxyz123456")).toBe(true);
   });
 
-  it("skips placeholder api_key assignments", () => {
-    const matches = detectSecrets("your_api_key=xxxxxxxxxxxx");
-    expect(matches.some(m => m.name === "API Key Assignment")).toBe(false);
+  it("detects authToken-style keys", () => {
+    const matches = detectSecrets('{"authToken":"abcdefghijklmnopqrstuvwxyz123456"}', { filePath: "config.json" });
+    expect(matches.some(m => m.source === "regex" && m.original === "abcdefghijklmnopqrstuvwxyz123456")).toBe(true);
+  });
+
+  it("detects dot and dash separated sensitive keys", () => {
+    const matches = detectSecrets('{"webhook.secret":"abcdefghijklmnopqrstuvwxyz123456","access-token":"abcdefghijklmnopqrstuvwxyz123456"}', { filePath: "config.json" });
+    expect(matches.filter(m => m.source === "regex")).toHaveLength(2);
+  });
+
+  it("skips placeholder config values", () => {
+    const matches = detectSecrets('{"api_key":"your_api_key_here"}', { filePath: "config.json" });
+    expect(matches.some(m => m.source === "regex")).toBe(false);
+  });
+
+  it("skips short sensitive config values under 32 chars", () => {
+    const matches = detectSecrets('{"password":"short_secret_value"}', { filePath: "config.json" });
+    expect(matches.some(m => m.source === "regex")).toBe(false);
+  });
+
+  it("does not run regex key matching on source files", () => {
+    const matches = detectSecrets('api_key="abcdefghijklmnopqrstuvwxyz123456"', { filePath: "main.cpp" });
+    expect(matches.some(m => m.source === "regex")).toBe(false);
   });
 });
 
@@ -669,21 +699,21 @@ describe("detectSecrets — Pattern Layer (low confidence)", () => {
 
 describe("detectSecrets — Entropy Layer (unknown formats)", () => {
   const positiveCases: [string, string][] = [
-    ["Random mixed-case", "aB3xK9mPqR7wN2tLuV8zY4fH"],
+    ["Random mixed-case", '{"value":"7aB9cD2eF4gH6jK8mN1pQ3rT5uV7xY9zA1bC3dE"}'],
     // 40+ char mixed alphanumeric (not pure hex, not SHA)
-    ["Random mixed alphanumeric", "aB3xK9mPqR7wN2tLuV8zY4fHgD5jM"],
-    ["Random Base64", "cGFzc3dvcmRfbm90X3JlYWxfdmFsdWU="],
-    ["Custom prefix ak-", "ak-4VxK9mPqR7wN2tL2345"],
-    // Underscore prefix (X-class split, suffix must be high entropy alone)
-    ["Custom prefix key_", "key_aB3xK9mPqR7wN2tLuV8zY4fHgD5j"],
-    ["Underscore-separated", "aBc_DeF_gHi_JkL_mNo_PqR"],
+    ["Random mixed alphanumeric", '{"value":"9zY7xW5vU3tS1rQ8pN6mL4kJ2hG0fE7dC5bA3qP1nM"}'],
+    ["Random digit-led mix", '{"value":"4Vi7Xk2Qm9Lp5Tr8Ws1Ya6Bd3Cn0Ef7Gh2Jk5Mn8"}'],
+    ["Custom prefix ak-", '{"value":"ak-7aB9cD2eF4gH6jK8mN1pQ3rT5uV7xY9zA1bC3dE"}'],
+    // Underscore prefix should still be detectable when stored as a config string value
+    ["Custom prefix key_", '{"value":"key_7aB9cD2eF4gH6jK8mN1pQ3rT5uV7xY9zA1bC3dE"}'],
+    ["Underscore-separated", '{"value":"pre_7aB9cD2eF4gH6jK8mN1pQ3rT5uV7xY9zA1bC3dE_suf"}'],
   ];
 
   for (const [label, input] of positiveCases) {
     it(label, () => {
-      const matches = detectSecrets(input);
+      const matches = detectSecrets(input, { filePath: "config.json" });
       expect(matches.length).toBeGreaterThan(0);
-      expect(matches.some(m => m.name === "High Entropy String")).toBe(true);
+      expect(matches.some(m => m.name === "High Entropy String" && m.source === "entropy")).toBe(true);
     });
   }
 });
@@ -749,16 +779,24 @@ describe("detectSecrets — model IDs (no FP)", () => {
 // ═══════════════════════════════════════════════════════════════════════════
 
 describe("maskSecret", () => {
-  it("masks short strings fully", () => {
-    expect(maskSecret("abc")).toBe("********");
+  it("masks short strings fully with source-specific characters", () => {
+    expect(maskSecret("abc")).toBe("***");
+    expect(maskSecret("abc", "regex")).toBe("###");
+    expect(maskSecret("abc", "entropy")).toBe("???");
   });
 
-  it("preserves first and last 4 chars", () => {
-    expect(maskSecret(["AKIA", "IOSFODNN7EXAMPLE"].join(""))).toBe("AKIA********MPLE");
+  it("preserves first and last 3 chars with original length", () => {
+    expect(maskSecret(["AKIA", "IOSFODNN7EXAMPLE"].join(""))).toBe("AKI**************PLE");
   });
 
-  it("masks 8-char strings fully (<=8 masked entirely)", () => {
-    expect(maskSecret("abcdefgh")).toBe("********");
+  it("keeps length and only masks the middle for values longer than 6", () => {
+    expect(maskSecret("abcdefgh")).toBe("abc**fgh");
+  });
+
+  it("uses source-specific mask symbols when provided", () => {
+    expect(maskSecret("abcdefghijkl", "pattern")).toBe("abc******jkl");
+    expect(maskSecret("abcdefghijkl", "regex")).toBe("abc######jkl");
+    expect(maskSecret("abcdefghijkl", "entropy")).toBe("abc??????jkl");
   });
 });
 
