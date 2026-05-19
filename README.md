@@ -14,7 +14,7 @@ pi install /path/to/decorated-pi
 
 ### 1. Patch Tool
 
-Replaces Pi's built-in `edit` / `write` with a safer `patch` tool:
+Replaces Pi's built-in `edit` / `write` with a stronger `patch` tool:
 
 - **anchor mechanism** — narrows the search range by specifying a unique string that appears before `old_str`, preventing mismatches in files with repeated patterns
 - **mtime tracking** — records file modification time on `read`, rejects `patch` if the file changed since last read, preventing blind or stale edits

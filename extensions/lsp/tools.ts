@@ -6,7 +6,8 @@
  *
  * Modifications: added lsp_find_symbol, lsp_rename, multi-file lsp_diagnostics
  */
-import { defineTool, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { defineTool, keyHint, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { list_supported_languages } from "./servers.js";
 import {
@@ -29,6 +30,7 @@ const SYMBOL_KIND_SCHEMA = Type.Union(
 );
 
 const DIAGNOSTICS_MANY_CONCURRENCY = 8;
+const LSP_RESULT_FOLD_LINES = 20;
 
 function make_tool_result(
   text: string,
@@ -46,6 +48,55 @@ function make_tool_error(details: any) {
     error: details,
   });
 }
+
+function trim_trailing_empty_lines(lines: string[]): string[] {
+  let end = lines.length;
+  while (end > 0 && lines[end - 1] === "") {
+    end -= 1;
+  }
+  return lines.slice(0, end);
+}
+
+function collapse_lsp_text(text: string, maxLines = LSP_RESULT_FOLD_LINES) {
+  const lines = trim_trailing_empty_lines(text.split("\n"));
+  const totalLines = lines.length;
+  const displayLines = lines.slice(0, maxLines);
+  return {
+    totalLines,
+    displayLines,
+    remainingLines: Math.max(0, totalLines - displayLines.length),
+  };
+}
+
+function get_text_content(result: { content?: Array<{ type: string; text?: string }> }): string {
+  return (result.content ?? [])
+    .filter((item): item is { type: "text"; text?: string } => item.type === "text")
+    .map((item) => item.text ?? "")
+    .join("\n");
+}
+
+function format_lsp_result_text(text: string, expanded: boolean, theme: any): string {
+  const { totalLines, displayLines, remainingLines } = collapse_lsp_text(
+    text,
+    expanded ? Number.MAX_SAFE_INTEGER : LSP_RESULT_FOLD_LINES,
+  );
+  const body = displayLines.join("\n");
+  let rendered = body ? theme.fg("toolOutput", body) : "";
+  if (!expanded && remainingLines > 0) {
+    rendered += `${theme.fg("muted", `\n... (${remainingLines} more lines, ${totalLines} total,`)} ${keyHint("app.tools.expand", "to expand")})`;
+  }
+  return rendered;
+}
+
+function render_lsp_result(result: any, options: { expanded: boolean }, theme: any, context: any) {
+  const component = context.lastComponent ?? new Text("", 0, 0);
+  component.setText(format_lsp_result_text(get_text_content(result), options.expanded, theme));
+  return component;
+}
+
+export const __lspToolsTest = {
+  collapse_lsp_text,
+};
 
 async function map_with_concurrency<T, R>(
   items: T[],
@@ -106,6 +157,7 @@ export function register_lsp_tools(pi: ExtensionAPI, manager: LspServerManager) 
     defineTool({
       name: "lsp_diagnostics",
       label: "LSP: diagnostics",
+      renderResult: render_lsp_result,
       description:
         "Get language server diagnostics for one or more files. Default filter: error. Supports optional severity filtering.",
       promptSnippet: "Get language server diagnostics for one or more files",
@@ -234,6 +286,7 @@ export function register_lsp_tools(pi: ExtensionAPI, manager: LspServerManager) 
     defineTool({
       name: "lsp_find_symbol",
       label: "LSP: find symbol",
+      renderResult: render_lsp_result,
       description:
         "Find symbols in a file by name or detail text using document symbols. Supports exact matching, kind filters, and top-level-only mode.",
       promptSnippet: "Find symbols in a file by name, kind, or match mode",
@@ -305,6 +358,7 @@ export function register_lsp_tools(pi: ExtensionAPI, manager: LspServerManager) 
     defineTool({
       name: "lsp_hover",
       label: "LSP: hover",
+      renderResult: render_lsp_result,
       description:
         "Get hover info (types, docs) at a position in a file. Positions are zero-based.",
       promptSnippet: "Get types and documentation at a symbol position",
@@ -348,6 +402,7 @@ export function register_lsp_tools(pi: ExtensionAPI, manager: LspServerManager) 
     defineTool({
       name: "lsp_definition",
       label: "LSP: go to definition",
+      renderResult: render_lsp_result,
       description:
         "Find definition locations for the symbol at a position. Positions are zero-based.",
       promptSnippet: "Find definition locations for a symbol at a position",
@@ -394,6 +449,7 @@ export function register_lsp_tools(pi: ExtensionAPI, manager: LspServerManager) 
     defineTool({
       name: "lsp_references",
       label: "LSP: find references",
+      renderResult: render_lsp_result,
       description:
         "Find references to the symbol at a position. Positions are zero-based.",
       promptSnippet: "Find references to a symbol at a position",
@@ -444,6 +500,7 @@ export function register_lsp_tools(pi: ExtensionAPI, manager: LspServerManager) 
     defineTool({
       name: "lsp_document_symbols",
       label: "LSP: document symbols",
+      renderResult: render_lsp_result,
       description:
         "List symbols in a file (functions, classes, variables) using the language server.",
       promptSnippet: "List functions, classes, and variables in a file",
@@ -479,6 +536,7 @@ export function register_lsp_tools(pi: ExtensionAPI, manager: LspServerManager) 
     defineTool({
       name: "lsp_rename",
       label: "LSP: rename symbol",
+      renderResult: render_lsp_result,
       description:
         "Rename a symbol at a position. Returns all locations that need to be updated with the new name. Use the edit tool to apply the changes.",
       promptSnippet: "Compute symbol rename updates across affected files",
