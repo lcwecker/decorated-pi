@@ -31,9 +31,9 @@ Replaces Pi's default file search with a faster, project-aware search strategy:
 
 ### 3. LSP Tool Suite
 
-Based on [@spences10/pi-lsp](https://github.com/spences10/my-pi/tree/main/packages/pi-lsp) by Scott Spence (MIT License), with additions:
+Based on [@spences10/pi-lsp](https://github.com/spences10/my-pi/tree/main/packages/pi-lsp) by Scott Spence (MIT License), with major additions:
 
-- C/C++ (clangd) and Lua support
+- C/C++ and Lua support
 - `lsp_find_symbol`, `lsp_rename`, multi-file support merged into `lsp_diagnostics`
 - Force-sync on `didChange` (no stale diagnostics)
 
