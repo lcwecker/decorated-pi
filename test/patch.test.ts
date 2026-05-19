@@ -8,6 +8,7 @@ import * as path from "node:path";
 import * as os from "node:os";
 import {
   applyPatches,
+  applyPatch,
   ParseError,
   ApplyError,
   formatPatchResult,
@@ -263,6 +264,7 @@ describe("applyPatches", () => {
       modified: ["b.txt"],
       warnings: [],
       replacements: new Map(),
+      originalLines: new Map(),
     });
     expect(r).toContain("A a.txt");
     expect(r).toContain("M b.txt");
@@ -274,6 +276,7 @@ describe("applyPatches", () => {
       modified: [],
       warnings: [],
       replacements: new Map(),
+      originalLines: new Map(),
     });
     expect(r).toContain("No files were modified");
   });
@@ -307,6 +310,113 @@ describe("applyPatches", () => {
     expect(diff).toContain("+3 GAMMA");
   });
 
+  it("generatePatchDiff merges nearby edits into one visual chunk", async () => {
+    writeFile("f.txt", "line1\nline2\nline3\nline4\nline5\n");
+    const result = await applyPatches([
+      {
+        path: "f.txt",
+        edits: [
+          { old_str: "line1", new_str: "LINE1" },
+          { old_str: "line3", new_str: "LINE3" },
+        ],
+      },
+    ], tmpDir);
+    const diff = generatePatchDiff(result);
+
+    expect(diff).toContain("@@ lines 1-5 @@");
+    expect(diff.match(/\n 2 line2\n/g)?.length ?? 0).toBe(1);
+    expect(diff.match(/\n 4 line4\n/g)?.length ?? 0).toBe(1);
+    expect(diff).not.toContain("\n\n 2 line2");
+  });
+
+  it("generatePatchDiff keeps anchor lines inside merged chunks without extra blank separators", async () => {
+    writeFile("f.txt", "alpha\nbeta\ngamma\ndelta\nepsilon\n");
+    const result = await applyPatches([
+      {
+        path: "f.txt",
+        edits: [
+          { anchor: "alpha", old_str: "alpha", new_str: "ALPHA" },
+          { anchor: "gamma", old_str: "gamma", new_str: "GAMMA" },
+        ],
+      },
+    ], tmpDir);
+    const diff = generatePatchDiff(result);
+
+    expect(diff).toContain("@@ lines 1-5 @@");
+    expect(diff).not.toContain("2 edits, 2 anchors");
+    expect(diff).toContain("anchors:\n  - alpha\n  - gamma");
+    expect(diff).not.toContain("@@ lines 1-5 @@ anchors: alpha, gamma");
+  });
+
+  it("generatePatchDiff lists multiple anchors below the chunk header with +N more", async () => {
+    writeFile("f.txt", "one\ntwo\nthree\nfour\nfive\n");
+    const result = await applyPatches([
+      {
+        path: "f.txt",
+        edits: [
+          { anchor: "one", old_str: "one", new_str: "ONE" },
+          { anchor: "three", old_str: "three", new_str: "THREE" },
+          { anchor: "five", old_str: "five", new_str: "FIVE" },
+        ],
+      },
+    ], tmpDir);
+    const diff = generatePatchDiff(result);
+
+    expect(diff).toContain("@@ lines 1-5 @@");
+    expect(diff).not.toContain("3 edits, 3 anchors");
+    expect(diff).toContain("anchors:\n  - one\n  - three\n  - +1 more");
+    expect(diff).not.toContain("@@ lines 1-5 @@ anchors: one, three, five");
+  });
+
+  it("generatePatchDiff trims displayed anchors", async () => {
+    writeFile("f.txt", "function foo() {\n  if (true) {\n    return 1;\n  }\n}\n");
+    const result = await applyPatches([
+      {
+        path: "f.txt",
+        edits: [
+          { anchor: "function foo() {", old_str: "return 1;", new_str: "return 2;" },
+          { anchor: "  if (true) {", old_str: "return 2;", new_str: "return 3;" },
+        ],
+      },
+    ], tmpDir);
+    const diff = generatePatchDiff(result);
+
+    expect(diff).toContain("anchors:\n  - function foo() {\n  - if (true) {");
+    expect(diff).not.toContain("  -   if (true) {");
+  });
+
+  it("generatePatchDiff uses a single blank line between distant chunks", async () => {
+    writeFile("f.txt", [
+      "a01",
+      "a02",
+      "a03",
+      "a04",
+      "a05",
+      "a06",
+      "a07",
+      "a08",
+      "a09",
+      "a10",
+      "a11",
+      "a12",
+      "a13",
+      "a14",
+      "",
+    ].join("\n"));
+    const result = await applyPatches([
+      {
+        path: "f.txt",
+        edits: [
+          { old_str: "a01", new_str: "A01" },
+          { old_str: "a14", new_str: "A14" },
+        ],
+      },
+    ], tmpDir);
+    const diff = generatePatchDiff(result);
+
+    expect(diff).toContain("  4 a04\n\n@@ lines 11-14 @@\n 11 a11");
+  });
+
   it("generatePatchDiff skips overwrite files (no diff generated)", async () => {
     writeFile("f.txt", "old content\n");
     const result = await applyPatches([
@@ -319,83 +429,101 @@ describe("applyPatches", () => {
 
   // ── computePatchPreview ────────────────────────────────────────────────
 
-  it("computePatchPreview generates preview diffs", async () => {
+  it("computePatchPreview generates preview diff (single-file API)", async () => {
     writeFile("f.txt", "hello world\nfoo bar\n");
-    const previews = await computePatchPreview([
+    const p = await computePatchPreview(
       { path: "f.txt", edits: [{ old_str: "hello", new_str: "HELLO" }] },
-    ], tmpDir);
-    expect(previews.has("f.txt")).toBe(true);
-    const p = previews.get("f.txt")!;
+      tmpDir,
+    );
     expect(p.diff).toBeTruthy();
     expect(p.diff).toContain("-1 hello");
     expect(p.diff).toContain("+1 HELLO");
   });
 
   it("computePatchPreview shows error for missing file", async () => {
-    const previews = await computePatchPreview([
+    const p = await computePatchPreview(
       { path: "nope.txt", edits: [{ old_str: "x", new_str: "y" }] },
-    ], tmpDir);
-    const p = previews.get("nope.txt")!;
+      tmpDir,
+    );
     expect(p.error).toBeTruthy();
   });
 
-  it("computePatchPreview returns full content for overwrite (no truncation)", async () => {
+  it("computePatchPreview returns full content for overwrite", async () => {
     const longContent = Array.from({ length: 30 }, (_, i) => `line ${i + 1}`).join("\n");
     writeFile("f.txt", "old\n");
-    const previews = await computePatchPreview([
+    const p = await computePatchPreview(
       { path: "f.txt", overwrite: true, new_str: longContent },
-    ], tmpDir);
-    const p = previews.get("f.txt")!;
+      tmpDir,
+    );
     expect(p.isOverwrite).toBe(true);
-    expect(p.preview).toBe(longContent); // full 30 lines, not truncated to 20
+    expect(p.preview).toBe(longContent);
     expect(p.preview!.split("\n")).toHaveLength(30);
     expect(p.diff).toBeUndefined();
   });
 });
 
+
 // ═══════════════════════════════════════════════════════════════════════════
-// preparePatchArguments Tests
+// preparePatchArguments Tests (single-file schema)
 // ═══════════════════════════════════════════════════════════════════════════
 
 import { preparePatchArguments } from "../extensions/io.js";
 
 describe("preparePatchArguments", () => {
-  it("passes through normal input unchanged", () => {
-    const input = {
-      patches: [
-        { path: "a.ts", edits: [{ old_str: "x", new_str: "y" }] },
-      ],
-    };
+  it("passes through normal single-file input unchanged", () => {
+    const input = { path: "a.ts", edits: [{ old_str: "x", new_str: "y" }] };
     const result = preparePatchArguments(input);
-    expect(result.patches).toEqual(input.patches);
+    expect(result.path).toBe("a.ts");
+    expect(result.edits).toEqual([{ old_str: "x", new_str: "y" }]);
   });
 
-  it("repairs patches serialized as string", () => {
-    const patches = [{ path: "a.ts", edits: [{ old_str: "x", new_str: "y" }] }];
+  it("unwraps legacy patches array to single-file", () => {
     const input = {
-      patches: JSON.stringify(patches),
+      patches: [{ path: "a.ts", edits: [{ old_str: "x", new_str: "y" }] }],
     };
     const result = preparePatchArguments(input);
-    expect(Array.isArray(result.patches)).toBe(true);
-    expect(result.patches).toEqual(patches);
+    expect(result.path).toBe("a.ts");
+    expect(result.edits).toEqual([{ old_str: "x", new_str: "y" }]);
+    expect(result.patches).toBeUndefined();
   });
 
-  it("repairs edits serialized as string inside a patch", () => {
+  it("unwraps legacy patches JSON string", () => {
+    const input = {
+      patches: JSON.stringify([{ path: "a.ts", edits: [{ old_str: "x", new_str: "y" }] }]),
+    };
+    const result = preparePatchArguments(input);
+    expect(result.path).toBe("a.ts");
+    expect(result.edits).toEqual([{ old_str: "x", new_str: "y" }]);
+  });
+
+  it("unwraps legacy single object string", () => {
+    const input = {
+      patches: JSON.stringify({ path: "a.ts", edits: [{ old_str: "x", new_str: "y" }] }),
+    };
+    const result = preparePatchArguments(input);
+    expect(result.path).toBe("a.ts");
+    expect(result.edits).toEqual([{ old_str: "x", new_str: "y" }]);
+  });
+
+  it("repairs edits serialized as string", () => {
     const edits = [{ old_str: "x", new_str: "y" }];
-    const input = {
-      patches: [
-        { path: "a.ts", edits: JSON.stringify(edits) },
-      ],
-    };
+    const input = { path: "a.ts", edits: JSON.stringify(edits) };
     const result = preparePatchArguments(input);
-    expect(Array.isArray(result.patches[0].edits)).toBe(true);
-    expect(result.patches[0].edits).toEqual(edits);
+    expect(Array.isArray(result.edits)).toBe(true);
+    expect(result.edits).toEqual(edits);
   });
 
-  it("handles invalid JSON string gracefully", () => {
-    const input = {
-      patches: "not valid json",
-    };
+  it("repairs edits string with unescaped newlines", () => {
+    const edits = [{ old_str: "OLD", new_str: "/**\n * hello\n */" }];
+    const editsStr = JSON.stringify(edits).replace(/\\n/g, '\n');
+    const input = { path: "a.ts", edits: editsStr };
+    const result = preparePatchArguments(input);
+    expect(Array.isArray(result.edits)).toBe(true);
+    expect(result.edits[0].new_str).toContain("hello");
+  });
+
+  it("handles invalid patches string gracefully", () => {
+    const input = { patches: "not valid json" };
     const result = preparePatchArguments(input);
     expect(result.patches).toBe("not valid json");
   });
@@ -405,103 +533,26 @@ describe("preparePatchArguments", () => {
     expect(preparePatchArguments(undefined)).toBe(undefined);
   });
 
-  it("repairs single patch object sent as string (not array)", () => {
-    // Some models send a single patch as a JSON object string instead of array
-    const input = {
-      patches: JSON.stringify({ path: "a.ts", edits: [{ old_str: "x", new_str: "y" }] }),
-    };
+  it("repairs legacy top-level old_str/new_str", () => {
+    const input = { path: "a.ts", old_str: "x", new_str: "y" };
     const result = preparePatchArguments(input);
-    expect(Array.isArray(result.patches)).toBe(true);
-    expect(result.patches).toHaveLength(1);
-    expect(result.patches[0].path).toBe("a.ts");
-    expect(Array.isArray(result.patches[0].edits)).toBe(true);
+    expect(result.edits).toEqual([{ old_str: "x", new_str: "y" }]);
+    expect(result.old_str).toBeUndefined();
   });
 
-  it("repairs patches where each element is a JSON string", () => {
-    // Some models send patches array where each element is a stringified JSON object
-    const input = {
-      patches: [
-        JSON.stringify({ path: "a.ts", edits: [{ old_str: "x", new_str: "y" }] }),
-        JSON.stringify({ path: "b.ts", edits: [{ old_str: "x", new_str: "y" }] }),
-      ],
-    };
+  it("repairs legacy top-level old_str/new_str + anchor", () => {
+    const input = { path: "a.ts", old_str: "x", new_str: "y", anchor: "function foo() {" };
     const result = preparePatchArguments(input);
-    expect(Array.isArray(result.patches)).toBe(true);
-    expect(result.patches).toHaveLength(2);
-    expect(result.patches[0].path).toBe("a.ts");
-    expect(result.patches[1].path).toBe("b.ts");
-    expect(Array.isArray(result.patches[0].edits)).toBe(true);
-  });
-
-  it("repairs legacy format with top-level old_str/new_str", () => {
-    const input = {
-      patches: [{ path: "a.ts", old_str: "x", new_str: "y" }],
-    };
-    const result = preparePatchArguments(input);
-    expect(Array.isArray(result.patches[0].edits)).toBe(true);
-    expect(result.patches[0].edits).toHaveLength(1);
-    expect(result.patches[0].edits[0].old_str).toBe("x");
-    expect(result.patches[0].edits[0].new_str).toBe("y");
-    expect(result.patches[0].old_str).toBeUndefined();
-  });
-
-  it("repairs legacy format with top-level old_str/new_str + anchor", () => {
-    const input = {
-      patches: [{ path: "a.ts", old_str: "x", new_str: "y", anchor: "function foo() {" }],
-    };
-    const result = preparePatchArguments(input);
-    const edit = result.patches[0].edits[0];
-    expect(edit.old_str).toBe("x");
-    expect(edit.new_str).toBe("y");
-    expect(edit.anchor).toBe("function foo() {");
-  });
-
-  it("drops primitive elements in patches array", () => {
-    const input = {
-      patches: [null, 42, { path: "a.ts", edits: [{ old_str: "x", new_str: "y" }] }, "bad"],
-    };
-    const result = preparePatchArguments(input);
-    // null, 42, and "bad" (not valid JSON) are all dropped; only the valid object remains
-    expect(result.patches).toHaveLength(1);
-    expect(result.patches[0].path).toBe("a.ts");
-  });
-
-  it("repairs patches string with unescaped newlines in nested string values", () => {
-    // Models sometimes send patches as a JSON string where new_str contains
-    // literal newlines (not \\n). JSON.parse fails on these because
-    // JSON strings cannot contain literal newline characters.
-    const patches = [{ path: "a.ts", edits: [{ old_str: "OLD", new_str: "/**\n * test\n */" }] }];
-    // Simulate what happens: JSON.stringify → the outer framework parses it → patches
-    // becomes a string with literal newlines inside new_str
-    const patchesStr = JSON.stringify(patches);
-    // After outer JSON parse, the new_str values have literal newlines
-    const args = { patches: patchesStr.replace(/\\n/g, '\n') };
-    // This should now parse correctly despite literal newlines
-    const result = preparePatchArguments(args);
-    expect(Array.isArray(result.patches)).toBe(true);
-    expect(result.patches).toHaveLength(1);
-    expect(result.patches[0].path).toBe("a.ts");
-    expect(result.patches[0].edits[0].new_str).toContain("test");
-  });
-
-  it("repairs edits string with unescaped newlines in nested string values", () => {
-    // Same issue but at the edits level: edits is a JSON string with unescaped newlines
-    const edits = [{ old_str: "OLD", new_str: "/**\n * hello\n */" }];
-    const editsStr = JSON.stringify(edits).replace(/\\n/g, '\n');
-    const input = {
-      patches: [{ path: "a.ts", edits: editsStr }],
-    };
-    const result = preparePatchArguments(input);
-    expect(Array.isArray(result.patches[0].edits)).toBe(true);
-    expect(result.patches[0].edits[0].new_str).toContain("hello");
+    expect(result.edits[0]).toEqual({ old_str: "x", new_str: "y", anchor: "function foo() {" });
   });
 });
 
 // ═══════════════════════════════════════════════════════════════════════════
-// End-to-end: preparePatchArguments → applyPatches pipeline
+// End-to-end: preparePatchArguments → applyPatch pipeline
 // ═══════════════════════════════════════════════════════════════════════════
 
-describe("preparePatchArguments → applyPatches pipeline", () => {
+
+describe("preparePatchArguments → applyPatch pipeline", () => {
   let tmpDir: string;
 
   beforeEach(() => {
@@ -512,74 +563,59 @@ describe("preparePatchArguments → applyPatches pipeline", () => {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 
-  it("patches as string → repair → apply edits", async () => {
+  it("legacy patches string → repair → apply", async () => {
     const filePath = path.join(tmpDir, "test.txt");
     fs.writeFileSync(filePath, "hello world\n");
 
-    // Simulate LLM sending patches as a JSON string instead of an array
     const input = {
       patches: JSON.stringify([{ path: filePath, edits: [{ old_str: "hello", new_str: "goodbye" }] }]),
     };
-
     const repaired = preparePatchArguments(input);
-    expect(Array.isArray(repaired.patches)).toBe(true);
+    expect(repaired.path).toBe(filePath);
 
-    const result = await applyPatches(repaired.patches, tmpDir);
+    const result = await applyPatch(repaired, tmpDir);
     expect(result.modified).toContain(filePath);
     expect(fs.readFileSync(filePath, "utf8")).toBe("goodbye world\n");
   });
 
-  it("edits as string → repair → apply edits", async () => {
+  it("edits as string → repair → apply", async () => {
     const filePath = path.join(tmpDir, "test2.txt");
     fs.writeFileSync(filePath, "foo bar baz\n");
 
-    // Simulate LLM sending edits as a JSON string inside the patch object
-    const input = {
-      patches: [{
-        path: filePath,
-        edits: JSON.stringify([{ old_str: "bar", new_str: "BAR" }]),
-      }],
-    };
-
+    const input = { path: filePath, edits: JSON.stringify([{ old_str: "bar", new_str: "BAR" }]) };
     const repaired = preparePatchArguments(input);
-    expect(Array.isArray(repaired.patches[0].edits)).toBe(true);
+    expect(Array.isArray(repaired.edits)).toBe(true);
 
-    const result = await applyPatches(repaired.patches, tmpDir);
+    const result = await applyPatch(repaired, tmpDir);
     expect(result.modified).toContain(filePath);
     expect(fs.readFileSync(filePath, "utf8")).toBe("foo BAR baz\n");
   });
 
-  it("patches as string with anchor → repair → apply edits", async () => {
+  it("legacy patches string with anchor → repair → apply", async () => {
     const filePath = path.join(tmpDir, "test3.txt");
     fs.writeFileSync(filePath, "function foo() {\n  return 1;\n}\n\nfunction bar() {\n  return 2;\n}\n");
 
-    // Simulate LLM sending patches as string, with anchor
     const input = {
       patches: JSON.stringify([{
         path: filePath,
         edits: [{ anchor: "function bar() {", old_str: "return 2;", new_str: "return 42;" }],
       }]),
     };
-
     const repaired = preparePatchArguments(input);
-    expect(Array.isArray(repaired.patches)).toBe(true);
-
-    const result = await applyPatches(repaired.patches, tmpDir);
-    expect(result.modified).toContain(filePath);
+    const result = await applyPatch(repaired, tmpDir);
     expect(fs.readFileSync(filePath, "utf8")).toContain("return 42;");
-    expect(fs.readFileSync(filePath, "utf8")).toContain("return 1;"); // foo unchanged
+    expect(fs.readFileSync(filePath, "utf8")).toContain("return 1;");
   });
 
-  it("overwrite via repaired patches string", async () => {
+  it("overwrite via legacy patches string", async () => {
     const filePath = path.join(tmpDir, "test4.txt");
     fs.writeFileSync(filePath, "old content\n");
 
     const input = {
       patches: JSON.stringify([{ path: filePath, overwrite: true, new_str: "new content\n" }]),
     };
-
     const repaired = preparePatchArguments(input);
-    const result = await applyPatches(repaired.patches, tmpDir);
+    const result = await applyPatch(repaired, tmpDir);
     expect(result.modified).toContain(filePath);
     expect(fs.readFileSync(filePath, "utf8")).toBe("new content\n");
   });

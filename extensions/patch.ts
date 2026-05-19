@@ -61,6 +61,8 @@ export interface ReplacementInfo {
   oldLines: string[];
   /** The new lines that replaced them */
   newLines: string[];
+  /** Optional anchor text (first line only, for hunk display) */
+  anchor?: string;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -79,6 +81,33 @@ export class ApplyError extends Error {
 // Main API
 // ═══════════════════════════════════════════════════════════════════════════
 
+export async function applyPatch(patch: FilePatch, cwd: string): Promise<PatchResult> {
+  if (!patch.path?.trim()) throw new ParseError("File path cannot be empty.");
+
+  const result: PatchResult = {
+    modified: [],
+    created: [],
+    warnings: [],
+    replacements: new Map(),
+    originalLines: new Map(),
+  };
+
+  const absPath = resolveAbsPath(cwd, patch.path);
+
+  if (patch.overwrite) {
+    applyOverwrite(absPath, patch.path, patch.new_str ?? "", result);
+  } else if (patch.edits && patch.edits.length > 0) {
+    await applyEdits(absPath, patch.path, patch.edits, result);
+  } else {
+    throw new ParseError(
+      `File ${patch.path}: must provide either edits[] or overwrite:true with new_str.`
+    );
+  }
+
+  return result;
+}
+
+/** @deprecated Use applyPatch instead. Kept for backward compatibility with tests. */
 export async function applyPatches(patches: FilePatch[], cwd: string): Promise<PatchResult> {
   if (!Array.isArray(patches) || patches.length === 0) {
     throw new ParseError("Patch is empty — no files specified.");
@@ -228,7 +257,8 @@ async function applyEdits(
     }
 
     // Compute line numbers in the original file for diff generation (O(log n) via binary search)
-    const origMatchIdx = matchIdx + cumulativeOffset;
+    // matchIdx is in the modified content; subtract cumulative offset to map back to original
+    const origMatchIdx = matchIdx - cumulativeOffset;
     const oldStartLine = lineAtOffset(rawLineOffsets, origMatchIdx);
     const oldEndLine = lineAtOffset(rawLineOffsets, origMatchIdx + oldNorm.length - 1);
 
@@ -253,6 +283,7 @@ async function applyEdits(
       newEndLine,
       oldLines: oldNorm.split("\n").filter((l, i, arr) => !(i === arr.length - 1 && l === "")),
       newLines: newNorm.split("\n").filter((l, i, arr) => !(i === arr.length - 1 && l === "")),
+      anchor: edit.anchor ? edit.anchor.split("\n")[0] : undefined,
     });
   }
 
@@ -286,92 +317,83 @@ export interface PatchPreview {
 }
 
 export async function computePatchPreview(
+  patch: FilePatch,
+  cwd: string,
+): Promise<PatchPreview> {
+  try {
+    if (!patch.path?.trim()) {
+      return { error: "File path cannot be empty." };
+    }
+
+    const absPath = resolveAbsPath(cwd, patch.path);
+
+    if (patch.overwrite) {
+      return { preview: patch.new_str ?? "", isOverwrite: true };
+    } else if (patch.edits && patch.edits.length > 0) {
+      if (!fs.existsSync(absPath)) {
+        return { error: "File not found" };
+      }
+
+      const rawContent = fs.readFileSync(absPath, "utf8");
+      const origLines = rawContent.split("\n");
+      if (origLines.length > 1 && origLines[origLines.length - 1] === "") origLines.pop();
+      let content = normalizeLineEndings(rawContent);
+      const rawLineOffsets = buildLineOffsets(rawContent);
+      const allReplacements: ReplacementInfo[] = [];
+      let cumulativeOffset = 0;
+
+      for (const edit of patch.edits) {
+        if (!edit.old_str) continue;
+        const oldNorm = normalizeLineEndings(edit.old_str);
+        const newNorm = normalizeLineEndings(edit.new_str);
+
+        let searchFrom = 0;
+        if (edit.anchor) {
+          const anchorNorm = normalizeLineEndings(edit.anchor);
+          const idx = content.indexOf(anchorNorm);
+          if (idx === -1) {
+            return { error: `Anchor not found: "${truncate(edit.anchor)}"` };
+          }
+          searchFrom = idx;
+        }
+
+        const matchIdx = content.indexOf(oldNorm, searchFrom);
+        if (matchIdx === -1) {
+          return { error: `old_str not found: "${truncate(edit.old_str)}"` };
+        }
+
+        const origMatchIdx = matchIdx - cumulativeOffset;
+        const oldStartLine = lineAtOffset(rawLineOffsets, origMatchIdx);
+        const oldEndLine = lineAtOffset(rawLineOffsets, origMatchIdx + oldNorm.length - 1);
+        const oldLines = oldNorm.split("\n").filter((l, i, arr) => !(i === arr.length - 1 && l === ""));
+        const newLines = newNorm.split("\n").filter((l, i, arr) => !(i === arr.length - 1 && l === ""));
+        content = content.substring(0, matchIdx) + newNorm + content.substring(matchIdx + oldNorm.length);
+        const newStartLine = charOffsetToLine(content, matchIdx);
+        const newEndLine = charOffsetToLine(content, matchIdx + newNorm.length - 1);
+        allReplacements.push({ oldStartLine, oldEndLine, newStartLine, newEndLine, oldLines, newLines, anchor: edit.anchor ? edit.anchor.split("\n")[0] : undefined });
+        cumulativeOffset += newNorm.length - oldNorm.length;
+      }
+
+      const diff = generateReplacementDiff(patch.path, allReplacements, origLines);
+      return { diff };
+    } else {
+      return { error: "Must provide edits[] or overwrite:true" };
+    }
+  } catch (err) {
+    return { error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
+/** @deprecated Use computePatchPreview(single) instead. Kept for backward compatibility. */
+export async function computePatchPreviewMulti(
   patches: FilePatch[],
   cwd: string,
 ): Promise<Map<string, PatchPreview>> {
   const results = new Map<string, PatchPreview>();
-
   for (const p of patches) {
-    try {
-      if (!p.path?.trim()) {
-        results.set("_parse", { error: "File path cannot be empty." });
-        continue;
-      }
-
-      const absPath = resolveAbsPath(cwd, p.path);
-
-      if (p.overwrite) {
-        // For overwrite, return full content — truncation handled by renderCall based on context.expanded
-        const preview = p.new_str ?? "";
-        results.set(p.path, { preview, isOverwrite: true });
-      } else if (p.edits && p.edits.length > 0) {
-        if (!fs.existsSync(absPath)) {
-          results.set(p.path, { error: "File not found" });
-          continue;
-        }
-
-        // Compute diff without writing — same logic as applyEdits
-        const rawContent = fs.readFileSync(absPath, "utf8");
-        const origLines = rawContent.split("\n");
-        if (origLines.length > 1 && origLines[origLines.length - 1] === "") origLines.pop();
-        let content = normalizeLineEndings(rawContent);
-        const rawLineOffsets = buildLineOffsets(rawContent);
-        const allReplacements: ReplacementInfo[] = [];
-        let cumulativeOffset = 0;
-        let failed = false;
-
-        for (const edit of p.edits) {
-          if (!edit.old_str) continue;
-          const oldNorm = normalizeLineEndings(edit.old_str);
-          const newNorm = normalizeLineEndings(edit.new_str);
-
-          let searchFrom = 0;
-          if (edit.anchor) {
-            const anchorNorm = normalizeLineEndings(edit.anchor);
-            const idx = content.indexOf(anchorNorm);
-            if (idx === -1) {
-              results.set(p.path, { error: `Anchor not found: "${truncate(edit.anchor)}"` });
-              failed = true;
-              break;
-            }
-            searchFrom = idx;
-          }
-
-          const matchIdx = content.indexOf(oldNorm, searchFrom);
-          if (matchIdx === -1) {
-            results.set(p.path, { error: `old_str not found: "${truncate(edit.old_str)}"` });
-            failed = true;
-            break;
-          }
-
-          // Record replacement info for diff generation
-          const origMatchIdx = matchIdx + cumulativeOffset;
-          const oldStartLine = lineAtOffset(rawLineOffsets, origMatchIdx);
-          const oldEndLine = lineAtOffset(rawLineOffsets, origMatchIdx + oldNorm.length - 1);
-          const oldLines = oldNorm.split("\n").filter((l, i, arr) => !(i === arr.length - 1 && l === ""));
-          const newLines = newNorm.split("\n").filter((l, i, arr) => !(i === arr.length - 1 && l === ""));
-          // newStartLine/newEndLine: computed from modified content after replacement
-          content = content.substring(0, matchIdx) + newNorm + content.substring(matchIdx + oldNorm.length);
-          const newStartLine = charOffsetToLine(content, matchIdx);
-          const newEndLine = charOffsetToLine(content, matchIdx + newNorm.length - 1);
-          allReplacements.push({ oldStartLine, oldEndLine, newStartLine, newEndLine, oldLines, newLines });
-          cumulativeOffset += newNorm.length - oldNorm.length;
-        }
-
-        if (!failed) {
-          const diff = generateReplacementDiff(p.path, allReplacements, origLines);
-          results.set(p.path, { diff });
-        }
-      } else {
-        results.set(p.path, { error: "Must provide edits[] or overwrite:true" });
-      }
-    } catch (err) {
-      results.set(p.path, {
-        error: err instanceof Error ? err.message : String(err),
-      });
-    }
+    const preview = await computePatchPreview(p, cwd);
+    results.set(p.path || "_parse", preview);
   }
-
   return results;
 }
 
@@ -386,54 +408,134 @@ export function generatePatchDiff(result: PatchResult): string {
   return parts.join("\n");
 }
 
+interface ReplacementChunk {
+  startLine: number;
+  endLine: number;
+  reps: ReplacementInfo[];
+}
+
+function buildReplacementChunks(
+  reps: ReplacementInfo[],
+  totalLines: number,
+  contextLines: number,
+): ReplacementChunk[] {
+  const sorted = [...reps].sort((a, b) => a.oldStartLine - b.oldStartLine);
+  const chunks: ReplacementChunk[] = [];
+
+  for (const rep of sorted) {
+    const startLine = Math.max(1, rep.oldStartLine - contextLines);
+    const endLine = Math.min(totalLines, rep.oldEndLine + contextLines);
+    const current = chunks[chunks.length - 1];
+
+    if (current && startLine <= current.endLine + 1) {
+      current.endLine = Math.max(current.endLine, endLine);
+      current.reps.push(rep);
+    } else {
+      chunks.push({ startLine, endLine, reps: [rep] });
+    }
+  }
+
+  return chunks;
+}
+
+function getChunkAnchors(chunk: ReplacementChunk): string[] {
+  return [
+    ...new Set(
+      chunk.reps
+        .map((rep) => rep.anchor?.trim())
+        .filter((anchor): anchor is string => Boolean(anchor)),
+    ),
+  ];
+}
+
+function formatChunkHeader(chunk: ReplacementChunk): string {
+  const range = chunk.startLine === chunk.endLine
+    ? String(chunk.startLine)
+    : `${chunk.startLine}-${chunk.endLine}`;
+
+  const anchors = getChunkAnchors(chunk);
+  if (anchors.length === 0) {
+    return `@@ lines ${range} @@`;
+  }
+
+  if (anchors.length === 1) {
+    return `@@ lines ${range} @@ anchor: ${anchors[0]}`;
+  }
+
+  return `@@ lines ${range} @@`;
+}
+
+function formatChunkMetadataLines(chunk: ReplacementChunk): string[] {
+  const anchors = getChunkAnchors(chunk);
+  if (anchors.length <= 1) return [];
+
+  const shown = anchors.slice(0, 2);
+  const remaining = anchors.length - shown.length;
+  const lines = ["anchors:", ...shown.map((anchor) => `  - ${anchor}`)];
+  if (remaining > 0) {
+    lines.push(`  - +${remaining} more`);
+  }
+  return lines;
+}
+
 /**
- *  * Generate diff from replacement info — O(replacements), no LCS needed.
- * Uses original file lines (passed in) to provide context.
+ * Generate diff as visual chunks merged by overlapping/adjacent context windows.
+ * This keeps spacing stable when multiple nearby edits would otherwise create
+ * repeated context and oversized gaps between chunks.
  */
 function generateReplacementDiff(filePath: string, reps: ReplacementInfo[], originalLines: string[]): string {
-  const sorted = [...reps].sort((a, b) => a.oldStartLine - b.oldStartLine);
-
   const parts: string[] = [];
   parts.push(`--- ${filePath}`);
   parts.push(`+++ ${filePath}`);
 
-  let lineOffset = 0;
-  const maxLineNum = Math.max(originalLines.length, ...sorted.map(r => r.newEndLine + r.newLines.length - r.oldLines.length));
-  const numWidth = String(maxLineNum).length;
-
-  for (const rep of sorted) {
-    const contextLines = 3;
-    const startLine = Math.max(1, rep.oldStartLine - contextLines);
-    const endLine = Math.min(originalLines.length, rep.oldEndLine + contextLines);
-
-    // Context before (use old line numbers)
-    for (let i = startLine; i < rep.oldStartLine; i++) {
-      const num = String(i).padStart(numWidth, " ");
-      parts.push(` ${num} ${originalLines[i - 1]}`);
-    }
-
-    // Removed lines (old_str)
-    for (let i = 0; i < rep.oldLines.length; i++) {
-      const num = String(rep.oldStartLine + i).padStart(numWidth, " ");
-      parts.push(`-${num} ${rep.oldLines[i]}`);
-    }
-
-    // Added lines (new_str)
-    for (let i = 0; i < rep.newLines.length; i++) {
-      const num = String(rep.oldStartLine + i + lineOffset).padStart(numWidth, " ");
-      parts.push(`+${num} ${rep.newLines[i]}`);
-    }
-
-    // Context after (use old line numbers)
-    for (let i = rep.oldEndLine + 1; i <= endLine; i++) {
-      const num = String(i).padStart(numWidth, " ");
-      parts.push(` ${num} ${originalLines[i - 1]}`);
-    }
-
-    lineOffset += rep.newLines.length - rep.oldLines.length;
+  if (reps.length === 0) {
+    parts.push("");
+    return parts.join("\n");
   }
 
-  if (parts.length > 0 && parts[parts.length - 1] !== "") parts.push("");
+  const maxLineNum = Math.max(originalLines.length, ...reps.map(r => r.oldEndLine));
+  const numWidth = String(maxLineNum).length;
+  const CONTEXT = 3;
+  const chunks = buildReplacementChunks(reps, originalLines.length, CONTEXT);
+
+  for (let c = 0; c < chunks.length; c++) {
+    const chunk = chunks[c]!;
+    if (c > 0) parts.push("");
+    parts.push(formatChunkHeader(chunk));
+    parts.push(...formatChunkMetadataLines(chunk));
+
+    let cursor = chunk.startLine;
+
+    for (const rep of chunk.reps) {
+      // Context before this replacement (only once per original line)
+      for (let i = cursor; i < rep.oldStartLine; i++) {
+        const num = String(i).padStart(numWidth, " ");
+        parts.push(` ${num} ${originalLines[i - 1]}`);
+      }
+
+      // Removed lines (from original)
+      for (let i = 0; i < rep.oldLines.length; i++) {
+        const num = String(rep.oldStartLine + i).padStart(numWidth, " ");
+        parts.push(`-${num} ${rep.oldLines[i]}`);
+      }
+
+      // Added lines
+      for (let i = 0; i < rep.newLines.length; i++) {
+        const num = String(rep.oldStartLine + i).padStart(numWidth, " ");
+        parts.push(`+${num} ${rep.newLines[i]}`);
+      }
+
+      cursor = rep.oldEndLine + 1;
+    }
+
+    // Trailing context for the merged chunk
+    for (let i = cursor; i <= chunk.endLine; i++) {
+      const num = String(i).padStart(numWidth, " ");
+      parts.push(` ${num} ${originalLines[i - 1]}`);
+    }
+  }
+
+  if (parts[parts.length - 1] !== "") parts.push("");
   return parts.join("\n");
 }
 
