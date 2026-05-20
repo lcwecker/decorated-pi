@@ -22,6 +22,8 @@ const BASE_URL = "https://ark.cn-beijing.volces.com/api/coding/v3";
 
 const MODELS: ProviderModelConfig[] = [
   { id: "deepseek-v3.2", name: "DeepSeek V3.2", reasoning: true, input: ["text"], cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, contextWindow: 163_840, maxTokens: 65_536, compat: { supportsDeveloperRole: false, supportsReasoningEffort: true } as any },
+  { id: "deepseek-v4-flash", name: "DeepSeek V4 Flash", reasoning: true, input: ["text"], cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, contextWindow: 1_048_576, maxTokens: 1_048_576, compat: { supportsDeveloperRole: false, supportsReasoningEffort: true } as any },
+  { id: "deepseek-v4-pro", name: "DeepSeek V4 Pro", reasoning: true, input: ["text"], cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, contextWindow: 1_048_576, maxTokens: 1_048_576, compat: { supportsDeveloperRole: false, supportsReasoningEffort: true } as any },
   { id: "glm-4.7", name: "GLM 4.7", reasoning: true, input: ["text"], cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, contextWindow: 202_752, maxTokens: 131_072, compat: { supportsDeveloperRole: false, supportsReasoningEffort: true } as any },
   { id: "glm-5.1", name: "GLM 5.1", reasoning: true, input: ["text"], cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, contextWindow: 202_752, maxTokens: 131_072, compat: { supportsDeveloperRole: false, supportsReasoningEffort: true } as any },
   { id: "kimi-k2.5", name: "Kimi K2.5", reasoning: true, input: ["text", "image"], cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, contextWindow: 262_144, maxTokens: 262_144, compat: { supportsDeveloperRole: false, supportsReasoningEffort: true } as any },
