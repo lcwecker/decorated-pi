@@ -1,6 +1,6 @@
 # decorated-pi
 
-`decorated-pi` is a practical enhancement pack for Pi.
+`decorated-pi` is a practical enhancement pack for [Pi](https://github.com/earendil-works/pi).
 
 ## Install
 
