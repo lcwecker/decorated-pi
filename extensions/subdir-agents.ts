@@ -4,29 +4,49 @@
  * 当 agent 读取或编辑子目录中的文件时，自动发现该目录及父目录中的 AGENTS.md/CLAUDE.md，
  * 将其内容注入到 tool result 中。
  *
- * 状态通过 pi.appendEntry() 持久化到 session JSONL 文件中，resume 时自动恢复。
+ * 状态通过 pi.appendEntry() 持久化到 session JSONL 文件中，resume / reload 时恢复。
+ * compaction 视为上下文边界：仅恢复当前 branch 上最后一个 compaction 之后的已加载状态。
  */
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { dirname, resolve, relative, join } from "node:path";
+import { dirname, resolve, relative, join, normalize } from "node:path";
 import { existsSync, readFileSync } from "node:fs";
 
 const CUSTOM_TYPE = "decorated-pi.subdir-agents";
 const AGENTS_NAMES = ["AGENTS.md", "AGENTS.MD", "CLAUDE.md", "CLAUDE.MD"];
 
+interface SessionLikeEntry {
+  type: string;
+  customType?: string;
+  data?: unknown;
+}
+
 const discovered = new Set<string>();
 const pendingPaths = new Map<string, string>();
 let sessionCwd = process.cwd();
 
-function restoreFromSession(ctx: { cwd: string; sessionManager: { getEntries: () => Array<{ type: string; customType?: string; data?: unknown }> } }) {
+function normalizeAbsPath(cwd: string, p: string): string {
+  return normalize(resolve(cwd, p));
+}
+
+function lastCompactionIndex(entries: SessionLikeEntry[]): number {
+  for (let i = entries.length - 1; i >= 0; i--) {
+    if (entries[i]?.type === "compaction") return i;
+  }
+  return -1;
+}
+
+function restoreFromBranch(ctx: { cwd: string; sessionManager: { getBranch: () => Array<SessionLikeEntry> } }) {
   discovered.clear();
-  for (const entry of ctx.sessionManager.getEntries()) {
-    if (entry.type === "custom" && entry.customType === CUSTOM_TYPE) {
-      const paths = entry.data as string[] | undefined;
-      if (paths) {
-        for (const p of paths) {
-          discovered.add(resolve(ctx.cwd, p));
-        }
+  const branch = ctx.sessionManager.getBranch();
+  const start = lastCompactionIndex(branch) + 1;
+  for (const entry of branch.slice(start)) {
+    if (entry.type !== "custom" || entry.customType !== CUSTOM_TYPE) continue;
+    const paths = entry.data as string[] | undefined;
+    if (!Array.isArray(paths)) continue;
+    for (const p of paths) {
+      if (typeof p === "string" && p.trim()) {
+        discovered.add(normalizeAbsPath(ctx.cwd, p));
       }
     }
   }
@@ -34,7 +54,7 @@ function restoreFromSession(ctx: { cwd: string; sessionManager: { getEntries: ()
 
 function findNewAgents(filePath: string, cwd: string): Array<{ path: string; content: string }> {
   const resolvedCwd = resolve(cwd);
-  let dir = dirname(resolve(filePath));
+  let dir = dirname(resolve(cwd, filePath));
   const results: Array<{ path: string; content: string }> = [];
 
   while (true) {
@@ -42,7 +62,7 @@ function findNewAgents(filePath: string, cwd: string): Array<{ path: string; con
     if (rel === "" || rel.startsWith("..")) break;
 
     for (const name of AGENTS_NAMES) {
-      const agentsPath = join(dir, name);
+      const agentsPath = normalize(join(dir, name));
       if (existsSync(agentsPath) && !discovered.has(agentsPath)) {
         try {
           const content = readFileSync(agentsPath, "utf-8");
@@ -65,10 +85,20 @@ function findNewAgents(filePath: string, cwd: string): Array<{ path: string; con
   return results.reverse();
 }
 
+export const __subdirAgentsTest = {
+  restoreFromBranch,
+  findNewAgents,
+};
+
 export function setupSubdirAgents(pi: ExtensionAPI) {
   pi.on("session_start", (_event, ctx) => {
     sessionCwd = ctx.cwd;
-    restoreFromSession(ctx);
+    restoreFromBranch(ctx);
+  });
+
+  pi.on("session_compact", () => {
+    discovered.clear();
+    pendingPaths.clear();
   });
 
   pi.on("tool_call", (event) => {

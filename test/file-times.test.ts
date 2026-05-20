@@ -11,6 +11,9 @@ import {
   checkStaleFile,
   clearReadMarkers,
   resolveAbsolutePath,
+  createFileTimeMarkerData,
+  restoreReadMarkersFromBranch,
+  FILE_TIMES_CUSTOM_TYPE,
 } from "../extensions/file-times.js";
 
 describe("file-times", () => {
@@ -118,6 +121,33 @@ describe("file-times", () => {
     recordReadTime(filePath); // patch updates marker
 
     expect(checkStaleFile(filePath, filePath)).toBeUndefined();
+  });
+
+  // ─── restoreReadMarkersFromBranch ───
+
+  it("restores markers from custom entries on current branch", () => {
+    const filePath = path.join(tmpDir, "restored.txt");
+    fs.writeFileSync(filePath, "data");
+    const marker = createFileTimeMarkerData(tmpDir, filePath)!;
+
+    restoreReadMarkersFromBranch([
+      { type: "custom", customType: FILE_TIMES_CUSTOM_TYPE, data: marker },
+    ], tmpDir);
+
+    expect(checkStaleFile(filePath, filePath)).toBeUndefined();
+  });
+
+  it("ignores markers before the last compaction", () => {
+    const filePath = path.join(tmpDir, "compacted.txt");
+    fs.writeFileSync(filePath, "data");
+    const marker = createFileTimeMarkerData(tmpDir, filePath)!;
+
+    restoreReadMarkersFromBranch([
+      { type: "custom", customType: FILE_TIMES_CUSTOM_TYPE, data: marker },
+      { type: "compaction" },
+    ], tmpDir);
+
+    expect(checkStaleFile(filePath, filePath)).toContain("File not read yet");
   });
 
   // ─── clearReadMarkers ───

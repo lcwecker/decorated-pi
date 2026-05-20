@@ -4,10 +4,25 @@
  * - `read` tool records mtime when the LLM reads a file
  * - `patch` tool checks mtime before editing — rejects if file changed since last read
  * - `patch` tool updates mtime after a successful write
+ * - Markers are persisted to session custom entries and restored from the
+ *   current branch after the last compaction boundary.
  */
 
 import * as fs from "node:fs";
 import * as path from "node:path";
+
+export const FILE_TIMES_CUSTOM_TYPE = "decorated-pi.file-times";
+
+export interface FileTimeMarkerData {
+  path: string;
+  mtimeMs: number;
+}
+
+interface SessionLikeEntry {
+  type: string;
+  customType?: string;
+  data?: unknown;
+}
 
 /** Last-known mtime for each absolute file path (ms since epoch). */
 const readMarkers = new Map<string, number>();
@@ -54,7 +69,50 @@ export function checkStaleFile(absPath: string, displayPath: string): string | u
   return undefined;
 }
 
-/** Clear all tracked file times (e.g., on session start). */
+function toStoredPath(cwd: string, absPath: string): string {
+  const normalizedCwd = path.normalize(cwd);
+  const normalizedAbs = path.normalize(absPath);
+  const rel = path.relative(normalizedCwd, normalizedAbs);
+  if (rel && !rel.startsWith("..") && !path.isAbsolute(rel)) return rel;
+  return normalizedAbs;
+}
+
+function lastCompactionIndex(entries: SessionLikeEntry[]): number {
+  for (let i = entries.length - 1; i >= 0; i--) {
+    if (entries[i]?.type === "compaction") return i;
+  }
+  return -1;
+}
+
+function isFileTimeMarkerData(value: unknown): value is FileTimeMarkerData {
+  return !!value
+    && typeof value === "object"
+    && typeof (value as any).path === "string"
+    && typeof (value as any).mtimeMs === "number";
+}
+
+/** Build a session-persisted marker payload for the current file version. */
+export function createFileTimeMarkerData(cwd: string, absPath: string): FileTimeMarkerData | undefined {
+  if (!fs.existsSync(absPath)) return undefined;
+  return {
+    path: toStoredPath(cwd, absPath),
+    mtimeMs: getFileMtime(absPath),
+  };
+}
+
+/** Restore markers from the current branch, ignoring anything before the last compaction. */
+export function restoreReadMarkersFromBranch(entries: SessionLikeEntry[], cwd: string): void {
+  clearReadMarkers();
+  const start = lastCompactionIndex(entries) + 1;
+  for (const entry of entries.slice(start)) {
+    if (entry.type !== "custom" || entry.customType !== FILE_TIMES_CUSTOM_TYPE) continue;
+    if (!isFileTimeMarkerData(entry.data)) continue;
+    const absPath = resolveAbsolutePath(cwd, entry.data.path);
+    readMarkers.set(absPath, entry.data.mtimeMs);
+  }
+}
+
+/** Clear all tracked file times (e.g., on session start or compaction). */
 export function clearReadMarkers(): void {
   readMarkers.clear();
 }

@@ -33,7 +33,15 @@ import {
   computePatchPreview,
   type PatchPreview,
 } from "./patch.js";
-import { recordReadTime, checkStaleFile, clearReadMarkers, resolveAbsolutePath } from "./file-times.js";
+import {
+  recordReadTime,
+  checkStaleFile,
+  clearReadMarkers,
+  resolveAbsolutePath,
+  FILE_TIMES_CUSTOM_TYPE,
+  createFileTimeMarkerData,
+  restoreReadMarkersFromBranch,
+} from "./file-times.js";
 
 // ─── Schema ─────────────────────────────────────────────────────────────────────────
 
@@ -284,10 +292,14 @@ function buildPatchCallComponent(component: PatchCallComponent, args: any, theme
 // ─── Setup ──────────────────────────────────────────────────────────────────────────
 
 export function setupIO(pi: ExtensionAPI) {
-  pi.on("session_start", () => {
-    clearReadMarkers();
+  pi.on("session_start", (_event, ctx) => {
+    restoreReadMarkersFromBranch(ctx.sessionManager.getBranch() as any[], ctx.cwd);
     const active = pi.getActiveTools();
     pi.setActiveTools(active.filter(t => !["edit", "write", "grep", "find", "ls"].includes(t)));
+  });
+
+  pi.on("session_compact", () => {
+    clearReadMarkers();
   });
 
   // Track file read times
@@ -298,6 +310,8 @@ export function setupIO(pi: ExtensionAPI) {
     const cwd: string = ctx.cwd ?? process.cwd();
     const absPath = resolveAbsolutePath(cwd, filePath);
     recordReadTime(absPath);
+    const marker = createFileTimeMarkerData(cwd, absPath);
+    if (marker) pi.appendEntry(FILE_TIMES_CUSTOM_TYPE, marker);
   });
 
   pi.registerTool(defineTool({
@@ -341,6 +355,8 @@ export function setupIO(pi: ExtensionAPI) {
       for (const filePath of [...result.modified, ...result.created]) {
         const absPath = resolveAbsolutePath(cwd, filePath);
         recordReadTime(absPath);
+        const marker = createFileTimeMarkerData(cwd, absPath);
+        if (marker) pi.appendEntry(FILE_TIMES_CUSTOM_TYPE, marker);
       }
 
       const summary = formatPatchResult(result);
