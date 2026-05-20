@@ -1,6 +1,6 @@
 # decorated-pi
 
-`decorated-pi` is a Pi extension that adds stronger edit tool, safety gates, LSP tools, image/compaction model helpers, smarter `@` file search, dynamic subdirectory `AGENTS.md` loading, and a few workflow quality-of-life improvements.
+`decorated-pi` is a practical enhancement pack for Pi.
 
 ## Install
 
@@ -20,7 +20,18 @@ Replaces Pi's built-in `edit` / `write` with a stronger `patch` tool:
 - **mtime tracking** — records file modification time on `read`, rejects `patch` if the file changed since last read, preventing blind or stale edits
 - **explicit overwrite** — offer atomic `overwrite: true` mode for overwrite files or full-file creation to prevent unintened overwrite
 
-### 2. Smart `@` File Search
+### 2. Secret redaction
+
+  Three-layer detection: high-confidence known-format patterns (AWS, GitHub, OpenAI, etc.), config-key regex matching, and adjusted Shannon entropy heuristics for unknown secret-like values. Based on [opencode-secrets-protect](https://github.com/jscheel/opencode-secrets-protect)
+
+### 3. Auxiliary Models (Image + Compact)
+
+Uses cheaper models for auxiliary tasks, configured via `/dp-model`:
+
+- **Image read fallback** — when the model reads an image file, detects type via magic bytes, calls a configured vision-capable model, and replaces the read result with image analysis text (jpeg, png, gif, webp)
+- **Compact model** — uses a configured model for context compaction (instead of the main model), auto-resumes after compaction.
+
+### 4. Smart `@` File Search
 
 Replaces Pi's default file search with a faster, project-aware search strategy:
 
@@ -29,7 +40,7 @@ Replaces Pi's default file search with a faster, project-aware search strategy:
 - Reduces clutter from hidden, cache, and build directories
 - Keeps default suggestions focused on visible project files
 
-### 3. LSP Tool Suite
+### 5. LSP Tool Suite
 
 Based on [@spences10/pi-lsp](https://github.com/spences10/my-pi/tree/main/packages/pi-lsp), with major additions:
 
@@ -38,30 +49,6 @@ Based on [@spences10/pi-lsp](https://github.com/spences10/my-pi/tree/main/packag
 - Force-sync on `didChange` (no stale diagnostics)
 
 Supported languages: c/cpp, go, java, lua, python, ruby, rust, svelte, typescript
-
-### 4. Auxiliary Models (Image + Compact)
-
-Uses cheaper models for auxiliary tasks, configured via `/dp-model`:
-
-- **Image read fallback** — when the model reads an image file, detects type via magic bytes, calls a configured vision-capable model, and replaces the read result with image analysis text (jpeg, png, gif, webp)
-- **Compact model** — uses a configured model for context compaction (instead of the main model), auto-resumes after compaction.
-
-### 5. Safety Layer
-
-- **Dangerous bash guard**
-  - asks for confirmation on destructive commands such as:
-    - `rm`
-    - `sudo`
-    - `svn commit/revert`
-    - `git reset/restore/clean/push/revert`
-    - `npm publish`
-    - `>` / `1>` / `2>` / `&>` / `tee` overwrite existing files
-  - Hints the agent to use `edit` instead of `write` on non-empty files
-- **Protected paths**
-  - Blocks read/write access (via `write`/`edit`/`read` tools or `cat`/`head`/`tail`/`grep`/`rg` etc. bash commands) to sensitive locations such as `.env`, `.git/`, `.ssh/`, `*.pem`, `*.key`, etc.
-- **Secret redaction**
-  - Three-layer detection: high-confidence known-format patterns (AWS, GitHub, OpenAI, etc.), config-key regex matching, and adjusted Shannon entropy heuristics for unknown secret-like values.
-  - Based on [opencode-secrets-protect](https://github.com/jscheel/opencode-secrets-protect)
 
 ### 6. Dynamic Subdirectory `AGENTS.md` / `CLAUDE.md`
 
@@ -95,7 +82,7 @@ Modules can be toggled on/off. Changes take effect after `/reload`.
 | Module | Default | Effect when disabled |
 | -------- | --------- | --------------------- |
 | `patch` | `true` | Reverts to Pi's built-in `edit` / `write` tools |
-| `safety` | `true` | No command guard, no protected path check, no secret redaction |
+| `safety` | `true` | No secret redaction on `read` / `bash` output |
 | `lsp` | `true` | All `lsp_*` tools unregistered — no diagnostics, hover, etc. |
 | `smart-at` | `true` | Fallback to Pi's built-in `@` file completion |
 

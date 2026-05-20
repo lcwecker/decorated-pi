@@ -287,7 +287,7 @@ export function setupIO(pi: ExtensionAPI) {
   pi.on("session_start", () => {
     clearReadMarkers();
     const active = pi.getActiveTools();
-    pi.setActiveTools(active.filter(t => !["edit", "write"].includes(t)));
+    pi.setActiveTools(active.filter(t => !["edit", "write", "grep", "find", "ls"].includes(t)));
   });
 
   // Track file read times

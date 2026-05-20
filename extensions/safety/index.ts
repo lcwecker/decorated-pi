@@ -1,11 +1,7 @@
 /**
  * Safety — Pi 集成层
  *
- * - Command Guard:   拦截危险 bash 命令
- * - Redirect Guard:  bash 覆盖写入提示确认
- * - Protected Paths: write/edit/patch/read 保护路径提示确认
- * - Write Guard:     覆盖非空文件禁止 write (提示使用 patch)
- * - Secret Redact:   API Key / Token 自动掩码
+ * - Secret Redact: API Key / Token 自动掩码
  */
 
 import type {
@@ -13,12 +9,7 @@ import type {
   ExtensionContext,
   ToolResultEvent,
 } from "@earendil-works/pi-coding-agent";
-import * as fs from "node:fs";
-import { resolve } from "node:path";
 import {
-  checkProtectedPath,
-  collectBashDangers,
-  formatBashDangers,
   detectSecrets,
   maskSecret,
 } from "./detect.js";
@@ -48,89 +39,6 @@ function formatRedactionContext(event: ToolResultEvent): string {
 // ─── Setup ──────────────────────────────────────────────────────────────────
 
 export function setupSafety(pi: ExtensionAPI) {
-  // ── Command Guard + Protected Paths + Write Guard (tool_call) ─────────
-
-  pi.on("tool_call", async (event, ctx) => {
-
-    // Gate 1: 危险命令 + 覆盖写入 + 读取保护路径
-    if (event.toolName === "bash") {
-      const command = (event.input as { command?: string }).command;
-      if (command) {
-        const dangers = collectBashDangers(command, ctx.cwd);
-        if (dangers.length > 0) {
-          const message = formatBashDangers(dangers)!;
-          if (!ctx.hasUI) {
-            return { block: true, reason: `⚠ ${message} (non-interactive)` };
-          }
-          const choice = await ctx.ui.select(
-            `⚠️  ${message}\n\nAllow execution?`,
-            ["Block", "Allow once"],
-          );
-          if (!choice || choice === "Block") {
-            return { block: true, reason: `⚠ ${message}` };
-          }
-        }
-      }
-    }
-
-    // Gate 2: write/edit/patch 写入保护路径
-    if (event.toolName === "write" || event.toolName === "edit" || event.toolName === "patch") {
-      // For write/edit, path is a single field; for patch, check all patches[].path
-      const filePaths: string[] = event.toolName === "patch"
-        ? (event.input as any).patches?.filter((p: any) => p?.path).map((p: any) => p.path) ?? []
-        : [(event.input as any).path ?? (event.input as any).file ?? (event.input as any).file_path].filter(Boolean);
-      for (const filePath of filePaths) {
-        const danger = checkProtectedPath(filePath);
-        if (danger) {
-          if (!ctx.hasUI) {
-            return { block: true, reason: `🔒 ${danger}\nmay contain sensitive information` };
-          }
-          const choice = await ctx.ui.select(
-            `🔒 ${danger}\nmay contain sensitive information\n\nProceed?`,
-            ["Block", "Allow once"],
-          );
-          if (!choice || choice === "Block") {
-            return { block: true, reason: `🔒 ${danger}\nmay contain sensitive information` };
-          }
-          break; // User approved — skip remaining paths
-        }
-      }
-    }
-
-    // Gate 3: 写保护（已有内容的文件禁止 write，直接返回信息给 agent）
-    if (event.toolName === "write") {
-      const filePath = (event.input as any).path ?? (event.input as any).file ?? (event.input as any).file_path;
-      if (filePath) {
-        try {
-          const abs = resolve(ctx.cwd, filePath);
-          if (fs.existsSync(abs) && fs.readFileSync(abs, "utf8").length > 0) {
-            return { block: true, reason: "Overwriting a non-empty file is dangerous, use the patch tool instead!" };
-          }
-        } catch { /* file doesn't exist */ }
-      }
-    }
-
-    // Gate 4: read 工具读取保护路径（bash 读取已在 Gate 1 处理）
-    if (event.toolName === "read") {
-      const filePath = (event.input as any).path ?? (event.input as any).file ?? (event.input as any).file_path;
-      if (filePath) {
-        const danger = checkProtectedPath(filePath);
-        if (danger) {
-          if (!ctx.hasUI) {
-            return { block: true, reason: `🔒 Reading protected file: ${danger}\nmay contain sensitive information` };
-          }
-          const choice = await ctx.ui.select(
-            `🔒 Reading protected file: ${danger}\nmay contain sensitive information\n\nProceed?`,
-            ["Block", "Allow once"],
-          );
-          if (!choice || choice === "Block") {
-            return { block: true, reason: `🔒 Reading protected file: ${danger}\nmay contain sensitive information` };
-          }
-        }
-      }
-    }
-  });
-
   // ── Secret Redact (tool_result) ────────────────────────────────────────
 
   const handleToolResult = async (
