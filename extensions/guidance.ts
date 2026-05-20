@@ -9,9 +9,9 @@ export function setupGuidance(pi: ExtensionAPI) {
     const guidance = [
       DECORATED_PI_GUIDANCE_MARKER,
       "",
-      "Before taking any action on a user's prompt, briefly restate your understanding of what the user wants. If ambiguous, ask clarifying questions. Only proceed after intent is clear.",
-      "",
-      "For medium-to-large tasks (more than 3 steps or touching multiple files/systems), break the task into discrete steps. For small tasks (1-2 steps), do it directly.",
+      "- Before acting on a user's prompt, ensure you fully understand their needs. If the intent is ambiguous, ask clarifying questions. Proceed only when the intent is clear.",
+      "- Look before you leap! Ensure you have conducted thorough research before taking any action.",
+      "- Exercise caution when performing any **write** operations, especially when you are in a research or exploration phase."
     ].join("\n");
 
     return {
