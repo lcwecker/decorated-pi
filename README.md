@@ -42,11 +42,10 @@ Replaces Pi's default file search with a faster, project-aware search strategy:
 
 ### 5. LSP Tool Suite
 
-Based on [@spences10/pi-lsp](https://github.com/spences10/my-pi/tree/main/packages/pi-lsp), with major additions:
+A cleaned-up, minimal LSP toolset. The extension keeps only the two LSP tools that cover the most practical coding workflows: checking diagnostics after edits and inspecting file structure before focused changes.
 
-- C/C++ and Lua support
-- `lsp_find_symbol`, `lsp_rename`, multi-file support merged into `lsp_diagnostics`
-- Force-sync on `didChange` (no stale diagnostics)
+- **`lsp_diagnostics`** — file diagnostics with severity filtering
+- **`lsp_document_symbols`** — file symbol outline
 
 Supported languages: c/cpp, go, java, lua, python, ruby, rust, svelte, typescript
 

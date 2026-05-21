@@ -13,6 +13,7 @@ import { setupGuidance } from "./guidance";
 import { setupLsp } from "./lsp/index";
 import { setupProviders } from "./providers/index";
 import { setupSmartAt } from "./smart-at";
+import { setupMcp } from "./mcp/index.js";
 import { isModuleEnabled } from "./settings";
 
 export default function (pi: ExtensionAPI) {
@@ -29,4 +30,5 @@ export default function (pi: ExtensionAPI) {
   if (isModuleEnabled("safety"))    setupSafety(pi);
   if (isModuleEnabled("lsp"))       setupLsp(pi);
   if (isModuleEnabled("smart-at"))  setupSmartAt(pi);
+  if (isModuleEnabled("mcp"))       setupMcp(pi);
 }

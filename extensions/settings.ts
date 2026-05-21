@@ -25,11 +25,17 @@ export interface ProviderCache {
   models: ProviderModelEntry[];
 }
 
+export interface McpServerEntry {
+  url: string;
+  enabled?: boolean;
+}
+
 export interface ModuleSettings {
   safety?: boolean;
   lsp?: boolean;
   "smart-at"?: boolean;
   patch?: boolean;
+  mcp?: boolean;
 }
 
 export interface DecoratedPiConfig {
@@ -37,6 +43,7 @@ export interface DecoratedPiConfig {
   compactModelKey?: string | null;
   providers?: Record<string, ProviderCache>;
   modules?: ModuleSettings;
+  mcpServers?: Record<string, McpServerEntry>;
 }
 
 export function loadConfig(): DecoratedPiConfig {
@@ -113,6 +120,7 @@ const DEFAULT_MODULES: Required<ModuleSettings> = {
   lsp: true,
   "smart-at": true,
   patch: true,
+  mcp: true,
 };
 
 export function isModuleEnabled(name: keyof ModuleSettings): boolean {

@@ -22,8 +22,7 @@
   "homepage": "https://github.com/lcwecker/decorated-pi#readme",
   "bugs": "https://github.com/lcwecker/decorated-pi/issues",
   "dependencies": {
-    "@spences10/pi-child-env": "0.1.4",
-    "@spences10/pi-project-trust": "0.0.6",
+    "@modelcontextprotocol/sdk": "^1.29.0",
     "openai": "^6.37.0"
   },
   "peerDependencies": {

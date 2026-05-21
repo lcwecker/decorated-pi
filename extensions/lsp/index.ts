@@ -1,20 +1,17 @@
 /**
- * LSP Extension Entry Point
+ * LSP Extension — language server integration for Pi.
  *
- * Based on @spences10/pi-lsp by Scott Spence
- * https://github.com/spences10/my-pi/tree/main/packages/pi-lsp (MIT License)
+ * Provides: lsp_diagnostics, lsp_document_symbols.
  */
-import { LspServerManager } from "./server-manager.js";
-import { register_lsp_tools } from "./tools.js";
-import { setup_lsp_prompt } from "./prompt.js";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { LspServerManager } from "./manager.js";
+import { registerLspTools } from "./tools.js";
 
-export function setupLsp(pi: any) {
+export function setupLsp(pi: ExtensionAPI) {
   const manager = new LspServerManager();
-
-  setup_lsp_prompt(pi);
-  register_lsp_tools(pi, manager);
+  registerLspTools(pi, manager);
 
   pi.on("session_shutdown", async () => {
-    await manager.clear_language_state();
+    await manager.clearLanguageState();
   });
 }

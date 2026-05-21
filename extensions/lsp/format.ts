@@ -1,13 +1,24 @@
 /**
- * LSP Output Formatting — diagnostics, hover, locations, symbols
+ * LSP Output Formatting — test-compatible standalone module.
  *
- * Based on @spences10/pi-lsp by Scott Spence
- * https://github.com/spences10/my-pi/tree/main/packages/pi-lsp (MIT License)
+ * Core formatting logic duplicated here so tests can import directly.
+ * Runtime tools.ts has its own inline copies.
  */
 import { fileURLToPath } from "node:url";
-import type { LspDiagnostic, LspHover, LspLocation, LspDocumentSymbol } from "./client.js";
+import type { LspDiagnostic, LspHover, LspLocation, LspDocumentSymbol } from "./types.js";
 import { LspClientStartError } from "./client.js";
-import { get_server_config, list_supported_languages } from "./servers.js";
+
+export type { LspDiagnostic, LspHover, LspLocation, LspDocumentSymbol } from "./types.js";
+export { LspClientStartError } from "./client.js";
+
+// ─── Error formatting ────────────────────────────────────────────────────
+
+export class LspToolError extends Error {
+  constructor(public readonly details: LspToolErrorDetail) {
+    super(details.message);
+    this.name = "LspToolError";
+  }
+}
 
 export interface LspToolErrorDetail {
   kind: string;
@@ -20,126 +31,31 @@ export interface LspToolErrorDetail {
   code?: string;
 }
 
-export class LspToolError extends Error {
-  details: LspToolErrorDetail;
-  constructor(details: LspToolErrorDetail) {
-    super(details.message);
-    this.name = "LspToolError";
-    this.details = details;
-  }
-}
-
-const SYMBOL_KIND_LABELS: Record<number, string> = {
-  2: "module",
-  3: "namespace",
-  5: "class",
-  6: "method",
-  7: "property",
-  8: "field",
-  9: "constructor",
-  11: "interface",
-  12: "function",
-  13: "variable",
-  14: "constant",
-  23: "struct",
-  24: "event",
-};
-
-export const SYMBOL_KIND_NAMES = Object.values(SYMBOL_KIND_LABELS);
-
-export function format_status_lines(
-  cwd: string,
-  clients_by_server: Map<string, any>,
-  failed_servers: Map<string, any>
-): string[] {
-  const lines: string[] = [];
-  const active_languages = new Set<string>();
-
-  const running_states = Array.from(clients_by_server.values()).sort(
-    (a: any, b: any) =>
-      a.language.localeCompare(b.language) ||
-      a.workspace_root.localeCompare(b.workspace_root)
-  );
-  for (const running of running_states) {
-    active_languages.add(running.language);
-    lines.push(
-      `${running.language}: running (ready=${running.client.is_ready()}) — ${running.command} [workspace ${running.workspace_root}]`
-    );
-  }
-
-  const failures = Array.from(failed_servers.values()).sort(
-    (a: any, b: any) =>
-      (a.language ?? "").localeCompare(b.language ?? "") ||
-      (a.workspace_root ?? "").localeCompare(b.workspace_root ?? "")
-  );
-  for (const failure of failures) {
-    if (failure.language) active_languages.add(failure.language);
-    const workspace = failure.workspace_root
-      ? ` [workspace ${failure.workspace_root}]`
-      : "";
-    const language = failure.language ?? "unknown";
-    lines.push(`${language}: failed — ${failure.message}${workspace}`);
-  }
-
-  for (const language of list_supported_languages()) {
-    if (active_languages.has(language)) continue;
-    const config = get_server_config(language, cwd);
-    if (config) {
-      lines.push(`${language}: idle — ${config.command}`);
-    }
-  }
-
-  return lines.length > 0 ? lines : ["No language servers configured for this project."];
-}
-
 export function to_lsp_tool_error(
-  file: string,
-  language: string,
-  workspace_root: string | undefined,
-  command: string,
-  install_hint: string | undefined,
-  error: unknown
+  file: string, language: string, workspaceRoot: string | undefined,
+  command: string, installHint: string | undefined, error: unknown,
 ): LspToolErrorDetail {
-  if (error instanceof LspToolError) {
-    return error.details;
-  }
+  if (error instanceof LspToolError) return error.details;
   if (error instanceof LspClientStartError) {
-    const missing_binary = error.code === "ENOENT";
     return {
-      kind: "server_start_failed",
-      file,
-      language,
-      workspace_root,
-      command,
-      install_hint,
-      code: error.code,
-      message: missing_binary
-        ? `command "${command}" not found`
-        : error.message,
+      kind: "server_start_failed", file, language, workspace_root: workspaceRoot,
+      command, install_hint: installHint, code: error.code,
+      message: error.code === "ENOENT" ? `command "${command}" not found` : error.message,
     };
   }
   const err = error as Record<string, unknown> | undefined;
   return {
-    kind: "tool_execution_failed",
-    file,
-    language,
-    workspace_root,
-    command,
-    install_hint,
+    kind: "tool_execution_failed", file, language, workspace_root: workspaceRoot,
+    command, install_hint: installHint,
     message: error instanceof Error ? error.message : String(error),
-    code:
-      err && typeof err.code === "string" ? err.code : undefined,
+    code: err?.code as string | undefined,
   };
 }
 
 export function format_tool_error(details: LspToolErrorDetail): string {
-  if (details.kind === "unsupported_language") {
-    return details.message;
-  }
+  if (details.kind === "unsupported_language") return details.message;
   const lines = [
-    details.language
-      ? `${details.language} LSP unavailable for ${details.file}`
-      : `LSP request failed for ${details.file}`,
+    details.language ? `${details.language} LSP unavailable for ${details.file}` : `LSP request failed for ${details.file}`,
     `Reason: ${details.message}`,
   ];
   if (details.command) lines.push(`Command: ${details.command}`);
@@ -148,90 +64,84 @@ export function format_tool_error(details: LspToolErrorDetail): string {
   return lines.join("\n");
 }
 
-function severity_label(severity: number): string {
-  switch (severity) {
-    case 1: return "error";
-    case 2: return "warning";
-    case 3: return "info";
-    case 4: return "hint";
-    default: return "info";
-  }
-}
+// ─── Severity ─────────────────────────────────────────────────────────────
 
 export type SeverityFilter = "error" | "warning" | "info" | "hint";
+const SEVERITY_MAP: Record<SeverityFilter, number> = { error: 1, warning: 2, info: 3, hint: 4 };
 
-const SEVERITY_MAP: Record<SeverityFilter, number> = {
-  error: 1,
-  warning: 2,
-  info: 3,
-  hint: 4,
-};
-
-export function filter_diagnostics(
-  diagnostics: LspDiagnostic[],
-  severities?: SeverityFilter[]
-): LspDiagnostic[] {
-  if (!severities || severities.length === 0) return diagnostics;
-  // 取最小的 severity 值（error=1 < warning=2 < info=3 < hint=4）
-  const minSeverity = Math.min(...severities.map((s) => SEVERITY_MAP[s]));
-  // 显示 severity <= minSeverity（更严重 + 自身）
-  return diagnostics.filter((d) => (d.severity ?? 1) <= minSeverity);
+function severityLabel(s: number): string {
+  return s === 1 ? "error" : s === 2 ? "warning" : s === 3 ? "info" : "hint";
 }
 
-export function format_diagnostics(
-  file: string,
-  diagnostics: LspDiagnostic[],
-  severities?: SeverityFilter[]
-): string {
+export function filter_diagnostics(diagnostics: LspDiagnostic[], severities?: SeverityFilter[]): LspDiagnostic[] {
+  if (!severities?.length) return diagnostics;
+  const min = Math.min(...severities.map((s) => SEVERITY_MAP[s]));
+  return diagnostics.filter((d) => (d.severity ?? 1) <= min);
+}
+
+export function format_diagnostics(file: string, diagnostics: LspDiagnostic[], severities?: SeverityFilter[]): string {
   const filtered = filter_diagnostics(diagnostics, severities);
   if (filtered.length === 0) return `${file}: no diagnostics`;
   const lines = [`${file}: ${filtered.length} diagnostic(s)`];
   for (const d of filtered) {
-    const position = `${d.range.start.line + 1}:${d.range.start.character + 1}`;
+    const pos = `${d.range.start.line + 1}:${d.range.start.character + 1}`;
     const source = d.source ? ` [${d.source}]` : "";
     const code = d.code != null ? ` (${d.code})` : "";
-    lines.push(
-      `  ${position} ${severity_label(d.severity ?? 1)}${source}${code}: ${d.message}`
-    );
+    lines.push(`  ${pos} ${severityLabel(d.severity ?? 1)}${source}${code}: ${d.message}`);
   }
   return lines.join("\n");
 }
+
+// ─── Hover ────────────────────────────────────────────────────────────────
 
 export function format_hover(hover: LspHover | null): string {
   if (!hover) return "No hover info.";
-  const contents = hover.contents;
-  const extract = (item: unknown): string =>
-    typeof item === "string" ? item : ((item as { value?: string })?.value ?? "");
-  if (Array.isArray(contents)) {
-    return contents.map(extract).join("\n\n").trim() || "No hover info.";
-  }
-  return extract(contents).trim() || "No hover info.";
+  const extract = (item: unknown): string => typeof item === "string" ? item : ((item as any)?.value ?? "");
+  if (Array.isArray(hover.contents)) return hover.contents.map(extract).join("\n\n").trim() || "No hover info.";
+  return extract(hover.contents).trim() || "No hover info.";
 }
 
-export function format_locations(
-  locations: LspLocation[],
-  empty_message: string
-): string {
-  if (locations.length === 0) return empty_message;
-  return locations
-    .map((loc) => {
-      const path = file_url_to_path_or_value(loc.uri);
-      return `${path}:${loc.range.start.line + 1}:${loc.range.start.character + 1}`;
-    })
-    .join("\n");
+// ─── Locations ────────────────────────────────────────────────────────────
+
+export function format_locations(locations: LspLocation[], emptyMessage: string): string {
+  if (locations.length === 0) return emptyMessage;
+  return locations.map((loc) => `${fileUrlToPath(loc.uri)}:${loc.range.start.line + 1}:${loc.range.start.character + 1}`).join("\n");
 }
 
-export function format_document_symbols(
-  file: string,
-  symbols: LspDocumentSymbol[]
-): string {
+function fileUrlToPath(uri: string): string {
+  try { return uri.startsWith("file:") ? fileURLToPath(uri) : uri; } catch { return uri; }
+}
+
+// ─── Symbols ──────────────────────────────────────────────────────────────
+
+const SYMBOL_KIND_LABELS: Record<number, string> = {
+  2: "module", 3: "namespace", 5: "class", 6: "method", 7: "property",
+  8: "field", 9: "constructor", 11: "interface", 12: "function",
+  13: "variable", 14: "constant", 23: "struct", 24: "event",
+};
+
+export function symbol_kind_label(kind: number): string {
+  return SYMBOL_KIND_LABELS[kind] ?? "symbol";
+}
+
+export function format_document_symbols(file: string, symbols: LspDocumentSymbol[]): string {
   if (symbols.length === 0) return `${file}: no symbols`;
   const lines = [`${file}: ${symbols.length} top-level symbol(s)`];
-  append_symbol_lines(lines, symbols, 1);
+  appendSymbols(lines, symbols, 1);
   return lines.join("\n");
 }
 
-export interface SymbolMatchOptions {
+function appendSymbols(lines: string[], symbols: LspDocumentSymbol[], depth: number) {
+  for (const s of symbols) {
+    const indent = "  ".repeat(depth);
+    const detail = s.detail ? ` — ${s.detail}` : "";
+    const range = `${s.range.start.line + 1}:${s.range.start.character + 1}`;
+    lines.push(`${indent}${symbol_kind_label(s.kind)} ${s.name}${detail} @ ${range}`);
+    if (s.children?.length) appendSymbols(lines, s.children, depth + 1);
+  }
+}
+
+interface SymbolMatchOptions {
   max_results: number;
   top_level_only: boolean;
   exact_match: boolean;
@@ -239,57 +149,41 @@ export interface SymbolMatchOptions {
   language: string;
 }
 
-export interface SymbolMatch {
-  symbol: LspDocumentSymbol;
-  depth: number;
-}
+export interface SymbolMatch { symbol: LspDocumentSymbol; depth: number }
 
 export function find_symbol_matches(
   symbols: LspDocumentSymbol[],
   query: string,
-  options: SymbolMatchOptions
+  options: SymbolMatchOptions,
 ): SymbolMatch[] {
   const normalized = query.trim().toLowerCase();
   if (!normalized) return [];
-
   const matches: SymbolMatch[] = [];
-
-  const expand_exact_name_values = (name: string): string[] => {
+  const expandName = (name: string): string[] => {
     const trimmed = name.trim().toLowerCase();
     if (!trimmed) return [];
     const expanded = new Set([trimmed]);
     if (options.language === "cpp" && trimmed.includes("::")) {
-      const parts = trimmed
-        .split("::")
-        .map((part) => part.trim())
-        .filter(Boolean);
+      const parts = trimmed.split("::").map(p => p.trim()).filter(Boolean);
       if (parts.length > 0) expanded.add(parts[parts.length - 1]!);
     }
-    return Array.from(expanded);
+    return [...expanded];
   };
 
-  const matches_query = (symbol: LspDocumentSymbol): boolean => {
-    const raw_name = symbol.name.trim().toLowerCase();
-    const raw_detail = (symbol.detail ?? "").trim().toLowerCase();
+  const matchesQuery = (s: LspDocumentSymbol): boolean => {
+    const name = s.name.trim().toLowerCase();
+    const detail = (s.detail ?? "").trim().toLowerCase();
     if (options.exact_match) {
-      const exact_values = [
-        ...expand_exact_name_values(symbol.name),
-        ...(raw_detail ? [raw_detail] : []),
-      ];
-      return exact_values.some((value) => value === normalized);
+      const exactValues = [...expandName(s.name), ...(detail ? [detail] : [])];
+      return exactValues.some(v => v === normalized);
     }
-    const fuzzy_values = [raw_name, raw_detail].filter(Boolean);
-    return fuzzy_values.some((value) => value.includes(normalized));
+    return name.includes(normalized) || detail.includes(normalized);
   };
-
-  const matches_kind = (symbol: LspDocumentSymbol): boolean => {
-    if (options.kinds.size === 0) return true;
-    return options.kinds.has(symbol_kind_label(symbol.kind));
-  };
-
-  const visit = (entries: LspDocumentSymbol[], depth: number): void => {
+  const matchesKind = (s: LspDocumentSymbol): boolean =>
+    options.kinds.size === 0 || options.kinds.has(symbol_kind_label(s.kind));
+  const visit = (entries: LspDocumentSymbol[], depth: number) => {
     for (const symbol of entries) {
-      if (matches_kind(symbol) && matches_query(symbol)) {
+      if (matchesKind(symbol) && matchesQuery(symbol)) {
         matches.push({ symbol, depth });
         if (matches.length >= options.max_results) return;
       }
@@ -299,57 +193,28 @@ export function find_symbol_matches(
       }
     }
   };
-
   visit(symbols, 1);
   return matches;
 }
 
-export function format_symbol_matches(
-  file: string,
-  query: string,
-  matches: SymbolMatch[]
-): string {
-  if (matches.length === 0) {
-    return `${file}: no symbols matching "${query}"`;
-  }
+export function format_symbol_matches(file: string, query: string, matches: SymbolMatch[]): string {
+  if (matches.length === 0) return `${file}: no symbols matching "${query}"`;
   const lines = [`${file}: ${matches.length} symbol match(es) for "${query}"`];
   for (const { symbol, depth } of matches) {
     const indent = "  ".repeat(depth);
     const detail = symbol.detail ? ` — ${symbol.detail}` : "";
     const range = `${symbol.range.start.line + 1}:${symbol.range.start.character + 1}`;
-    lines.push(
-      `${indent}${symbol_kind_label(symbol.kind)} ${symbol.name}${detail} @ ${range}`
-    );
+    lines.push(`${indent}${symbol_kind_label(symbol.kind)} ${symbol.name}${detail} @ ${range}`);
   }
   return lines.join("\n");
 }
 
-function append_symbol_lines(
-  lines: string[],
-  symbols: LspDocumentSymbol[],
-  depth: number
-): void {
-  for (const symbol of symbols) {
-    const indent = "  ".repeat(depth);
-    const detail = symbol.detail ? ` — ${symbol.detail}` : "";
-    const range = `${symbol.range.start.line + 1}:${symbol.range.start.character + 1}`;
-    lines.push(
-      `${indent}${symbol_kind_label(symbol.kind)} ${symbol.name}${detail} @ ${range}`
-    );
-    if (symbol.children?.length) {
-      append_symbol_lines(lines, symbol.children, depth + 1);
-    }
-  }
+// ─── Collapse (for tools test) ────────────────────────────────────────────
+
+export function collapse_lsp_text(text: string, maxLines = 20) {
+  const lines = text.split("\n").reverse().reduce((acc, l) => l === "" && acc.length === 0 ? acc : [l, ...acc], [] as string[]);
+  const totalLines = lines.length;
+  return { totalLines, displayLines: lines.slice(0, maxLines), remainingLines: Math.max(0, totalLines - maxLines) };
 }
 
-export function symbol_kind_label(kind: number): string {
-  return SYMBOL_KIND_LABELS[kind] ?? "symbol";
-}
-
-function file_url_to_path_or_value(uri: string): string {
-  try {
-    return uri.startsWith("file:") ? fileURLToPath(uri) : uri;
-  } catch {
-    return uri;
-  }
-}
+export const __lspFormatTest = { collapse_lsp_text: collapse_lsp_text };

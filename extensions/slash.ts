@@ -9,7 +9,8 @@
 import type { ExtensionAPI, ExtensionContext, Theme as PiTheme } from "@earendil-works/pi-coding-agent";
 import { ModelPickerComponent } from "./model-integration.js";
 import { getAllModuleSettings, setModuleEnabled, type ModuleSettings } from "./settings.js";
-import { Container, SettingsList, type TUI, type SettingsListTheme, type Component } from "@earendil-works/pi-tui";
+import { getMcpStatus } from "./mcp/index.js";
+import { Container, SettingsList, Spacer, Text, type TUI, type SettingsListTheme, type Component, getKeybindings } from "@earendil-works/pi-tui";
 
 // ─── Border component (matches native DynamicBorder) ────────────────────────
 
@@ -64,6 +65,7 @@ const MODULE_LABELS: Record<keyof ModuleSettings, string> = {
   safety: "Safety Layer",
   lsp: "LSP Tools",
   "smart-at": "Smart @ Search",
+  mcp: "Built-in MCP",
 };
 
 const MODULE_DESCS: Record<keyof ModuleSettings, string> = {
@@ -71,6 +73,7 @@ const MODULE_DESCS: Record<keyof ModuleSettings, string> = {
   safety: "Command guard, protected paths, read guard, secret redaction",
   lsp: "Language server diagnostics, hover, definition, references, symbols, rename",
   "smart-at": "Project-aware file search replacing default autocomplete",
+  mcp: "Built-in MCP client for context7 and exa (zero-config)",
 };
 
 class ModuleSettingsComponent extends Container {
@@ -127,6 +130,156 @@ function setupDpSettingsCommand(pi: ExtensionAPI) {
   });
 }
 
+// ─── /mcp ──────────────────────────────────────────────────────────────────
+
+class McpStatusComponent extends Container {
+  private textComponent: Text;
+  private tui: TUI;
+  private theme: PiTheme;
+  private done: () => void;
+  private timer: ReturnType<typeof setInterval> | null = null;
+
+  constructor(tui: TUI, theme: PiTheme, onDone: () => void) {
+    super();
+    this.tui = tui;
+    this.theme = theme;
+    this.done = onDone;
+
+    this.addChild(new DynamicBorder(theme));
+    this.addChild(new Spacer(1));
+
+    this.textComponent = new Text("", 1, 0);
+    this.addChild(this.textComponent);
+
+    this.addChild(new Spacer(1));
+    this.addChild(new Text(this.theme.fg("dim", "Press q to close."), 1, 0));
+    this.addChild(new Spacer(1));
+    this.addChild(new DynamicBorder(theme));
+
+    this.refresh();
+
+    this.timer = setInterval(() => {
+      this.refresh();
+      const allSettled = getMcpStatus().every((s) => s.state !== "connecting");
+      if (allSettled && this.timer) {
+        clearInterval(this.timer);
+        this.timer = null;
+      }
+    }, 500);
+  }
+
+  private refresh() {
+    const servers = getMcpStatus();
+
+    if (servers.length === 0) {
+      this.textComponent.setText("No MCP servers configured.");
+      this.tui.requestRender();
+      return;
+    }
+
+    const connected = servers.filter((s) => s.state === "connected");
+    const connecting = servers.filter((s) => s.state === "connecting");
+    const failed = servers.filter((s) => s.state === "failed");
+
+    const lines: string[] = [
+      `MCP servers (${servers.length}):`,
+      "",
+    ];
+
+    for (const s of connected) {
+      lines.push(this.theme.fg("accent", `• ${s.name}`) + ` (${s.source})`);
+      lines.push(`  URL: ${s.url}`);
+      lines.push(`  Tools: ${s.toolCount}`);
+      for (const tool of s.tools) {
+        const desc = tool.description ? ` — ${tool.description.slice(0, 60)}` : "";
+        lines.push(`    - ${tool.name}${desc}`);
+      }
+      lines.push("");
+    }
+
+    for (const s of connecting) {
+      lines.push(this.theme.fg("accent", `• ${s.name}`) + ` (${s.source})`);
+      lines.push(`  URL: ${s.url}`);
+      lines.push(`  Status: ${this.theme.fg("warning", "connecting...")}`);
+      lines.push("");
+    }
+
+    for (const s of failed) {
+      lines.push(this.theme.fg("accent", `• ${s.name}`) + ` (${s.source})`);
+      lines.push(`  URL: ${s.url}`);
+      lines.push(`  Status: ${this.theme.fg("error", "failed")} — ${s.error ?? "unknown error"}`);
+      lines.push("");
+    }
+
+    this.textComponent.setText(lines.join("\n"));
+    this.tui.requestRender();
+  }
+
+  handleInput(data: string) {
+    const kb = getKeybindings();
+    if (
+      data === "q" ||
+      data === "\r" ||
+      data === "\n" ||
+      kb.matches(data, "tui.select.cancel")
+    ) {
+      if (this.timer) {
+        clearInterval(this.timer);
+        this.timer = null;
+      }
+      this.done();
+    }
+  }
+
+  dispose() {
+    if (this.timer) {
+      clearInterval(this.timer);
+      this.timer = null;
+    }
+  }
+}
+
+function setupMcpCommand(pi: ExtensionAPI) {
+  pi.registerCommand("mcp", {
+    description: "Show active MCP servers and their tools",
+    handler: async (_args, ctx) => {
+      if (ctx.hasUI) {
+        await ctx.ui.custom<void>(
+          (tui, theme, _kb, done) => new McpStatusComponent(tui, theme, () => done(undefined))
+        );
+        return;
+      }
+
+      // Fallback for non-interactive (print / RPC) mode.
+      const servers = getMcpStatus();
+      if (servers.length === 0) {
+        ctx.ui.notify("No MCP servers configured.", "info");
+        return;
+      }
+
+      const lines: string[] = [`MCP servers (${servers.length}):`, ""];
+      for (const s of servers) {
+        lines.push(`• ${s.name} (${s.source})`);
+        lines.push(`  URL: ${s.url}`);
+        if (s.state === "connecting") {
+          lines.push(`  Status: connecting...`);
+        } else if (s.state === "failed") {
+          lines.push(`  Status: failed — ${s.error ?? "unknown error"}`);
+        } else {
+          lines.push(`  Tools: ${s.toolCount}`);
+          for (const tool of s.tools) {
+            const desc = tool.description ? ` — ${tool.description.slice(0, 60)}` : "";
+            lines.push(`    - ${tool.name}${desc}`);
+          }
+        }
+        lines.push("");
+      }
+
+      pi.sendMessage({ customType: "mcp-status", content: lines.join("\n"), display: true }, { triggerTurn: false });
+    },
+  });
+}
+
 // ─── /retry ────────────────────────────────────────────────────────────────
 
 function setupRetryCommand(pi: ExtensionAPI) {
@@ -165,5 +318,6 @@ function setupRetryCommand(pi: ExtensionAPI) {
 export function setupSlash(pi: ExtensionAPI) {
   setupDpModelCommand(pi);
   setupDpSettingsCommand(pi);
+  setupMcpCommand(pi);
   setupRetryCommand(pi);
 }

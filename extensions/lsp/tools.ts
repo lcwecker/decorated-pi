@@ -1,596 +1,197 @@
 /**
- * LSP Tool Definitions — diagnostics, hover, definition, references, symbols, rename
- *
- * Based on @spences10/pi-lsp by Scott Spence
- * https://github.com/spences10/my-pi/tree/main/packages/pi-lsp (MIT License)
- *
- * Modifications: added lsp_find_symbol, lsp_rename, multi-file lsp_diagnostics
+ * LSP Tool Definitions — 2 tools for Pi.
  */
-import { defineTool, keyHint, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { keyHint, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
-import { list_supported_languages } from "./servers.js";
-import {
-  filter_diagnostics,
-  find_symbol_matches,
-  format_diagnostics,
-  format_document_symbols,
-  format_hover,
-  format_locations,
-  format_symbol_matches,
-  format_tool_error,
-  SYMBOL_KIND_NAMES,
-  to_lsp_tool_error,
-  type SeverityFilter,
-} from "./format.js";
-import type { LspServerManager } from "./server-manager.js";
+import { LspServerManager, LspToolError, formatToolError } from "./manager.js";
 
-const SYMBOL_KIND_SCHEMA = Type.Union(
-  SYMBOL_KIND_NAMES.map((name) => Type.Literal(name))
-);
+// ─── TUI rendering ─────────────────────────────────────────────────────────
 
-const DIAGNOSTICS_MANY_CONCURRENCY = 8;
-const LSP_RESULT_FOLD_LINES = 20;
+const LSP_RESULT_FOLD_LINES = 45;
 
-function make_tool_result(
-  text: string,
-  details: Record<string, unknown> = {}
-) {
-  return {
-    content: [{ type: "text" as const, text }],
-    details,
-  };
-}
-
-function make_tool_error(details: any) {
-  return make_tool_result(format_tool_error(details), {
-    ok: false,
-    error: details,
-  });
-}
-
-function trim_trailing_empty_lines(lines: string[]): string[] {
+function trimTrailingEmptyLines(lines: string[]): string[] {
   let end = lines.length;
-  while (end > 0 && lines[end - 1] === "") {
-    end -= 1;
-  }
+  while (end > 0 && lines[end - 1] === "") end -= 1;
   return lines.slice(0, end);
 }
 
-function collapse_lsp_text(text: string, maxLines = LSP_RESULT_FOLD_LINES) {
-  const lines = trim_trailing_empty_lines(text.split("\n"));
+function collapseText(text: string, maxLines = LSP_RESULT_FOLD_LINES) {
+  const lines = trimTrailingEmptyLines(text.split("\n"));
   const totalLines = lines.length;
   const displayLines = lines.slice(0, maxLines);
-  return {
-    totalLines,
-    displayLines,
-    remainingLines: Math.max(0, totalLines - displayLines.length),
-  };
+  const remainingLines = Math.max(0, totalLines - maxLines);
+  return { totalLines, displayLines, remainingLines };
 }
 
-function get_text_content(result: { content?: Array<{ type: string; text?: string }> }): string {
-  return (result.content ?? [])
-    .filter((item): item is { type: "text"; text?: string } => item.type === "text")
-    .map((item) => item.text ?? "")
-    .join("\n");
+function getTextContent(result: { content?: Array<{ type: string; text?: string }> }): string {
+  return (result.content ?? []).filter((c): c is { type: "text"; text?: string } => c.type === "text").map((c) => c.text ?? "").join("\n");
 }
 
-function format_lsp_result_text(text: string, expanded: boolean, theme: any): string {
-  const { totalLines, displayLines, remainingLines } = collapse_lsp_text(
-    text,
-    expanded ? Number.MAX_SAFE_INTEGER : LSP_RESULT_FOLD_LINES,
-  );
-  const body = displayLines.join("\n");
-  let rendered = body ? theme.fg("toolOutput", body) : "";
-  if (!expanded && remainingLines > 0) {
-    rendered += `${theme.fg("muted", `\n... (${remainingLines} more lines, ${totalLines} total,`)} ${keyHint("app.tools.expand", "to expand")})`;
-  }
+function formatResultText(text: string, expanded: boolean, theme: any): string {
+  const { totalLines, displayLines, remainingLines } = collapseText(text, expanded ? Number.MAX_SAFE_INTEGER : LSP_RESULT_FOLD_LINES);
+  let rendered = displayLines.join("\n") ? theme.fg("toolOutput", displayLines.join("\n")) : "";
+  if (!expanded && remainingLines > 0) rendered += `${theme.fg("muted", `\n... (${remainingLines} more lines, ${totalLines} total,`)} ${keyHint("app.tools.expand", "to expand")})`;
   return rendered;
 }
 
-function render_lsp_result(result: any, options: { expanded: boolean }, theme: any, context: any) {
+function renderLspResult(result: any, options: { expanded: boolean }, theme: any, context: any) {
   const component = context.lastComponent ?? new Text("", 0, 0);
-  component.setText(format_lsp_result_text(get_text_content(result), options.expanded, theme));
+  component.setText(formatResultText(getTextContent(result), options.expanded, theme));
   return component;
 }
 
-export const __lspToolsTest = {
-  collapse_lsp_text,
-};
+// ─── Helpers ───────────────────────────────────────────────────────────────
 
-async function map_with_concurrency<T, R>(
-  items: T[],
-  concurrency: number,
-  mapper: (item: T, index: number) => Promise<R>
-): Promise<R[]> {
-  const results: R[] = [];
-  let next_index = 0;
-  const worker_count = Math.min(concurrency, items.length);
-  await Promise.all(
-    Array.from({ length: worker_count }, async () => {
-      while (true) {
-        const index = next_index;
-        next_index += 1;
-        if (index >= items.length) return;
-        results[index] = await mapper(items[index]!, index);
-      }
-    })
-  );
-  return results;
+type ToolResult = { content: Array<{ type: "text"; text: string }>; details: Record<string, unknown> };
+
+function ok(text: string, details: Record<string, unknown> = {}): ToolResult {
+  return { content: [{ type: "text" as const, text }], details };
 }
 
-async function with_file_state(
+function err(details: any): ToolResult {
+  return ok(formatToolError(details), { ok: false, error: details });
+}
+
+async function withFile(
   manager: LspServerManager,
   file: string,
-  ctx: any,
-  run: (result: { abs: string; uri: string; state: any }) => Promise<string>
-) {
-  const resolved = await manager.resolve_file_state(file, ctx);
-  if (!resolved.ok) {
-    return make_tool_error(resolved.error);
-  }
+  fn: (s: { abs: string; uri: string; state: any }) => Promise<string>,
+  options: { timeoutMs?: number } = {},
+): Promise<ToolResult> {
+  const resolved = await manager.resolveFileState(file, { timeoutMs: options.timeoutMs });
+  if (!resolved.ok) return err(resolved.error);
   const { result } = resolved;
   try {
-    const text = await run(result);
-    return make_tool_result(text, {
-      ok: true,
-      language: result.state.language,
-      command: result.state.command,
-      workspace_root: result.state.workspace_root,
-    });
+    const text = await fn(result);
+    return ok(text, { ok: true, language: result.state.language, workspace_root: result.state.workspaceRoot });
   } catch (error) {
-    return make_tool_error(
-      to_lsp_tool_error(
-        result.abs,
-        result.state.language,
-        result.state.workspace_root,
-        result.state.command,
-        result.state.install_hint,
-        error
-      )
-    );
+    if (error instanceof LspToolError) return err(error.details);
+    return err({ kind: "tool_execution_failed", file: result.abs, language: result.state.language, workspace_root: result.state.workspaceRoot, command: result.state.command, install_hint: result.state.installHint, message: error instanceof Error ? error.message : String(error) });
   }
 }
 
-export function register_lsp_tools(pi: ExtensionAPI, manager: LspServerManager) {
-  pi.registerTool(
-    defineTool({
-      name: "lsp_diagnostics",
-      label: "LSP: diagnostics",
-      renderResult: render_lsp_result,
-      description:
-        "Get language server diagnostics for one or more files. Default filter: error. Supports optional severity filtering.",
-      promptSnippet: "Get language server diagnostics for one or more files",
-      promptGuidelines: [
-        "Use lsp_diagnostics to validate focused code changes after editing or writing before reporting completion.",
-      ],
-      parameters: Type.Object({
-        files: Type.Array(Type.String(), {
-          minItems: 1,
-          maxItems: 100,
-          description: "Files to check. Single file or list (relative to cwd or absolute).",
-        }),
-        severity: Type.Optional(
-          Type.Array(
-            Type.Union([
-              Type.Literal("error"),
-              Type.Literal("warning"),
-              Type.Literal("info"),
-              Type.Literal("hint"),
-            ]),
-            {
-              description:
-                "Filter to specific severity levels. Default: error. Values: error, warning, info, hint. Picking a level shows it and all more severe levels (e.g. warning → error + warning).",
-            }
-          )
-        ),
-        wait_ms: Type.Optional(
-          Type.Number({
-            description:
-              "Max ms to wait for diagnostics after opening each file. Default 1500.",
-          })
-        ),
-      }),
-      execute: async (_id, params, _signal, _on_update, ctx) => {
-        const wait_ms = params.wait_ms ?? 1500;
-        const severities: SeverityFilter[] = params.severity ?? ["error"];
-
-        const lines_with_stats = await map_with_concurrency(
-          params.files,
-          DIAGNOSTICS_MANY_CONCURRENCY,
-          async (file) => {
-            const resolved = await manager.resolve_file_state(file, ctx);
-            if (!resolved.ok) {
-              return {
-                line: format_tool_error(resolved.error),
-                diagnostics: 0,
-                error: true,
-              };
-            }
-            try {
-              const diagnostics =
-                await resolved.result.state.client.wait_for_diagnostics(
-                  resolved.result.uri,
-                  wait_ms
-                );
-              const filtered = filter_diagnostics(diagnostics, severities);
-              let errors = 0, warnings = 0, infos = 0;
-              for (const d of filtered) {
-                if (d.severity === 1) errors++;
-                else if (d.severity === 2) warnings++;
-                else infos++;
-              }
-              return {
-                line: format_diagnostics(resolved.result.abs, diagnostics, severities),
-                diagnostics: filtered.length,
-                errors,
-                warnings,
-                error: false,
-              };
-            } catch (error) {
-              return {
-                line: format_tool_error(
-                  to_lsp_tool_error(
-                    resolved.result.abs,
-                    resolved.result.state.language,
-                    resolved.result.state.workspace_root,
-                    resolved.result.state.command,
-                    resolved.result.state.install_hint,
-                    error
-                  )
-                ),
-                diagnostics: 0,
-                error: true,
-              };
-            }
-          }
-        );
-
-        let total_diag = 0;
-        let total_err = 0;
-        let total_warn = 0;
-        let clean_count = 0;
-        let fail_count = 0;
-        const lines: string[] = [];
-        for (const entry of lines_with_stats) {
-          lines.push(entry.line);
-          if (entry.error) {
-            fail_count += 1;
-          } else {
-            total_diag += entry.diagnostics;
-            total_err += (entry as any).errors ?? 0;
-            total_warn += (entry as any).warnings ?? 0;
-            if (entry.diagnostics === 0) clean_count += 1;
-          }
-        }
-        const summary = total_err > 0 || total_warn > 0
-          ? `Checked ${params.files.length} file(s): ${total_err} error(s), ${total_warn} warning(s), ${total_diag - total_err - total_warn} info/hint(s), ${clean_count} clean, ${fail_count} failed to check`
-          : `Checked ${params.files.length} file(s): ${total_diag} diagnostic(s), ${clean_count} clean, ${fail_count} failed to check`;
-        return make_tool_result(
-          [summary, ...lines].join("\n\n"),
-          {
-            ok: fail_count === 0 && total_err === 0,
-            checked: params.files.length,
-            diagnostic_count: total_diag,
-            error_count: total_err,
-            warning_count: total_warn,
-            clean_count,
-            fail_count,
-          }
-        );
-      },
-    })
-  );
-
-  pi.registerTool(
-    defineTool({
-      name: "lsp_find_symbol",
-      label: "LSP: find symbol",
-      renderResult: render_lsp_result,
-      description:
-        "Find symbols in a file by name or detail text using document symbols. Supports exact matching, kind filters, and top-level-only mode.",
-      promptSnippet: "Find symbols in a file by name, kind, or match mode",
-      promptGuidelines: [
-        "Use lsp_find_symbol to locate named symbols in a file when symbol structure matters more than broad text search.",
-      ],
-      parameters: Type.Object({
-        file: Type.String({
-          description: "Path to the file whose symbols should be searched.",
-        }),
-        query: Type.String({
-          description: "Substring to match against symbol names/details.",
-        }),
-        max_results: Type.Optional(
-          Type.Number({
-            description: "Max number of matches to return. Default 20.",
-          })
-        ),
-        top_level_only: Type.Optional(
-          Type.Boolean({
-            description: "Only match top-level symbols. Default false.",
-          })
-        ),
-        exact_match: Type.Optional(
-          Type.Boolean({
-            description:
-              "Match whole symbol names/details exactly instead of substring matching. Default false.",
-          })
-        ),
-        kinds: Type.Optional(
-          Type.Array(SYMBOL_KIND_SCHEMA, {
-            minItems: 1,
-            maxItems: SYMBOL_KIND_NAMES.length,
-            description: "Restrict matches to these symbol kinds.",
-          })
-        ),
-      }),
-      execute: async (
-        _id,
-        params,
-        _signal,
-        _on_update,
-        ctx
-      ) =>
-        with_file_state(
-          manager,
-          params.file,
-          ctx,
-          async (result) => {
-            const symbols =
-              await result.state.client.document_symbols(result.uri);
-            return format_symbol_matches(
-              result.abs,
-              params.query,
-              find_symbol_matches(symbols, params.query, {
-                max_results: params.max_results ?? 20,
-                top_level_only: params.top_level_only ?? false,
-                exact_match: params.exact_match ?? false,
-                kinds: new Set(params.kinds ?? []),
-                language: result.state.language,
-              })
-            );
-          }
-        ),
-    })
-  );
-
-  pi.registerTool(
-    defineTool({
-      name: "lsp_hover",
-      label: "LSP: hover",
-      renderResult: render_lsp_result,
-      description:
-        "Get hover info (types, docs) at a position in a file. Positions are zero-based.",
-      promptSnippet: "Get types and documentation at a symbol position",
-      promptGuidelines: [
-        "Use lsp_hover to inspect the type, signature, or documentation of the symbol at a specific zero-based position.",
-      ],
-      parameters: Type.Object({
-        file: Type.String({
-          description: "Path to the file containing the symbol.",
-        }),
-        line: Type.Number({
-          description: "Zero-based line number of the symbol.",
-        }),
-        character: Type.Number({
-          description: "Zero-based character offset of the symbol.",
-        }),
-      }),
-      execute: async (
-        _id,
-        params,
-        _signal,
-        _on_update,
-        ctx
-      ) =>
-        with_file_state(
-          manager,
-          params.file,
-          ctx,
-          async (result) => {
-            const hover = await result.state.client.hover(result.uri, {
-              line: params.line,
-              character: params.character,
-            });
-            return format_hover(hover);
-          }
-        ),
-    })
-  );
-
-  pi.registerTool(
-    defineTool({
-      name: "lsp_definition",
-      label: "LSP: go to definition",
-      renderResult: render_lsp_result,
-      description:
-        "Find definition locations for the symbol at a position. Positions are zero-based.",
-      promptSnippet: "Find definition locations for a symbol at a position",
-      promptGuidelines: [
-        "Use lsp_definition to find the canonical definition location for the symbol at a specific zero-based position.",
-      ],
-      parameters: Type.Object({
-        file: Type.String({
-          description: "Path to the file containing the symbol.",
-        }),
-        line: Type.Number({
-          description: "Zero-based line number of the symbol.",
-        }),
-        character: Type.Number({
-          description: "Zero-based character offset of the symbol.",
-        }),
-      }),
-      execute: async (
-        _id,
-        params,
-        _signal,
-        _on_update,
-        ctx
-      ) =>
-        with_file_state(
-          manager,
-          params.file,
-          ctx,
-          async (result) => {
-            const locations = await result.state.client.definition(
-              result.uri,
-              {
-                line: params.line,
-                character: params.character,
-              }
-            );
-            return format_locations(locations, "No definition found.");
-          }
-        ),
-    })
-  );
-
-  pi.registerTool(
-    defineTool({
-      name: "lsp_references",
-      label: "LSP: find references",
-      renderResult: render_lsp_result,
-      description:
-        "Find references to the symbol at a position. Positions are zero-based.",
-      promptSnippet: "Find references to a symbol at a position",
-      promptGuidelines: [
-        "Use lsp_references to find usages of a symbol more precisely than text search, optionally including the declaration site.",
-      ],
-      parameters: Type.Object({
-        file: Type.String({
-          description: "Path to the file containing the symbol.",
-        }),
-        line: Type.Number({
-          description: "Zero-based line number of the symbol.",
-        }),
-        character: Type.Number({
-          description: "Zero-based character offset of the symbol.",
-        }),
-        include_declaration: Type.Optional(
-          Type.Boolean({
-            description:
-              "Whether to include the symbol declaration in reference results. Default true.",
-          })
-        ),
-      }),
-      execute: async (
-        _id,
-        params,
-        _signal,
-        _on_update,
-        ctx
-      ) =>
-        with_file_state(
-          manager,
-          params.file,
-          ctx,
-          async (result) => {
-            const locations = await result.state.client.references(
-              result.uri,
-              { line: params.line, character: params.character },
-              params.include_declaration ?? true
-            );
-            return format_locations(locations, "No references found.");
-          }
-        ),
-    })
-  );
-
-  pi.registerTool(
-    defineTool({
-      name: "lsp_document_symbols",
-      label: "LSP: document symbols",
-      renderResult: render_lsp_result,
-      description:
-        "List symbols in a file (functions, classes, variables) using the language server.",
-      promptSnippet: "List functions, classes, and variables in a file",
-      promptGuidelines: [
-        "Use lsp_document_symbols to inspect a file's structural outline before making focused edits or searching for symbols.",
-      ],
-      parameters: Type.Object({
-        file: Type.String({
-          description: "Path to the file to inspect.",
-        }),
-      }),
-      execute: async (
-        _id,
-        params,
-        _signal,
-        _on_update,
-        ctx
-      ) =>
-        with_file_state(
-          manager,
-          params.file,
-          ctx,
-          async (result) => {
-            const symbols =
-              await result.state.client.document_symbols(result.uri);
-            return format_document_symbols(result.abs, symbols);
-          }
-        ),
-    })
-  );
-
-  pi.registerTool(
-    defineTool({
-      name: "lsp_rename",
-      label: "LSP: rename symbol",
-      renderResult: render_lsp_result,
-      description:
-        "Rename a symbol at a position. Returns all locations that need to be updated with the new name. Use the edit tool to apply the changes.",
-      promptSnippet: "Compute symbol rename updates across affected files",
-      promptGuidelines: [
-        "Use lsp_rename to compute coordinated symbol rename updates across affected files instead of manual search-and-replace.",
-      ],
-      parameters: Type.Object({
-        file: Type.String({
-          description: "Path to the file containing the symbol.",
-        }),
-        line: Type.Number({
-          description: "Zero-based line number of the symbol.",
-        }),
-        character: Type.Number({
-          description: "Zero-based character offset of the symbol.",
-        }),
-        newName: Type.String({
-          description: "New name for the symbol.",
-        }),
-      }),
-      execute: async (
-        _id,
-        params,
-        _signal,
-        _on_update,
-        ctx
-      ) =>
-        with_file_state(
-          manager,
-          params.file,
-          ctx,
-          async (result) => {
-            const edits = await result.state.client.rename(
-              result.uri,
-              { line: params.line, character: params.character },
-              params.newName
-            );
-
-            // Format rename output as a clear list of files to edit
-            const locations = Object.keys(edits);
-            if (locations.length === 0) {
-              return `No rename locations found for "${params.newName}"`;
-            }
-
-            let output = `Rename to "${params.newName}": ${locations.length} file(s) need update\n\n`;
-            for (const path of locations) {
-              const info = edits[path]!;
-              output += `${path}: change to "${info.newText}"\n`;
-            }
-            output += "\nUse the edit tool to apply these changes.";
-
-            return output;
-          }
-        ),
-    })
-  );
+function withTimeout(promise: Promise<ToolResult>, ms: number, label: string): Promise<ToolResult> {
+  return Promise.race([
+    promise,
+    new Promise<ToolResult>((resolve) =>
+      setTimeout(() => resolve(err({ kind: "tool_timeout", message: `${label} timed out after ${ms}ms` })), ms)
+    ),
+  ]);
 }
+
+function severityLabel(s: number): string {
+  return s === 1 ? "error" : s === 2 ? "warning" : s === 3 ? "info" : "hint";
+}
+
+function symbolKindLabel(kind: number): string {
+  const labels: Record<number, string> = { 2:"module",3:"namespace",5:"class",6:"method",7:"property",8:"field",9:"constructor",11:"interface",12:"function",13:"variable",14:"constant",23:"struct",24:"event" };
+  return labels[kind] ?? "symbol";
+}
+
+function formatDocumentSymbols(file: string, symbols: any[]): string {
+  if (symbols.length === 0) return `${file}: no symbols`;
+  const lines = [`${file}: ${symbols.length} top-level symbol(s)`];
+  const append = (syms: any[], depth: number) => {
+    for (const s of syms) {
+      const detail = s.detail ? ` — ${s.detail}` : "";
+      lines.push(`${"  ".repeat(depth)}${symbolKindLabel(s.kind)} ${s.name}${detail} @ ${s.range.start.line + 1}:${s.range.start.character + 1}`);
+      if (s.children?.length) append(s.children, depth + 1);
+    }
+  };
+  append(symbols, 1);
+  return lines.join("\n");
+}
+
+// ─── Register tools ───────────────────────────────────────────────────────
+
+export function registerLspTools(pi: ExtensionAPI, manager: LspServerManager) {
+
+  // ── lsp_diagnostics ────────────────────────────────────────────────────
+  pi.registerTool({
+    name: "lsp_diagnostics",
+    label: "LSP: diagnostics",
+    description: "Get language server diagnostics for one or more files. Default filter: error. Supports optional severity filtering.",
+    promptSnippet: "Get language server diagnostics for one or more files",
+    promptGuidelines: ["Use lsp_diagnostics to validate focused code changes after editing or writing before reporting completion."],
+    renderResult: renderLspResult,
+    parameters: Type.Object({
+      paths: Type.Array(Type.String(), { minItems: 1, maxItems: 100, description: "Paths to check. One or more file paths (relative to cwd or absolute)." }),
+      severity: Type.Optional(Type.Array(Type.Union([Type.Literal("error"), Type.Literal("warning"), Type.Literal("info"), Type.Literal("hint")]), { description: "Filter to specific severity levels. Default: error." })),
+      wait_ms: Type.Optional(Type.Number({ description: "Max ms to wait for diagnostics. Default 1500." })),
+      timeout_ms: Type.Optional(Type.Number({ description: "Overall max ms including server startup. Default 30000." })),
+    }),
+    execute: async (_id, params, _signal, _update, _ctx): Promise<ToolResult> => {
+      const waitMs = params.wait_ms ?? 1500;
+      const totalTimeout = params.timeout_ms ?? 30_000;
+      const severities: ("error"|"warning"|"info"|"hint")[] = params.severity ?? ["error"];
+      const minSeverity = Math.min(...severities.map(s => ({ error: 1, warning: 2, info: 3, hint: 4 }[s])));
+
+      return withTimeout((async () => {
+        const results = await Promise.all(params.paths.map(async (file) => {
+          const resolved = await manager.resolveFileState(file, { timeoutMs: totalTimeout });
+          if (!resolved.ok) return { line: formatToolError(resolved.error), diagnostics: 0, errors: 0, warnings: 0, isError: true };
+          try {
+            const diagnostics = await resolved.result.state.client.waitForDiagnostics(resolved.result.uri, waitMs);
+            const filtered = diagnostics.filter((d: any) => (d.severity ?? 1) <= minSeverity);
+            let errors = 0, warnings = 0;
+            for (const d of filtered) { if (d.severity === 1) errors++; else if (d.severity === 2) warnings++; }
+            return { line: formatDiagnostics(resolved.result.abs, filtered), diagnostics: filtered.length, errors, warnings, isError: false };
+          } catch { return { line: formatToolError({ kind: "tool_execution_failed", file, message: "diagnostics request failed" }), diagnostics: 0, errors: 0, warnings: 0, isError: true }; }
+        }));
+
+        let totalDiag = 0, totalErr = 0, totalWarn = 0, cleanCount = 0, failCount = 0;
+        const lines: string[] = [];
+        for (const r of results) {
+          lines.push(r.line);
+          if (r.isError) { failCount++; } else { totalDiag += r.diagnostics; totalErr += r.errors; totalWarn += r.warnings; if (r.diagnostics === 0) cleanCount++; }
+        }
+        const summary = totalErr > 0 || totalWarn > 0
+          ? `Checked ${params.paths.length} file(s): ${totalErr} error(s), ${totalWarn} warning(s), ${totalDiag - totalErr - totalWarn} info/hint(s), ${cleanCount} clean, ${failCount} failed`
+          : `Checked ${params.paths.length} file(s): ${totalDiag} diagnostic(s), ${cleanCount} clean, ${failCount} failed`;
+        return ok([summary, ...lines].join("\n\n"), { ok: failCount === 0 && totalErr === 0, checked: params.paths.length, diagnostic_count: totalDiag, error_count: totalErr, warning_count: totalWarn });
+      })(), totalTimeout, "LSP diagnostics");
+    },
+  });
+
+  // ── lsp_document_symbols ───────────────────────────────────────────────
+  pi.registerTool({
+    name: "lsp_document_symbols",
+    label: "LSP: document symbols",
+    description: "List symbols in a file (functions, classes, variables) using the language server.",
+    promptSnippet: "List functions, classes, and variables in a file",
+    promptGuidelines: ["Prefer lsp_document_symbols to find functions, classes, or variables in code instead of grep."],
+    renderResult: renderLspResult,
+    parameters: Type.Object({
+      path: Type.String({ description: "Path to the file (relative or absolute)." }),
+      timeout_ms: Type.Optional(Type.Number({ description: "Overall max ms including server startup. Default 10000." })),
+    }),
+    execute: async (_id, params, _signal, _update, _ctx): Promise<ToolResult> => {
+      const timeoutMs = params.timeout_ms ?? 10_000;
+      return withTimeout(
+        withFile(manager, params.path, async (result) => {
+          const symbols = await result.state.client.documentSymbols(result.uri, timeoutMs);
+          return formatDocumentSymbols(result.abs, symbols);
+        }, { timeoutMs }),
+        timeoutMs,
+        "LSP document symbols",
+      );
+    },
+  });
+}
+
+// ─── Formatting ────────────────────────────────────────────────────────────
+
+function formatDiagnostics(file: string, diagnostics: any[]): string {
+  if (diagnostics.length === 0) return `${file}: no diagnostics`;
+  const lines = [`${file}: ${diagnostics.length} diagnostic(s)`];
+  for (const d of diagnostics) {
+    const pos = `${d.range.start.line + 1}:${d.range.start.character + 1}`;
+    const source = d.source ? ` [${d.source}]` : "";
+    const code = d.code != null ? ` (${d.code})` : "";
+    lines.push(`  ${pos} ${severityLabel(d.severity ?? 1)}${source}${code}: ${d.message}`);
+  }
+  return lines.join("\n");
+}
+
+export const __lspToolsTest = { collapse_lsp_text: collapseText };
