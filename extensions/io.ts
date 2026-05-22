@@ -17,7 +17,7 @@
  *   1. execute() MUST throw errors, NOT return { isError: true }
  *   2. TUI rendering MUST mirror the edit tool pattern exactly
  *   3. getPatchHeaderBg: settledError MUST be checked first
- *   4. renderResult must NOT return the Box
+ *   4. renderResult must return the SAME Box that renderCall built
  *   5. Error text must go INSIDE the Box, not in the result Container
  *   6. prepareArguments must handle literal newlines in JSON strings
  */
@@ -152,7 +152,7 @@ interface PatchCallComponent extends Box {
   settledError: boolean;
 }
 
-function createPatchCallComponent(): PatchCallComponent {
+export function createPatchCallComponent(): PatchCallComponent {
   return Object.assign(new Box(1, 1, (text: string) => text), {
     preview: undefined,
     previewArgsKey: undefined,
@@ -227,7 +227,7 @@ function appendPatchDiffChildren(parent: Box, body: string, theme: any): void {
   flush();
 }
 
-function buildPatchCallComponent(component: PatchCallComponent, args: any, theme: any, expanded = false) {
+export function buildPatchCallComponent(component: PatchCallComponent, args: any, theme: any, expanded = false) {
   component.setBgFn(getPatchHeaderBg(component, theme));
   component.clear();
 
@@ -414,9 +414,7 @@ export function setupIO(pi: ExtensionAPI) {
         }
       }
 
-      const component = context.lastComponent ?? new Container();
-      component.clear();
-      return component;
+      return callComponent ?? (context.lastComponent ?? new Container());
     },
   }));
 }
