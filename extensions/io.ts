@@ -17,7 +17,11 @@
  *   1. execute() MUST throw errors, NOT return { isError: true }
  *   2. TUI rendering MUST mirror the edit tool pattern exactly
  *   3. getPatchHeaderBg: settledError MUST be checked first
- *   4. renderResult must return the SAME Box that renderCall built
+ *   4. renderResult must NOT return the Box
+ *      renderCall returns the Box (callComponent). If renderResult
+ *      also returns it, pi's ToolExecutionComponent adds it twice
+ *      to the container, causing duplicate boxes. renderResult
+ *      must return context.lastComponent (a separate Container).
  *   5. Error text must go INSIDE the Box, not in the result Container
  *   6. prepareArguments must handle literal newlines in JSON strings
  */
@@ -30,7 +34,6 @@ import {
   applyPatch,
   formatPatchResult,
   generatePatchDiff,
-  computePatchPreview,
   type PatchPreview,
 } from "./patch.js";
 import {
@@ -379,13 +382,9 @@ export function setupIO(pi: ExtensionAPI) {
         component.settledError = false;
       }
 
-      if (context.argsComplete && !component.preview && !component.previewPending) {
-        component.previewPending = true;
-        void computePatchPreview(args, context.cwd).then((preview: any) => {
-          component.preview = preview;
-          context.invalidate();
-        });
-      }
+      // Preview diff is computed during execute and delivered via result.details.diff.
+      // Skipping async preview here avoids a redundant file read — same design as
+      // Pi's native edit tool where renderResult overwrites the preview with execute's diff.
 
       return buildPatchCallComponent(component, args, theme, context.expanded);
     },
@@ -395,10 +394,23 @@ export function setupIO(pi: ExtensionAPI) {
       let changed = false;
 
       if (callComponent) {
+        // 优先使用 execute 返回的 diff（与 Pi 原生 edit 工具一致）
+        const resultDiff = !context.isError && result.details?.diff;
+        if (typeof resultDiff === "string") {
+          // 用 execute 返回的 diff 覆盖 preview
+          const newPreview = { diff: resultDiff };
+          if (callComponent.preview?.diff !== resultDiff) {
+            callComponent.preview = newPreview;
+            changed = true;
+          }
+        }
+
+        // 更新错误状态
         if (callComponent.settledError !== context.isError) {
           callComponent.settledError = context.isError;
           changed = true;
         }
+
         if (changed) {
           buildPatchCallComponent(callComponent, context.args, theme, options.expanded);
           if (context.isError) {
@@ -414,7 +426,12 @@ export function setupIO(pi: ExtensionAPI) {
         }
       }
 
-      return callComponent ?? (context.lastComponent ?? new Container());
+      // Return empty Container — the Box (callComponent) already holds all content.
+      // Per pitfall #4: returning the Box would cause ToolExecutionComponent to add
+      // it twice to the container, producing duplicate rendering.
+      const component = context.lastComponent ?? new Container();
+      component.clear();
+      return component;
     },
   }));
 }

@@ -11,6 +11,7 @@
 
 import * as fs from "node:fs";
 import * as path from "node:path";
+import * as fsPromises from "node:fs/promises";
 
 // ═══════════════════════════════════════════════════════════════════════════
 // Types
@@ -44,6 +45,8 @@ export interface PatchResult {
   replacements: Map<string, ReplacementInfo[]>;
   /** Original file lines per file, for diff context generation */
   originalLines: Map<string, string[]>;
+  /** Pre-generated diff string (set by applyEdits to avoid re-reading files) */
+  diff: string;
 }
 
 /** Records a single old_str→new_str replacement within a file */
@@ -89,6 +92,7 @@ export async function applyPatch(patch: FilePatch, cwd: string): Promise<PatchRe
     warnings: [],
     replacements: new Map(),
     originalLines: new Map(),
+    diff: "",
   };
 
   const absPath = resolveAbsPath(cwd, patch.path);
@@ -118,6 +122,7 @@ export async function applyPatches(patches: FilePatch[], cwd: string): Promise<P
     warnings: [],
     replacements: new Map(),
     originalLines: new Map(),
+    diff: "",
   };
 
   for (const p of patches) {
@@ -184,21 +189,17 @@ async function applyEdits(
   }
 
   const rawContent = fs.readFileSync(absPath, "utf8");
-  // Store original lines for diff context generation later
-  const origLines = rawContent.split("\n");
-  // Remove trailing empty line from split (trailing newline), but keep lines for content-less files
-  if (origLines.length > 1 && origLines[origLines.length - 1] === "") origLines.pop();
-  result.originalLines.set(displayPath, origLines);
-
   const lineEnding = detectLineEnding(rawContent);
   let content = normalizeLineEndings(rawContent);
 
   // Precompute line offsets for O(log n) line number lookups
-  const rawLineOffsets = buildLineOffsets(rawContent);
+  const lineOffsets = buildLineOffsets(rawContent);
+  const totalLines = lineOffsets.length - 1;
 
   // Track cumulative offset for mapping current positions back to original
   let cumulativeOffset = 0;
   const replacements: ReplacementInfo[] = [];
+  const neededRanges: LineRange[] = [];
 
   for (const edit of edits) {
     if (!edit.old_str) {
@@ -258,8 +259,8 @@ async function applyEdits(
     // Compute line numbers in the original file for diff generation (O(log n) via binary search)
     // matchIdx is in the modified content; subtract cumulative offset to map back to original
     const origMatchIdx = matchIdx - cumulativeOffset;
-    const oldStartLine = lineAtOffset(rawLineOffsets, origMatchIdx);
-    const oldEndLine = lineAtOffset(rawLineOffsets, origMatchIdx + oldNorm.length - 1);
+    const oldStartLine = lineAtOffset(lineOffsets, origMatchIdx);
+    const oldEndLine = lineAtOffset(lineOffsets, origMatchIdx + oldNorm.length - 1);
 
     // Apply replacement
     content =
@@ -284,6 +285,30 @@ async function applyEdits(
       newLines: newNorm.split("\n").filter((l, i, arr) => !(i === arr.length - 1 && l === "")),
       anchor: edit.anchor ? edit.anchor.split("\n")[0] : undefined,
     });
+
+    // Collect context range for this edit
+    neededRanges.push({
+      startLine: Math.max(1, oldStartLine - CONTEXT_LINES),
+      endLine: Math.min(totalLines, oldEndLine + CONTEXT_LINES),
+    });
+  }
+
+  // Generate diff using only needed context lines (no full-file split)
+  const mergedRanges = mergeRanges(neededRanges);
+  const neededLines: Map<number, string> = new Map();
+  for (const range of mergedRanges) {
+    const lines = extractLineRange(content, lineOffsets, range.startLine, range.endLine);
+    for (let i = 0; i < lines.length; i++) {
+      neededLines.set(range.startLine + i, lines[i]);
+    }
+  }
+
+  // Build diff for this file and append to result
+  const fileDiff = generateLocalDiff(displayPath, replacements, neededLines, totalLines);
+  if (result.diff) {
+    result.diff += "\n" + fileDiff;
+  } else {
+    result.diff = fileDiff;
   }
 
   // Restore line endings
@@ -333,13 +358,13 @@ export async function computePatchPreview(
         return { error: "File not found" };
       }
 
-      const rawContent = fs.readFileSync(absPath, "utf8");
-      const origLines = rawContent.split("\n");
-      if (origLines.length > 1 && origLines[origLines.length - 1] === "") origLines.pop();
-      let content = normalizeLineEndings(rawContent);
-      const rawLineOffsets = buildLineOffsets(rawContent);
-      const allReplacements: ReplacementInfo[] = [];
-      let cumulativeOffset = 0;
+      const rawContent = await fsPromises.readFile(absPath, "utf8");
+    const lineOffsets = buildLineOffsets(rawContent);
+    const totalLines = lineOffsets.length - 1;
+    let content = normalizeLineEndings(rawContent);
+    const allReplacements: ReplacementInfo[] = [];
+    const neededRanges: LineRange[] = [];
+    let cumulativeOffset = 0;
 
       for (const edit of patch.edits) {
         if (!edit.old_str) continue;
@@ -362,18 +387,33 @@ export async function computePatchPreview(
         }
 
         const origMatchIdx = matchIdx - cumulativeOffset;
-        const oldStartLine = lineAtOffset(rawLineOffsets, origMatchIdx);
-        const oldEndLine = lineAtOffset(rawLineOffsets, origMatchIdx + oldNorm.length - 1);
+        const oldStartLine = lineAtOffset(lineOffsets, origMatchIdx);
+        const oldEndLine = lineAtOffset(lineOffsets, origMatchIdx + oldNorm.length - 1);
         const oldLines = oldNorm.split("\n").filter((l, i, arr) => !(i === arr.length - 1 && l === ""));
         const newLines = newNorm.split("\n").filter((l, i, arr) => !(i === arr.length - 1 && l === ""));
         content = content.substring(0, matchIdx) + newNorm + content.substring(matchIdx + oldNorm.length);
         const newStartLine = charOffsetToLine(content, matchIdx);
         const newEndLine = charOffsetToLine(content, matchIdx + newNorm.length - 1);
+        // Record needed context range around this edit
+        neededRanges.push({
+          startLine: Math.max(1, oldStartLine - CONTEXT_LINES),
+          endLine: Math.min(totalLines, oldEndLine + CONTEXT_LINES),
+        });
         allReplacements.push({ oldStartLine, oldEndLine, newStartLine, newEndLine, oldLines, newLines, anchor: edit.anchor ? edit.anchor.split("\n")[0] : undefined });
         cumulativeOffset += newNorm.length - oldNorm.length;
       }
 
-      const diff = generateReplacementDiff(patch.path, allReplacements, origLines);
+      // Merge needed ranges and extract only those lines
+      const mergedRanges = mergeRanges(neededRanges);
+      const neededLines: Map<number, string> = new Map();
+      for (const range of mergedRanges) {
+        const lines = extractLineRange(content, lineOffsets, range.startLine, range.endLine);
+        for (let i = 0; i < lines.length; i++) {
+          neededLines.set(range.startLine + i, lines[i]);
+        }
+      }
+
+      const diff = generateLocalDiff(patch.path, allReplacements, neededLines, totalLines);
       return { diff };
     } else {
       return { error: "Must provide edits[] or overwrite:true" };
@@ -399,6 +439,12 @@ export async function computePatchPreviewMulti(
 
 
 export function generatePatchDiff(result: PatchResult): string {
+  // If applyEdits pre-generated the diff, use it directly (avoids re-reading files)
+  if (result.diff) {
+    return result.diff;
+  }
+
+  // Fallback: reconstruct diff from stored originalLines (legacy path)
   const parts: string[] = [];
   for (const [filePath, reps] of result.replacements) {
     const origLines = result.originalLines.get(filePath) ?? [];
@@ -580,7 +626,18 @@ function restoreLineEndings(text: string, ending: string): string {
   return ending === "\r\n" ? text.replace(/\n/g, "\r\n") : text;
 }
 
-/** Precompute character offsets for each line start. offsets[i] = char offset of line i+1 (1-based). */
+// ═══════════════════════════════════════════════════════════════════════════
+// Line range utilities (for partial file reading)
+// ═══════════════════════════════════════════════════════════════════════════
+
+const CONTEXT_LINES = 3;
+
+interface LineRange {
+  startLine: number;
+  endLine: number;
+}
+
+/** Build line offset table: offsets[i] = character offset of line i+1 (1-based) */
 function buildLineOffsets(content: string): number[] {
   const offsets = [0];
   for (let i = 0; i < content.length; i++) {
@@ -589,8 +646,8 @@ function buildLineOffsets(content: string): number[] {
   return offsets;
 }
 
-/** Binary search: find 1-based line number containing the given char offset.
- *  Uses precomputed line offsets instead of scanning from the beginning. */
+
+/** Binary search: find 1-based line number containing charOffset */
 function lineAtOffset(lineOffsets: number[], charOffset: number): number {
   let lo = 0, hi = lineOffsets.length - 1;
   while (lo < hi) {
@@ -598,10 +655,51 @@ function lineAtOffset(lineOffsets: number[], charOffset: number): number {
     if (lineOffsets[mid] <= charOffset) lo = mid;
     else hi = mid - 1;
   }
-  return lo + 1; // 1-based
+  return lo + 1;
 }
 
-/** Convert a character offset to a 1-based line number. O(n) — prefer lineAtOffset for repeated calls on same content. */
+/** Binary search: find line start offset given 1-based line number */
+function offsetAtLine(lineOffsets: number[], lineNum: number): number {
+  if (lineNum <= 1) return 0;
+  if (lineNum > lineOffsets.length) return lineOffsets[lineOffsets.length - 1];
+  return lineOffsets[lineNum - 1];
+}
+
+/** Extract a range of lines from content (1-based, inclusive) */
+function extractLineRange(content: string, lineOffsets: number[], startLine: number, endLine: number): string[] {
+  const lines: string[] = [];
+  for (let i = startLine; i <= endLine; i++) {
+    const start = offsetAtLine(lineOffsets, i);
+    const end = offsetAtLine(lineOffsets, i + 1);
+    // Remove trailing \n from last line if present
+    const lineText = content.slice(start, end).replace(/\n$/, "");
+    lines.push(lineText);
+  }
+  return lines;
+}
+
+
+/** Merge overlapping/adjacent line ranges */
+function mergeRanges(ranges: LineRange[]): LineRange[] {
+  if (ranges.length === 0) return [];
+  const sorted = [...ranges].sort((a, b) => a.startLine - b.startLine);
+  const merged: LineRange[] = [];
+  for (const r of sorted) {
+    const last = merged[merged.length - 1];
+    if (last && r.startLine <= last.endLine + 1) {
+      last.endLine = Math.max(last.endLine, r.endLine);
+    } else {
+      merged.push({ ...r });
+    }
+  }
+  return merged;
+}
+
+function randomId(): string {
+  return Math.random().toString(36).slice(2, 10);
+}
+
+/** Convert a character offset to a 1-based line number. */
 function charOffsetToLine(content: string, offset: number): number {
   let line = 1;
   for (let i = 0; i < offset && i < content.length; i++) {
@@ -610,8 +708,63 @@ function charOffsetToLine(content: string, offset: number): number {
   return line;
 }
 
-function randomId(): string {
-  return Math.random().toString(36).slice(2, 10);
+/**
+ * Generate diff using only the needed lines (partial file context).
+ */
+function generateLocalDiff(
+  filePath: string,
+  reps: ReplacementInfo[],
+  neededLines: Map<number, string>,
+  totalLines: number,
+): string {
+  if (reps.length === 0) return "";
+
+  const parts: string[] = [];
+  parts.push(`--- ${filePath}`);
+  parts.push(`+++ ${filePath}`);
+
+  // Calculate dynamic width based on max line number
+  const maxLineNum = Math.max(totalLines, ...reps.map(r => r.oldEndLine));
+  const numWidth = String(maxLineNum).length;
+
+  // Merge replacement chunks
+  const chunks = buildReplacementChunks(reps, totalLines, CONTEXT_LINES);
+  for (let c = 0; c < chunks.length; c++) {
+    if (c > 0) parts.push("");
+    const chunk = chunks[c]!;
+    parts.push(formatChunkHeader(chunk));
+    parts.push(...formatChunkMetadataLines(chunk));
+
+    // Output context + removed + added
+    let cursor = chunk.startLine;
+    for (const rep of chunk.reps) {
+      // Context before this replacement
+      for (let i = cursor; i < rep.oldStartLine; i++) {
+        const lineText = neededLines.get(i);
+        if (lineText !== undefined) {
+          parts.push(` ${String(i).padStart(numWidth, " ")} ${lineText}`);
+        }
+      }
+      // Removed lines
+      for (let i = 0; i < rep.oldLines.length; i++) {
+        parts.push(`-${String(rep.oldStartLine + i).padStart(numWidth, " ")} ${rep.oldLines[i]}`);
+      }
+      // Added lines
+      for (let i = 0; i < rep.newLines.length; i++) {
+        parts.push(`+${String(rep.oldStartLine + i).padStart(numWidth, " ")} ${rep.newLines[i]}`);
+      }
+      cursor = rep.oldEndLine + 1;
+    }
+    // Trailing context
+    for (let i = cursor; i <= chunk.endLine; i++) {
+      const lineText = neededLines.get(i);
+      if (lineText !== undefined) {
+        parts.push(` ${String(i).padStart(numWidth, " ")} ${lineText}`);
+      }
+    }
+  }
+
+  return parts.join("\n");
 }
 
 function truncate(s: string, maxLen = 60): string {
