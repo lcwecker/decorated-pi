@@ -61,11 +61,11 @@ function setupDpModelCommand(pi: ExtensionAPI) {
 // ─── /dp-settings ──────────────────────────────────────────────────────────
 
 const MODULE_LABELS: Record<keyof ModuleSettings, string> = {
-  patch: "Patch Tool",
+  patch: "patch",
   safety: "Safety Layer",
-  lsp: "LSP Tools",
-  "smart-at": "Smart @ Search",
-  mcp: "Built-in MCP",
+  lsp: "LSP",
+  "smart-at": "@ overload",
+  mcp: "MCP",
 };
 
 const MODULE_DESCS: Record<keyof ModuleSettings, string> = {
@@ -73,7 +73,7 @@ const MODULE_DESCS: Record<keyof ModuleSettings, string> = {
   safety: "Command guard, protected paths, read guard, secret redaction",
   lsp: "Language server diagnostics, hover, definition, references, symbols, rename",
   "smart-at": "Project-aware file search replacing default autocomplete",
-  mcp: "Built-in MCP client for context7 and exa (zero-config)",
+  mcp: "MCP client for context7 and exa (zero-config)",
 };
 
 class ModuleSettingsComponent extends Container {
