@@ -123,13 +123,21 @@ describe("applyPatches", () => {
     ).rejects.toThrow(ApplyError);
   });
 
-  it("fails when anchor not found", async () => {
+  it("falls back to global old_str search when anchor not found", async () => {
+    writeFile("f.txt", "hello world\n");
+    await applyPatches([
+      { path: "f.txt", edits: [{ anchor: "nope", old_str: "hello", new_str: "x" }] },
+    ], tmpDir);
+    expect(readFile("f.txt")).toBe("x world\n");
+  });
+
+  it("reports both anchor miss and old_str miss when fallback also fails", async () => {
     writeFile("f.txt", "hello world\n");
     await expect(
       applyPatches([
-        { path: "f.txt", edits: [{ anchor: "nope", old_str: "hello", new_str: "x" }] },
+        { path: "f.txt", edits: [{ anchor: "nope", old_str: "missing", new_str: "x" }] },
       ], tmpDir),
-    ).rejects.toThrow(ApplyError);
+    ).rejects.toThrow(/Anchor not found[\s\S]*old_str not found/);
   });
 
   // ── Uniqueness ──────────────────────────────────────────────────────────
@@ -385,6 +393,21 @@ describe("applyPatches", () => {
 
     expect(diff).toContain("anchors:\n  - function foo() {\n  - if (true) {");
     expect(diff).not.toContain("  -   if (true) {");
+  });
+
+  it("generatePatchDiff shows missing anchor when fallback search succeeds", async () => {
+    writeFile("f.txt", "hello world\n");
+    const result = await applyPatches([
+      {
+        path: "f.txt",
+        edits: [
+          { anchor: "nope", old_str: "hello", new_str: "hi" },
+        ],
+      },
+    ], tmpDir);
+    const diff = generatePatchDiff(result);
+
+    expect(diff).toContain("@@ lines 1 @@ anchor: nope (missing)");
   });
 
   it("generatePatchDiff uses a single blank line between distant chunks", async () => {

@@ -22,7 +22,7 @@ Replaces Pi's built-in `edit` / `write` with a stronger `patch` tool:
 
 ### 2. Secret redaction
 
-  Three-layer detection: high-confidence known-format patterns (AWS, GitHub, OpenAI, etc.), config-key regex matching, and adjusted Shannon entropy heuristics for unknown secret-like values. Based on [opencode-secrets-protect](https://github.com/jscheel/opencode-secrets-protect)
+Three-layer detection: high-confidence known-format patterns (AWS, GitHub, OpenAI, etc.), config-key regex matching, and adjusted Shannon entropy heuristics for unknown secret-like values.
 
 ### 3. Built-in MCP Client
 

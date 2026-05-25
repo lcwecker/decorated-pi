@@ -62,7 +62,7 @@ function setupDpModelCommand(pi: ExtensionAPI) {
 
 const MODULE_LABELS: Record<keyof ModuleSettings, string> = {
   patch: "patch",
-  safety: "Safety Layer",
+  safety: "Secret Redaction",
   lsp: "LSP",
   "smart-at": "@ overload",
   mcp: "MCP",
@@ -70,7 +70,7 @@ const MODULE_LABELS: Record<keyof ModuleSettings, string> = {
 
 const MODULE_DESCS: Record<keyof ModuleSettings, string> = {
   patch: "Replace edit/write with patch tool (old_str/new_str replacement + overwrite)",
-  safety: "Command guard, protected paths, read guard, secret redaction",
+  safety: "Redact secrets from read / bash output before they enter model context",
   lsp: "Language server diagnostics, hover, definition, references, symbols, rename",
   "smart-at": "Project-aware file search replacing default autocomplete",
   mcp: "MCP client for context7 and exa (zero-config)",
@@ -122,7 +122,7 @@ function setupDpSettingsCommand(pi: ExtensionAPI) {
           (tui, theme, _kb, done) =>
             new ModuleSettingsComponent(tui, theme, () => done(undefined))
         );
-        ctx.ui.notify("Module settings updated. /reload to apply.", "info");
+        ctx.ui.notify("Module settings updated. /reload to apply.", "warning");
         return;
       }
       ctx.ui.notify("dp-settings requires interactive mode.", "warning");

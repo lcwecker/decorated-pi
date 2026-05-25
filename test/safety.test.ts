@@ -30,13 +30,17 @@ import {
   calculateAdjustedEntropy,
   isHighEntropy,
   findHighEntropyTokens,
-  isSafeContent,
-  detectSecrets,
-  maskSecret,
-  SECRET_PATTERNS,
-  SAFE_PATTERNS,
   ENTROPY_THRESHOLD,
   MIN_ENTROPY_TOKEN_LENGTH,
+} from "../extensions/safety/entropy.js";
+import {
+  isSafeContent,
+  SECRET_PATTERNS,
+  SAFE_PATTERNS,
+} from "../extensions/safety/patterns.js";
+import {
+  detectSecrets,
+  maskSecret,
 } from "../extensions/safety/detect.js";
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -408,8 +412,9 @@ describe("detectSecrets — Pattern Layer (high confidence)", () => {
     ["PostgreSQL URI", ["postgresql://admin:", "secret@db.example.com:5432/production"].join(""), "PostgreSQL Connection String"],
     ["MySQL URI", ["mysql://root:", "password@localhost:3306/mydb"].join(""), "MySQL Connection String"],
     ["Redis URI", ["redis://:", "secret@redis.example.com:6379/0"].join(""), "Redis Connection String"],
-    ["RSA Private Key", ["-----BEGIN RSA ", "PRIVATE KEY-----\nMIIE..."].join(""), "RSA Private Key"],
-    ["OpenSSH Private Key", ["-----BEGIN OPENSSH ", "PRIVATE KEY-----\nAAA..."].join(""), "OpenSSH Private Key"],
+    ["RSA Private Key", "-----BEGIN RSA PRIVATE KEY-----\nMIIEpAIBAAKCAQEA1\n-----END RSA PRIVATE KEY-----", "RSA Private Key"],
+    ["OpenSSH Private Key", "-----BEGIN OPENSSH PRIVATE KEY-----\nAAAAB3NzaC1yc2EAAAADAQABAAABAQ\n-----END OPENSSH PRIVATE KEY-----", "OpenSSH Private Key"],
+    ["Generic Private Key", "-----BEGIN PRIVATE KEY-----\nMIIEvQIBADANBgkq\n-----END PRIVATE KEY-----", "Generic Private Key"],
     ["SendGrid API Key", ["SG.", "abcdefghijklmnopqrstuvwx.abcdefghijklmnopqrstuvwxyz0123456789ABCD"].join(""), "SendGrid API Key"],
   ];
 
@@ -507,6 +512,7 @@ describe("detectSecrets — Negative cases", () => {
     ["CSS hex color", "background: #ff6600"],
     ["Chinese text", "这是中文文本包含密码和密钥但不是secret"],
     ["Japanese text", "設定ファイルにAPI鍵を配置しないでください"],
+    ["Private key regex literal", "/-----BEGIN RSA PRIVATE KEY-----\\r?\\n(?:[A-Za-z0-9+/=]+\\r?\\n)+-----END RSA PRIVATE KEY-----/"],
   ];
 
   for (const [label, input] of cases) {

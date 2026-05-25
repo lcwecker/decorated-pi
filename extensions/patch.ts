@@ -65,6 +65,8 @@ export interface ReplacementInfo {
   newLines: string[];
   /** Optional anchor text (first line only, for hunk display) */
   anchor?: string;
+  /** Anchor was provided but not found, and patch fell back to global old_str search */
+  anchorMissing?: boolean;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -211,49 +213,73 @@ async function applyEdits(
 
     // Determine search range
     let searchFrom = 0;
+    let displayAnchor: string | undefined;
+    let anchorMissing = false;
+    let anchorNotFoundMessage: string | undefined;
 
     if (edit.anchor) {
       const anchorNorm = normalizeLineEndings(edit.anchor);
 
-      // Find anchor — must be unique
+      // Find anchor — must be unique when present
       const anchorIdx = content.indexOf(anchorNorm);
       if (anchorIdx === -1) {
-        throw new ApplyError(
-          `Anchor not found in ${displayPath}: "${truncate(edit.anchor)}".`
-        );
+        anchorNotFoundMessage = `Anchor not found in ${displayPath}: "${truncate(edit.anchor)}".`;
+      } else {
+        const secondAnchor = content.indexOf(anchorNorm, anchorIdx + 1);
+        if (secondAnchor !== -1) {
+          throw new ApplyError(
+            `Anchor is not unique in ${displayPath}: "${truncate(edit.anchor)}" ` +
+            `found at multiple locations. Choose a more specific anchor.`
+          );
+        }
+        // Search from anchor start position onward (anchor narrows search range)
+        // old_str may start at anchor position (anchor is a prefix of old_str)
+        searchFrom = anchorIdx;
+        displayAnchor = edit.anchor;
+        anchorMissing = false;
       }
-      // Check uniqueness
-      const secondAnchor = content.indexOf(anchorNorm, anchorIdx + 1);
-      if (secondAnchor !== -1) {
-        throw new ApplyError(
-          `Anchor is not unique in ${displayPath}: "${truncate(edit.anchor)}" ` +
-          `found at multiple locations. Choose a more specific anchor.`
-        );
-      }
-
-      // Search from anchor start position onward (anchor narrows search range)
-      // old_str may start at anchor position (anchor is a prefix of old_str)
-      searchFrom = anchorIdx;
     }
 
     // Find old_str in range — must be unique
-    const matchIdx = content.indexOf(oldNorm, searchFrom);
+    let matchIdx = anchorNotFoundMessage ? -1 : content.indexOf(oldNorm, searchFrom);
     if (matchIdx === -1) {
-      throw new ApplyError(
-        `old_str not found in ${displayPath}` +
-        (edit.anchor ? ` after anchor "${truncate(edit.anchor)}"` : "") +
-        `: "${truncate(edit.old_str)}". ` +
-        `The file may have changed — re-read it and try again.`
-      );
+      if (anchorNotFoundMessage) {
+        displayAnchor = edit.anchor;
+        anchorMissing = true;
+        const globalMatchIdx = content.indexOf(oldNorm, 0);
+        if (globalMatchIdx === -1) {
+          throw new ApplyError(
+            `${anchorNotFoundMessage} old_str not found in ${displayPath}: "${truncate(edit.old_str)}". ` +
+            `The file may have changed — re-read it and try again.`
+          );
+        }
+        const secondGlobalMatch = content.indexOf(oldNorm, globalMatchIdx + 1);
+        if (secondGlobalMatch !== -1) {
+          throw new ApplyError(
+            `${anchorNotFoundMessage} old_str is not unique in ${displayPath}: "${truncate(edit.old_str)}". ` +
+            `Add more context to old_str or use a more specific anchor.`
+          );
+        }
+        matchIdx = globalMatchIdx;
+      } else {
+        throw new ApplyError(
+          `old_str not found in ${displayPath}` +
+          (edit.anchor ? ` after anchor "${truncate(edit.anchor)}"` : "") +
+          `: "${truncate(edit.old_str)}". ` +
+          `The file may have changed — re-read it and try again.`
+        );
+      }
     }
 
-    // Check uniqueness
-    const secondMatch = content.indexOf(oldNorm, matchIdx + 1);
-    if (secondMatch !== -1) {
-      throw new ApplyError(
-        `old_str is not unique in ${displayPath}: "${truncate(edit.old_str)}". ` +
-        `Add more context to old_str or use an anchor to narrow the search.`
-      );
+    // Check uniqueness in anchor-narrowed / plain search path only when anchor was used normally
+    if (!anchorNotFoundMessage) {
+      const secondMatch = content.indexOf(oldNorm, matchIdx + 1);
+      if (secondMatch !== -1) {
+        throw new ApplyError(
+          `old_str is not unique in ${displayPath}: "${truncate(edit.old_str)}". ` +
+          `Add more context to old_str or use an anchor to narrow the search.`
+        );
+      }
     }
 
     // Compute line numbers in the original file for diff generation (O(log n) via binary search)
@@ -283,7 +309,8 @@ async function applyEdits(
       newEndLine,
       oldLines: oldNorm.split("\n").filter((l, i, arr) => !(i === arr.length - 1 && l === "")),
       newLines: newNorm.split("\n").filter((l, i, arr) => !(i === arr.length - 1 && l === "")),
-      anchor: edit.anchor ? edit.anchor.split("\n")[0] : undefined,
+      anchor: displayAnchor ? displayAnchor.split("\n")[0] : undefined,
+      anchorMissing,
     });
 
     // Collect context range for this edit
@@ -372,18 +399,42 @@ export async function computePatchPreview(
         const newNorm = normalizeLineEndings(edit.new_str);
 
         let searchFrom = 0;
+        let displayAnchor: string | undefined;
+        let anchorMissing = false;
+        let anchorNotFoundMessage: string | undefined;
         if (edit.anchor) {
           const anchorNorm = normalizeLineEndings(edit.anchor);
           const idx = content.indexOf(anchorNorm);
           if (idx === -1) {
-            return { error: `Anchor not found: "${truncate(edit.anchor)}"` };
+            anchorNotFoundMessage = `Anchor not found: "${truncate(edit.anchor)}"`;
+          } else {
+            const secondAnchor = content.indexOf(anchorNorm, idx + 1);
+            if (secondAnchor !== -1) {
+              return { error: `Anchor is not unique: "${truncate(edit.anchor)}"` };
+            }
+            searchFrom = idx;
+            displayAnchor = edit.anchor;
+            anchorMissing = false;
           }
-          searchFrom = idx;
         }
 
-        const matchIdx = content.indexOf(oldNorm, searchFrom);
+        let matchIdx = anchorNotFoundMessage ? -1 : content.indexOf(oldNorm, searchFrom);
         if (matchIdx === -1) {
-          return { error: `old_str not found: "${truncate(edit.old_str)}"` };
+          if (anchorNotFoundMessage) {
+            displayAnchor = edit.anchor;
+            anchorMissing = true;
+            const globalMatchIdx = content.indexOf(oldNorm, 0);
+            if (globalMatchIdx === -1) {
+              return { error: `${anchorNotFoundMessage}; old_str not found: "${truncate(edit.old_str)}"` };
+            }
+            const secondGlobalMatch = content.indexOf(oldNorm, globalMatchIdx + 1);
+            if (secondGlobalMatch !== -1) {
+              return { error: `${anchorNotFoundMessage}; old_str is not unique: "${truncate(edit.old_str)}"` };
+            }
+            matchIdx = globalMatchIdx;
+          } else {
+            return { error: `old_str not found: "${truncate(edit.old_str)}"` };
+          }
         }
 
         const origMatchIdx = matchIdx - cumulativeOffset;
@@ -399,7 +450,7 @@ export async function computePatchPreview(
           startLine: Math.max(1, oldStartLine - CONTEXT_LINES),
           endLine: Math.min(totalLines, oldEndLine + CONTEXT_LINES),
         });
-        allReplacements.push({ oldStartLine, oldEndLine, newStartLine, newEndLine, oldLines, newLines, anchor: edit.anchor ? edit.anchor.split("\n")[0] : undefined });
+        allReplacements.push({ oldStartLine, oldEndLine, newStartLine, newEndLine, oldLines, newLines, anchor: displayAnchor ? displayAnchor.split("\n")[0] : undefined, anchorMissing });
         cumulativeOffset += newNorm.length - oldNorm.length;
       }
 
@@ -483,14 +534,29 @@ function buildReplacementChunks(
   return chunks;
 }
 
-function getChunkAnchors(chunk: ReplacementChunk): string[] {
-  return [
-    ...new Set(
-      chunk.reps
-        .map((rep) => rep.anchor?.trim())
-        .filter((anchor): anchor is string => Boolean(anchor)),
-    ),
-  ];
+interface ChunkAnchor {
+  text: string;
+  missing: boolean;
+}
+
+function getChunkAnchors(chunk: ReplacementChunk): ChunkAnchor[] {
+  const byText = new Map<string, ChunkAnchor>();
+  for (const rep of chunk.reps) {
+    const text = rep.anchor?.trim();
+    if (!text) continue;
+    const existing = byText.get(text);
+    if (!existing) {
+      byText.set(text, { text, missing: Boolean(rep.anchorMissing) });
+    } else if (!rep.anchorMissing) {
+      // If any replacement successfully used this anchor, do not mark it missing.
+      existing.missing = false;
+    }
+  }
+  return [...byText.values()];
+}
+
+function formatAnchorLabel(anchor: ChunkAnchor): string {
+  return anchor.text + (anchor.missing ? " (missing)" : "");
 }
 
 function formatChunkHeader(chunk: ReplacementChunk): string {
@@ -504,7 +570,7 @@ function formatChunkHeader(chunk: ReplacementChunk): string {
   }
 
   if (anchors.length === 1) {
-    return `@@ lines ${range} @@ anchor: ${anchors[0]}`;
+    return `@@ lines ${range} @@ anchor: ${formatAnchorLabel(anchors[0]!)}`;
   }
 
   return `@@ lines ${range} @@`;
@@ -516,7 +582,7 @@ function formatChunkMetadataLines(chunk: ReplacementChunk): string[] {
 
   const shown = anchors.slice(0, 2);
   const remaining = anchors.length - shown.length;
-  const lines = ["anchors:", ...shown.map((anchor) => `  - ${anchor}`)];
+  const lines = ["anchors:", ...shown.map((anchor) => `  - ${formatAnchorLabel(anchor)}`)];
   if (remaining > 0) {
     lines.push(`  - +${remaining} more`);
   }

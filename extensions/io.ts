@@ -288,6 +288,14 @@ function createSingleLineComponent(text: string) {
   };
 }
 
+function formatPatchMetaLine(line: string, theme: any): string {
+  const missingSuffix = " (missing)";
+  if (line.endsWith(missingSuffix)) {
+    return theme.fg("accent", line.slice(0, -missingSuffix.length)) + theme.fg("warning", missingSuffix);
+  }
+  return theme.fg("accent", line);
+}
+
 function appendPatchDiffChildren(parent: Box, body: string, theme: any): void {
   const rawLines = body.split("\n");
   let buffer: string[] = [];
@@ -301,17 +309,17 @@ function appendPatchDiffChildren(parent: Box, body: string, theme: any): void {
   for (const line of rawLines) {
     if (line.startsWith("@@ lines ")) {
       flush();
-      parent.addChild(createSingleLineComponent(theme.fg("accent", line)) as any);
+      parent.addChild(createSingleLineComponent(formatPatchMetaLine(line, theme)) as any);
       continue;
     }
     if (line === "anchors:") {
       flush();
-      parent.addChild(createSingleLineComponent(theme.fg("accent", line)) as any);
+      parent.addChild(createSingleLineComponent(formatPatchMetaLine(line, theme)) as any);
       continue;
     }
     if (line.startsWith("  - ")) {
       flush();
-      parent.addChild(createSingleLineComponent(theme.fg("accent", line)) as any);
+      parent.addChild(createSingleLineComponent(formatPatchMetaLine(line, theme)) as any);
       continue;
     }
     buffer.push(line);
