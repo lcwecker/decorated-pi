@@ -265,6 +265,7 @@ describe("applyPatches", () => {
       warnings: [],
       replacements: new Map(),
       originalLines: new Map(),
+      diff: "",
     });
     expect(r).toContain("A a.txt");
     expect(r).toContain("M b.txt");
@@ -277,6 +278,7 @@ describe("applyPatches", () => {
       warnings: [],
       replacements: new Map(),
       originalLines: new Map(),
+      diff: "",
     });
     expect(r).toContain("No files were modified");
   });
