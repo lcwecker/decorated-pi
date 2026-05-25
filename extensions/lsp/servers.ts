@@ -13,6 +13,7 @@ const EXTENSION_LANGUAGES: Record<string, string> = {
   ".cxx": "cpp", ".hh": "cpp", ".hpp": "cpp", ".hxx": "cpp",
   ".py": "python", ".rs": "rust", ".go": "go", ".rb": "ruby",
   ".java": "java", ".lua": "lua", ".svelte": "svelte",
+  ".json": "json",
 };
 
 export interface LanguageConfig {
@@ -64,6 +65,10 @@ const LANGUAGE_SERVERS: Record<string, Omit<LanguageConfig, "is_project_local">>
   svelte: {
     language: "svelte", command: "svelteserver", args: ["--stdio"],
     install_hint: "Install Svelte LSP with: pnpm add -D svelte-language-server",
+  },
+  json: {
+    language: "json", command: "biome", args: ["lsp-proxy"],
+    install_hint: "Install Biome with: pnpm add -D @biomejs/biome",
   },
 };
 

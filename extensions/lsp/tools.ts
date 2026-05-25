@@ -113,7 +113,10 @@ export function registerLspTools(pi: ExtensionAPI, manager: LspServerManager) {
     label: "LSP: diagnostics",
     description: "Get language server diagnostics for one or more files. Default filter: error. Supports optional severity filtering.",
     promptSnippet: "Get language server diagnostics for one or more files",
-    promptGuidelines: ["Use lsp_diagnostics to validate focused code changes after editing or writing before reporting completion."],
+    promptGuidelines: [
+      "Use lsp_diagnostics to validate focused code changes after editing or writing before reporting completion.",
+      "Supported languages: typescript, c, cpp, python, rust, go, ruby, java, lua, svelte, json.",
+    ],
     renderResult: renderLspResult,
     parameters: Type.Object({
       paths: Type.Array(Type.String(), { minItems: 1, maxItems: 100, description: "Paths to check. One or more file paths (relative to cwd or absolute)." }),
@@ -160,7 +163,10 @@ export function registerLspTools(pi: ExtensionAPI, manager: LspServerManager) {
     label: "LSP: document symbols",
     description: "List symbols in a file (functions, classes, variables) using the language server.",
     promptSnippet: "List functions, classes, and variables in a file",
-    promptGuidelines: ["Prefer lsp_document_symbols to find functions, classes, or variables in code instead of grep."],
+    promptGuidelines: [
+      "Prefer lsp_document_symbols to find functions, classes, or variables in code instead of grep.",
+      "Supported languages: typescript, c, cpp, python, rust, go, ruby, java, lua, svelte.",
+    ],
     renderResult: renderLspResult,
     parameters: Type.Object({
       path: Type.String({ description: "Path to the file (relative or absolute)." }),
