@@ -20,7 +20,7 @@
  *   Tier 2 (-300): 在 .* 或 __* 目录下
  *   Tier 3 (-200): 在已知噪音目录下(build/dist/coverage 等)
  *   Tier 4 (-150~-80): 坏扩展名(二进制/编译产物/媒体文件)
- *   Base (always): -depth*2 - name.length
+ *   Base (always): -depth*30 - name.length
  *
  * 匹配:
  *   - 大小写敏感
@@ -104,7 +104,7 @@ function computePenaltyMeta(filePath: string, isDir: boolean, gitIgnored: boolea
     tierPenalty = EXT_PENALTY[ext]!;
   }
 
-  const basePenalty = -(depth * 20) - name.length;
+  const basePenalty = -(depth * 30) - name.length;
   return { tier, penalty: tierPenalty + basePenalty };
 }
 
@@ -306,7 +306,7 @@ function computeMatchScore(candidate: FileCandidate, query: string): number {
   let s = 0;
 
   // 大小写敏感匹配
-  if (stem === query)                                                       s = isDir ? 1500 : 1200;
+  if (stem === query)                                                       s = isDir ? 1500 : 1050;
   else if (name.startsWith(query + ".") || name.startsWith(query + "_"))    s = 1000;
   else if (name.startsWith(query))                                          s = 900;
   else if (name.includes(query))                                            s = 600;
@@ -316,10 +316,10 @@ function computeMatchScore(candidate: FileCandidate, query: string): number {
   if (!s) return 0;
 
   // 目录轻微加成(tiebreaker,不碾压深度)
-  if (isDir) s += 50;
+  if (isDir) s += 100;
 
   // 父目录命中加成
-  if (inDir) s += 250;
+  if (inDir) s += 50;
 
   return s;
 }

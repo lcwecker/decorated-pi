@@ -11,37 +11,37 @@ describe("penalty tiers", () => {
   it("Tier 1: gitIgnored wins, no stacking", () => {
     const meta = computePenaltyMeta("dist/foo.pyc", false, true);
     expect(meta.tier).toBe(1);
-    expect(meta.penalty).toBe(-400 - (2 * 20) - 7); // -447
+    expect(meta.penalty).toBe(-400 - (2 * 30) - 7);
   });
 
   it("Tier 2: hidden dir", () => {
     const meta = computePenaltyMeta(".cache/data.json", false, false);
     expect(meta.tier).toBe(2);
-    expect(meta.penalty).toBe(-300 - (2 * 20) - 9); // -349
+    expect(meta.penalty).toBe(-300 - (2 * 30) - 9);
   });
 
   it("Tier 3: bad dir", () => {
     const meta = computePenaltyMeta("dist/index.ts", false, false);
     expect(meta.tier).toBe(3);
-    expect(meta.penalty).toBe(-200 - (2 * 20) - 8); // -248
+    expect(meta.penalty).toBe(-200 - (2 * 30) - 8);
   });
 
   it("Tier 4: bad extension", () => {
     const meta = computePenaltyMeta("images/logo.png", false, false);
     expect(meta.tier).toBe(4);
-    expect(meta.penalty).toBe(-100 - (2 * 20) - 8); // -148
+    expect(meta.penalty).toBe(-100 - (2 * 30) - 8);
   });
 
   it("Tier 0: normal source file", () => {
     const meta = computePenaltyMeta("src/new-file.ts", false, false);
     expect(meta.tier).toBe(0);
-    expect(meta.penalty).toBe(-(2 * 20) - 11); // -51
+    expect(meta.penalty).toBe(-(2 * 30) - 11);
   });
 
   it("root dotfiles are NOT penalized as hidden dir", () => {
     const meta = computePenaltyMeta(".eslintrc.js", false, false);
     expect(meta.tier).toBe(0);
-    expect(meta.penalty).toBe(-(1 * 20) - 12); // -32
+    expect(meta.penalty).toBe(-(1 * 30) - 12);
   });
 
   it("directory itself as hidden dir gets Tier 2", () => {
@@ -50,7 +50,7 @@ describe("penalty tiers", () => {
   });
 
   it("computePenalty helper returns number", () => {
-    expect(computePenalty("src/a.ts", false, false)).toBe(-(2 * 20) - 4); // -44
+    expect(computePenalty("src/a.ts", false, false)).toBe(-(2 * 30) - 4);
   });
 });
 
@@ -75,7 +75,7 @@ describe("match scoring (case-sensitive)", () => {
     expect(exact).toBeGreaterThan(prefix);
   });
 
-  it("directory gets +500 bonus", () => {
+  it("directory gets bonus (tiebreaker)", () => {
     const dir = computeMatchScore({ path: "src/utils/", name: "utils", isDir: true, tier: 0 as const, penalty: 0 }, "utils");
     const file = computeMatchScore({ path: "src/utils.ts", name: "utils.ts", isDir: false, tier: 0 as const, penalty: 0 }, "utils");
     expect(dir).toBeGreaterThan(file);
@@ -94,12 +94,12 @@ describe("match scoring (case-sensitive)", () => {
 
 describe("smartSearch", () => {
   const candidates = [
-    { path: "src/index.ts", name: "index.ts", isDir: false, tier: 0 as const, penalty: -48 },
-    { path: "src/", name: "src", isDir: true, tier: 0 as const, penalty: -23 },
-    { path: "dist/index.js", name: "index.js", isDir: false, tier: 3 as const, penalty: -248 },
-    { path: ".cache/index.json", name: "index.json", isDir: false, tier: 2 as const, penalty: -349 },
-    { path: "ignored.log", name: "ignored.log", isDir: false, tier: 1 as const, penalty: -431 },
-    { path: "build/", name: "build", isDir: true, tier: 3 as const, penalty: -225 },
+    { path: "src/index.ts", name: "index.ts", isDir: false, tier: 0 as const, penalty: -68 },
+    { path: "src/", name: "src", isDir: true, tier: 0 as const, penalty: -33 },
+    { path: "dist/index.js", name: "index.js", isDir: false, tier: 3 as const, penalty: -268 },
+    { path: ".cache/index.json", name: "index.json", isDir: false, tier: 2 as const, penalty: -370 },
+    { path: "ignored.log", name: "ignored.log", isDir: false, tier: 1 as const, penalty: -441 },
+    { path: "build/", name: "build", isDir: true, tier: 3 as const, penalty: -235 },
   ];
 
   it("empty query: hides Tier 1/2, shows Tier 0/3/4", () => {
