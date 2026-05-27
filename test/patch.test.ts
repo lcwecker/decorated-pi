@@ -14,6 +14,8 @@ import {
   formatPatchResult,
   generatePatchDiff,
   computePatchPreview,
+  diagnoseOldStrMismatch,
+  diagnoseOldStrNotUnique,
 } from "../extensions/patch.js";
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -420,6 +422,16 @@ describe("applyPatches", () => {
     expect(diff).toContain(" 4 gamma");
   });
 
+  it("applyPatches with anchor substring of old_str still matches", async () => {
+    writeFile("f.txt", "    if (has_mounted && m_bformatting == 0 && m_reinit_sta\n    next line\n");
+    const result = await applyPatches([
+      { path: "f.txt", edits: [{ anchor: "if (has_mounted", old_str: "    if (has_mounted && m_bformatting == 0 && m_reinit_sta", new_str: "    if (has_mounted && m_bformatting == 1 && m_reinit_sta" }] },
+    ], tmpDir);
+    const diff = generatePatchDiff(result);
+    expect(diff).toContain("-1     if (has_mounted && m_bformatting == 0 && m_reinit_sta");
+    expect(diff).toContain("+1     if (has_mounted && m_bformatting == 1 && m_reinit_sta");
+  });
+
   it("generatePatchDiff uses a single blank line between distant chunks", async () => {
     writeFile("f.txt", [
       "a01",
@@ -653,5 +665,65 @@ describe("preparePatchArguments → applyPatch pipeline", () => {
     const result = await applyPatch(repaired, tmpDir);
     expect(result.modified).toContain(filePath);
     expect(fs.readFileSync(filePath, "utf8")).toBe("new content\n");
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Mismatch Diagnostics
+// ═══════════════════════════════════════════════════════════════════════════
+
+describe("diagnoseOldStrMismatch", () => {
+  it("detects tab vs space mismatch", () => {
+    const diag = diagnoseOldStrMismatch("        code", "\t\tcode\n");
+    expect(diag).toContain("tab vs space");
+  });
+
+  it("detects indent mismatch when tab width doesn't cleanly match spaces", () => {
+    const diag = diagnoseOldStrMismatch("    pmod->res", "\t\t\t\tpmod->res\nother\n");
+    expect(diag).toContain("indent mismatch");
+  });
+
+  it("detects trailing whitespace mismatch", () => {
+    const diag = diagnoseOldStrMismatch("hello", "hello \nworld\n");
+    expect(diag).toContain("trailing whitespace");
+  });
+
+  it("detects case mismatch", () => {
+    const diag = diagnoseOldStrMismatch("Hello", "hello\nworld\n");
+    expect(diag).toContain("case mismatch");
+  });
+
+  it("detects indent mismatch when tab count doesn't cleanly map to any common width", () => {
+    // 3 spaces + code: no common tab width (2/4/8) maps 1 tab to 3 spaces
+    const diag = diagnoseOldStrMismatch("   code", "\tcode\n");
+    expect(diag).toContain("indent mismatch");
+  });
+
+  it("detects multi-line block mismatch with exact diff line", () => {
+    const diag = diagnoseOldStrMismatch("line1\nwrong\nline3", "line1\ncorrect\nline3\n");
+    expect(diag).toContain("diff at line");
+    expect(diag).toContain("correct");
+    expect(diag).toContain("wrong");
+  });
+
+  it("reports not found when content is completely absent", () => {
+    const diag = diagnoseOldStrMismatch("missing_content_xyz", "hello\nworld\n");
+    expect(diag).toContain("not found anywhere");
+  });
+});
+
+describe("diagnoseOldStrNotUnique", () => {
+  it("lists occurrence line numbers", () => {
+    const diag = diagnoseOldStrNotUnique("dup", "dup\na\nb\nc\ndup\n");
+    expect(diag).toContain("appears 2 times");
+    expect(diag).toContain("line 1");
+    expect(diag).toContain("line 5");
+  });
+
+  it("caps at 5 occurrences with remaining count", () => {
+    const content = Array.from({ length: 7 }, () => "dup\n").join("");
+    const diag = diagnoseOldStrNotUnique("dup", content);
+    expect(diag).toContain("appears 7 times");
+    expect(diag).toContain("and 2 more occurrence");
   });
 });

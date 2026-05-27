@@ -208,8 +208,8 @@ async function applyEdits(
       throw new ApplyError(`old_str must not be empty in ${displayPath}.`);
     }
 
-    const oldNorm = normalizeLineEndings(edit.old_str);
-    const newNorm = normalizeLineEndings(edit.new_str);
+    let oldNorm = normalizeLineEndings(edit.old_str);
+    let newNorm = normalizeLineEndings(edit.new_str);
 
     // Determine search range
     let searchFrom = 0;
@@ -229,7 +229,7 @@ async function applyEdits(
         if (secondAnchor !== -1) {
           anchorNotFoundMessage = `Anchor is not unique in ${displayPath}: "${truncate(edit.anchor)}".`;
         } else {
-          searchFrom = anchorIdx;
+          searchFrom = Math.max(0, anchorIdx - (oldNorm.length - 1));
           displayAnchor = edit.anchor;
           anchorMissing = false;
         }
@@ -238,31 +238,39 @@ async function applyEdits(
 
     // Find old_str in range — must be unique
     let matchIdx = anchorNotFoundMessage ? -1 : content.indexOf(oldNorm, searchFrom);
-    if (matchIdx === -1) {
-      if (anchorNotFoundMessage) {
-        displayAnchor = edit.anchor;
-        anchorMissing = true;
-        const globalMatchIdx = content.indexOf(oldNorm, 0);
-        if (globalMatchIdx === -1) {
-          throw new ApplyError(
-            `${anchorNotFoundMessage} old_str not found in ${displayPath}: "${truncate(edit.old_str)}". ` +
-            `The file may have changed — re-read it and try again.`
-          );
-        }
-        const secondGlobalMatch = content.indexOf(oldNorm, globalMatchIdx + 1);
+    if (matchIdx === -1 && anchorNotFoundMessage) {
+      // Anchor was missing/unusable — try global exact match first
+      displayAnchor = edit.anchor;
+      anchorMissing = true;
+      matchIdx = content.indexOf(oldNorm, 0);
+      if (matchIdx !== -1) {
+        const secondGlobalMatch = content.indexOf(oldNorm, matchIdx + 1);
         if (secondGlobalMatch !== -1) {
-          throw new ApplyError(
-            `${anchorNotFoundMessage} old_str is not unique in ${displayPath}: "${truncate(edit.old_str)}". ` +
-            `Add more context to old_str or use a more specific anchor.`
-          );
+          const dupDiag = diagnoseOldStrNotUnique(oldNorm, content);
+          throw new ApplyError(`${anchorNotFoundMessage}\n${dupDiag}`);
         }
-        matchIdx = globalMatchIdx;
+      }
+    }
+
+    if (matchIdx === -1) {
+      // Fuzzy match fallback: normalize tab↔space + trailing whitespace
+      const searchLine = searchFrom === 0 ? 0 : content.substring(0, searchFrom).split("\n").length - 1;
+      const fuzzy = tryFuzzyLineMatch(oldNorm, content, searchLine);
+      if (fuzzy) {
+        oldNorm = fuzzy.matched;
+        matchIdx = fuzzy.idx;
+        newNorm = normalizeIndentForFuzzy(fuzzy.matched.split("\n")[0] ?? "", newNorm);
+      } else if (anchorNotFoundMessage) {
+        const diag = diagnoseOldStrMismatch(oldNorm, content);
+        throw new ApplyError(
+          `${anchorNotFoundMessage}\nold_str not found in ${displayPath}: "${truncate(edit.old_str)}".\n${diag}`
+        );
       } else {
+        const diag = diagnoseOldStrMismatch(oldNorm, content);
         throw new ApplyError(
           `old_str not found in ${displayPath}` +
           (edit.anchor ? ` after anchor "${truncate(edit.anchor)}"` : "") +
-          `: "${truncate(edit.old_str)}". ` +
-          `The file may have changed — re-read it and try again.`
+          `: "${truncate(edit.old_str)}".\n${diag}`
         );
       }
     }
@@ -271,9 +279,9 @@ async function applyEdits(
     if (!anchorNotFoundMessage) {
       const secondMatch = content.indexOf(oldNorm, matchIdx + 1);
       if (secondMatch !== -1) {
+        const dupDiag = diagnoseOldStrNotUnique(oldNorm, content);
         throw new ApplyError(
-          `old_str is not unique in ${displayPath}: "${truncate(edit.old_str)}". ` +
-          `Add more context to old_str or use an anchor to narrow the search.`
+          `${dupDiag}`
         );
       }
     }
@@ -392,8 +400,8 @@ export async function computePatchPreview(
 
       for (const edit of patch.edits) {
         if (!edit.old_str) continue;
-        const oldNorm = normalizeLineEndings(edit.old_str);
-        const newNorm = normalizeLineEndings(edit.new_str);
+        let oldNorm = normalizeLineEndings(edit.old_str);
+        let newNorm = normalizeLineEndings(edit.new_str);
 
         let searchFrom = 0;
         let displayAnchor: string | undefined;
@@ -409,7 +417,7 @@ export async function computePatchPreview(
             if (secondAnchor !== -1) {
               anchorNotFoundMessage = `Anchor is not unique: "${truncate(edit.anchor)}"`;
             } else {
-              searchFrom = idx;
+              searchFrom = Math.max(0, idx - (oldNorm.length - 1));
               displayAnchor = edit.anchor;
               anchorMissing = false;
             }
@@ -417,21 +425,32 @@ export async function computePatchPreview(
         }
 
         let matchIdx = anchorNotFoundMessage ? -1 : content.indexOf(oldNorm, searchFrom);
-        if (matchIdx === -1) {
-          if (anchorNotFoundMessage) {
-            displayAnchor = edit.anchor;
-            anchorMissing = true;
-            const globalMatchIdx = content.indexOf(oldNorm, 0);
-            if (globalMatchIdx === -1) {
-              return { error: `${anchorNotFoundMessage}; old_str not found: "${truncate(edit.old_str)}"` };
-            }
-            const secondGlobalMatch = content.indexOf(oldNorm, globalMatchIdx + 1);
+        if (matchIdx === -1 && anchorNotFoundMessage) {
+          displayAnchor = edit.anchor;
+          anchorMissing = true;
+          matchIdx = content.indexOf(oldNorm, 0);
+          if (matchIdx !== -1) {
+            const secondGlobalMatch = content.indexOf(oldNorm, matchIdx + 1);
             if (secondGlobalMatch !== -1) {
-              return { error: `${anchorNotFoundMessage}; old_str is not unique: "${truncate(edit.old_str)}"` };
+              const dupDiag = diagnoseOldStrNotUnique(oldNorm, content);
+              return { error: `${anchorNotFoundMessage}\n${dupDiag}` };
             }
-            matchIdx = globalMatchIdx;
+          }
+        }
+
+        if (matchIdx === -1) {
+          const searchLine = 0;
+          const fuzzy = tryFuzzyLineMatch(oldNorm, content, searchLine);
+          if (fuzzy) {
+            oldNorm = fuzzy.matched;
+            matchIdx = fuzzy.idx;
+            newNorm = normalizeIndentForFuzzy(fuzzy.matched.split("\n")[0] ?? "", newNorm);
+          } else if (anchorNotFoundMessage) {
+            const diag = diagnoseOldStrMismatch(oldNorm, content);
+            return { error: `${anchorNotFoundMessage}\nold_str not found: "${truncate(edit.old_str)}"\n${diag}` };
           } else {
-            return { error: `old_str not found: "${truncate(edit.old_str)}"` };
+            const diag = diagnoseOldStrMismatch(oldNorm, content);
+            return { error: `old_str not found: "${truncate(edit.old_str)}".\n${diag}` };
           }
         }
 
@@ -827,6 +846,168 @@ function generateLocalDiff(
         parts.push(` ${String(i).padStart(numWidth, " ")} ${lineText}`);
       }
     }
+  }
+
+  return parts.join("\n");
+}
+
+// ─── old_str mismatch diagnostics ─────────────────────────────────────────
+
+/** Detect tab width from the file by analyzing indentation columns of tab-only lines. */
+function detectTabWidth(content: string): number {
+  const lines = content.split("\n");
+  const cols: number[] = [];
+  for (const line of lines) {
+    const nonTabIdx = line.search(/[^\t]/);
+    if (nonTabIdx === -1 || nonTabIdx === 0) continue;
+    cols.push(nonTabIdx);
+  }
+  if (cols.length < 2) return 0;
+  const diffs: number[] = [];
+  for (let i = 1; i < cols.length; i++) {
+    if (cols[i] === cols[i - 1] || cols[i]! > cols[i - 1]! + 8) continue;
+    diffs.push(cols[i]! - cols[i - 1]!);
+  }
+  if (diffs.length === 0) return 0;
+  const sorted = [...diffs].sort((a, b) => a - b);
+  const median = sorted[Math.floor(sorted.length / 2)]!;
+  return [2, 4, 8].reduce((best, w) => Math.abs(w - median) < Math.abs(best - median) ? w : best, 4);
+}
+
+export function diagnoseOldStrNotUnique(oldNorm: string, content: string): string {
+  const fileLines = content.split("\n");
+  const firstOldLine = (oldNorm.split("\n")[0] ?? "").trim();
+  const occurrences: number[] = [];
+  let idx = 0;
+  while ((idx = content.indexOf(oldNorm, idx)) !== -1) {
+    const lineNum = content.substring(0, idx).split("\n").length;
+    occurrences.push(lineNum);
+    idx++;
+  }
+  if (occurrences.length === 0) return "";
+  const shown = occurrences.slice(0, 5);
+  const extra = occurrences.length - shown.length;
+  const lines = shown.map((n) => `  line ${n}: "${(fileLines[n - 1] ?? "").replace(/\t/g, "\\t").slice(0, 60)}"`);
+  if (extra > 0) lines.push(`  and ${extra} more occurrence(s)`);
+  return `old_str appears ${occurrences.length} times:\n${lines.join("\n")}\nAdd more surrounding context to make it unique.`;
+}
+
+/** Try fuzzy match: normalize tab↔space and trailing whitespace, then search line-by-line. */
+function tryFuzzyLineMatch(
+  oldNorm: string,
+  content: string,
+  searchLineStart: number,
+): { idx: number; matched: string } | undefined {
+  const oldLines = oldNorm.split("\n");
+  const fileLines = content.split("\n");
+
+  const fuzzyEq = (fileLine: string, oldLine: string): boolean => {
+    if (fileLine === oldLine) return true;
+    for (const tw of [8, 4, 2]) {
+      if (fileLine.replace(/\t/g, " ".repeat(tw)) === oldLine.replace(/\t/g, " ".repeat(tw))) return true;
+    }
+    if (fileLine.replace(/[\t ]+$/, "") === oldLine.replace(/[\t ]+$/, "")) return true;
+    return false;
+  };
+
+  for (let i = searchLineStart; i <= fileLines.length - oldLines.length; i++) {
+    let ok = true;
+    for (let j = 0; j < oldLines.length; j++) {
+      if (!fuzzyEq(fileLines[i + j] ?? "", oldLines[j] ?? "")) { ok = false; break; }
+    }
+    if (ok) {
+      let idx = 0;
+      for (let k = 0; k < i; k++) idx += (fileLines[k] ?? "").length + 1;
+      const matched = oldLines.map((_, j) => fileLines[i + j]).join("\n");
+      // Check uniqueness in the fuzzy-matched range
+      const secondIdx = content.indexOf(matched, idx + 1);
+      if (secondIdx === -1) return { idx, matched };
+    }
+  }
+  return undefined;
+}
+
+/** Replace new_str's leading whitespace with the actual file line's leading whitespace style. */
+function normalizeIndentForFuzzy(actualLine: string, newLine: string): string {
+  const actualLeading = actualLine.match(/^[\t ]*/)?.[0] ?? "";
+  const newLeading = newLine.match(/^[\t ]*/)?.[0] ?? "";
+  if (actualLeading === newLeading) return newLine;
+  return actualLeading + newLine.slice(newLeading.length);
+}
+
+export function diagnoseOldStrMismatch(oldNorm: string, content: string, isConfigFile?: boolean): string {
+  const oldLines = oldNorm.split("\n");
+  const fileLines = content.split("\n");
+  const firstOldLine = oldLines[0] ?? "";
+  const parts: string[] = [];
+
+  // Find the closest matching line in the file
+  let bestMatchIdx = -1;
+  let bestMatchType = "";
+
+  for (let i = 0; i < fileLines.length; i++) {
+    const fileLine = fileLines[i] ?? "";
+
+    if (fileLine === firstOldLine) {
+      bestMatchIdx = i;
+      bestMatchType = "";
+      break;
+    }
+
+    if (fileLine.replace(/\t/g, "        ") === firstOldLine ||
+        fileLine.replace(/\t/g, "    ") === firstOldLine ||
+        fileLine.replace(/\t/g, "  ") === firstOldLine) {
+      bestMatchIdx = i;
+      bestMatchType = "tab vs space (file has tabs, old_str has spaces)";
+      break;
+    }
+
+    if (fileLine.replace(/[\t ]+$/, "") === firstOldLine.replace(/[\t ]+$/, "")) {
+      bestMatchIdx = i;
+      bestMatchType = "trailing whitespace mismatch";
+      break;
+    }
+
+    if (fileLine.toLowerCase() === firstOldLine.toLowerCase()) {
+      bestMatchIdx = i;
+      bestMatchType = "case mismatch";
+      break;
+    }
+
+    const trimmedOld = firstOldLine.trim();
+    if (trimmedOld.length > 3 && fileLine.includes(trimmedOld)) {
+      if (bestMatchIdx === -1) {
+        bestMatchIdx = i;
+        bestMatchType = "indent mismatch (content matches, whitespace differs)";
+      }
+    }
+  }
+
+  if (bestMatchIdx >= 0 && bestMatchType) {
+    parts.push(`Hint: ${bestMatchType} at line ${bestMatchIdx + 1}.`);
+    parts.push(`  actual: ${JSON.stringify(fileLines[bestMatchIdx])}`);
+    parts.push(`  expected: ${JSON.stringify(firstOldLine)}`);
+  } else if (bestMatchIdx >= 0) {
+    // First line matched, but full old_str block does not — find the first mismatching line
+    const oldArr = oldNorm.split("\n");
+    let mismatchLine = 0;
+    for (let j = 1; j < oldArr.length; j++) {
+      const fileLine = fileLines[bestMatchIdx + j] ?? "<EOF>";
+      const oldLine = oldArr[j] ?? "";
+      if (fileLine !== oldLine) {
+        mismatchLine = bestMatchIdx + j + 1;
+        parts.push(`Line ${bestMatchIdx + 1} matches, but diff at line ${mismatchLine}:`);
+        parts.push(`  actual: ${JSON.stringify(fileLine)}`);
+        parts.push(`  expected: ${JSON.stringify(oldLine)}`);
+        break;
+      }
+    }
+    if (mismatchLine === 0) {
+      parts.push(`First line matches at line ${bestMatchIdx + 1}, but full ${oldArr.length}-line block does not.`);
+    }
+  } else if (firstOldLine.trim().length > 3) {
+    parts.push(`Content "${firstOldLine.trim().slice(0, 60)}" not found anywhere in the file.`);
+    parts.push(`File may have changed — re-read it and try again.`);
   }
 
   return parts.join("\n");
