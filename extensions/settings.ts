@@ -26,7 +26,10 @@ export interface ProviderCache {
 }
 
 export interface McpServerEntry {
-  url: string;
+  url?: string;
+  command?: string;
+  args?: string[];
+  env?: Record<string, string>;
   enabled?: boolean;
 }
 

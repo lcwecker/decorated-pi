@@ -14,67 +14,60 @@ pi install /path/to/decorated-pi
 
 ### 1. Patch Tool
 
-Replaces Pi's built-in `edit` / `write` with a stronger `patch` tool:
+Replaces Pi's built-in `edit` / `write` with a stronger `patch` tool that adds unique safety and usability improvements on top of the native tools.
 
-- **anchor mechanism** — narrows the search range by specifying a unique string that appears before `old_str`, preventing mismatches in files with repeated patterns
-- **mtime tracking** — records file modification time on `read`, rejects `patch` if the file changed since last read, preventing blind or stale edits
-- **explicit overwrite** — offer atomic `overwrite: true` mode for overwrite files or full-file creation to prevent unintened overwrite
+| Capability | Pi native `edit` | `patch` |
+| ------ | :---: | :---: |
+| Exact string replacement | ✅ `oldText` | ✅ `old_str` |
+| Atomic overwrite | ✅ `write` | ✅ `overwrite` |
+| Syntax‑highlighted overwrite | ✅ streaming | ✅ incremental |
+| **Anchor‑based search** | ❌ extending `oldText` for uniqueness | ✅ `anchor` bounds scope for precise matching |
+| **Fuzzy whitespace match** | ❌ only reports "not found" | ✅ auto‑corrects tab↔space / trailing whitespace mismatches |
+| **Edit fault diagnostics** | ❌ only reports "not found" | ✅ pinpoint faults for LLM comprehension |
+| **Stale‑read protection** | ❌ Blind to external changes | ✅ `read` captures mtime, `patch` rejects stale targets |
 
-### 2. Secret redaction
+### 2. Smarter `@` File Search
+
+Replaces Pi's built-in `@` file completion with smarter matching and noise filtering:
+
+| Aspect | Pi native `@` | `decorated-pi` |
+| ------ | :---: | :---: |
+| **Speed** | ❌ re‑scans filesystem on every trigger | ✅ caches once per `@` trigger |
+| **Noise filtering** | ❌ no penalty system, shows hidden files | ✅ tiered penalty auto‑filters clutter |
+| **Default suggestions** | ❌ all files visible on empty query | ✅ only visible project files |
+| **Match precision** | ❌ case‑insensitive simple scoring | ✅ multi‑level case‑sensitive scoring |
+
+### 3. Secret redaction
 
 Three-layer detection: high-confidence known-format patterns (AWS, GitHub, OpenAI, etc.), config-key regex matching, and adjusted Shannon entropy heuristics for unknown secret-like values.
 
-### 3. Built-in MCP Client
-
-Zero-config MCP client with two built-in servers:
-
-| Server | Tool Prefix | Source |
-| --- | --- | --- |
-| Context7 | `context7_*` | `https://mcp.context7.com/mcp` |
-| Exa | `exa_*` | `https://mcp.exa.ai/mcp` |
-
-**Project-level config** — add custom MCP servers by placing an `mcp.json` or `.mcp.json` (also `.pi/mcp.json`, `.agents/mcp.json`, `.claude/mcp.json` and their `.`-prefixed variants) anywhere in your project tree. Servers found closer to `cwd` take precedence over ancestor directories.
+Example redaction on a `read` / `bash` output:
 
 ```json
 {
-  "mcpServers": {
-    "my-server": {
-      "url": "https://my-mcp.example.com/mcp",
-      "enabled": true
-    }
-  }
+  "aws_access_key_id": "AKI**************PLE",
+  "github_token": "ghp***************def",
+  "database_password": "Sup#######t99",
+  "api_key": "sk_**************f5a",
+  "random_secret": "a1b??????5f5"
 }
 ```
 
-**Global config** — persist custom servers in `~/.pi/agent/decorated-pi.json`:
-
-```json
-{
-  "mcpServers": {
-    "my-server": { "url": "https://my-mcp.example.com/mcp" }
-  }
-}
-```
-
-**Priority**: project > global > builtin. A server with the same name from a higher-priority source overrides lower ones.
-
-Use `/mcp` to view connection status and registered tools.
+> `*` = known pattern, `#` = config key regex, `?` = entropy heuristic.
 
 ### 4. Auxiliary Models (Image + Compact)
 
-Uses cheaper models for auxiliary tasks, configured via `/dp-model`:
+Offloads auxiliary ops to cheaper models, reducing cost on every session. Configured via `/dp-model`:
 
 - **Image read fallback** — when the model reads an image file, detects type via magic bytes, calls a configured vision-capable model, and replaces the read result with image analysis text (jpeg, png, gif, webp)
 - **Compact model** — uses a configured model for context compaction (instead of the main model), auto-resumes after compaction.
 
-### 5. Smart `@` File Search
+### 5. Progressive Context from `AGENTS.md` / `CLAUDE.md`
 
-Replaces Pi's default file search with a faster, project-aware search strategy:
+Extension capability: context is disclosed progressively as the agent works across different parts of the project.
 
-- Uses project-aware file discovery
-- Prioritizes filename-based matches for more intuitive results
-- Reduces clutter from hidden, cache, and build directories
-- Keeps default suggestions focused on visible project files
+- When reading or editing a file, discovers `AGENTS.md` / `CLAUDE.md` in that file's directory and ancestor directories
+- Newly discovered guidance is injected into tool results, scoped to the current context
 
 ### 6. LSP Tool Suite
 
@@ -85,12 +78,38 @@ A cleaned-up, minimal LSP toolset. The extension keeps only the two LSP tools th
 
 Supported languages: c/cpp, go, java, lua, json, python, ruby, rust, svelte, typescript
 
-### 7. Dynamic Subdirectory `AGENTS.md` / `CLAUDE.md`
+### 7. Built-in MCP Client
 
-When the agent reads or edits a file:
+Zero-config MCP client with built-in servers:
 
-- discovers `AGENTS.md` / `CLAUDE.md` in the file's directory and ancestor directories
-- injects newly discovered guidance into tool results
+| Server | Tool Prefix | Source |
+| --- | --- | --- |
+| Context7 | `context7_*` | `https://mcp.context7.com/mcp` |
+| Exa | `exa_*` | `https://mcp.exa.ai/mcp` |
+
+**Custom servers** in `.pi/agent/mcp.json` (project) or `~/.pi/agent/decorated-pi.json` (global). Project overrides global.
+
+```json
+{
+  "mcpServers": {
+    "my-server": {
+      "url": "https://my-mcp.example.com/mcp",
+      "enabled": true
+    },
+    "my-sse": {
+      "url": "https://my-mcp.example.com/sse",
+      "enabled": false
+    },
+    "my-stdio": {
+      "command": "npx",
+      "args": ["-y", "my-mcp-server"],
+      "env": { "DEBUG": "1" }
+    }
+  }
+}
+```
+
+Use `/mcp` to view connection status and registered tools.
 
 ### 8. Extend Providers
 

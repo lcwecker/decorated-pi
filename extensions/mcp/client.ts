@@ -1,6 +1,9 @@
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { SSEClientTransport } from "@modelcontextprotocol/sdk/client/sse.js";
+import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
+import type { McpServerConfig } from "./builtin.js";
+import { isSseUrl } from "./builtin.js";
 
 export interface McpToolSpec {
   name: string;
@@ -8,10 +11,10 @@ export interface McpToolSpec {
   inputSchema: Record<string, unknown>;
 }
 
-/** Per-server MCP client wrapper with fallback transport. */
+/** Per-server MCP client wrapper. Supports stdio, http, and sse transports. */
 export class McpConnection {
   client: Client;
-  transport: StreamableHTTPClientTransport | SSEClientTransport | undefined;
+  transport: StreamableHTTPClientTransport | SSEClientTransport | StdioClientTransport | undefined;
   tools: McpToolSpec[] = [];
   private connected = false;
 
@@ -19,7 +22,7 @@ export class McpConnection {
 
   constructor(
     public readonly serverName: string,
-    public readonly url: string,
+    public readonly config: McpServerConfig,
   ) {
     this.client = new Client({
       name: `decorated-pi-${serverName}`,
@@ -28,26 +31,31 @@ export class McpConnection {
   }
 
   async connect(timeoutMs = 8000): Promise<void> {
-    const connectWithFallback = async (): Promise<void> => {
-      let lastErr: Error | undefined;
-      try {
-        const transport = new StreamableHTTPClientTransport(new URL(this.url));
+    const connectAndListTools = async (): Promise<void> => {
+      if (this.config.command) {
+        // Stdio transport — spawn a local process
+        const transport = new StdioClientTransport({
+          command: this.config.command,
+          args: this.config.args,
+          env: this.config.env,
+        });
         await this.client.connect(transport);
         this.transport = transport;
         this.connected = true;
-      } catch (err) {
-        lastErr = err instanceof Error ? err : new Error(String(err));
-        try {
-          const transport = new SSEClientTransport(new URL(this.url));
+      } else if (this.config.url) {
+        // HTTP or SSE transport — determined by URL path
+        if (isSseUrl(this.config.url)) {
+          const transport = new SSEClientTransport(new URL(this.config.url));
           await this.client.connect(transport);
           this.transport = transport;
-          this.connected = true;
-        } catch (sseErr) {
-          const sseMessage = sseErr instanceof Error ? sseErr.message : String(sseErr);
-          throw new Error(
-            `MCP ${this.serverName}: StreamableHTTP failed (${lastErr.message}); SSE fallback also failed (${sseMessage})`,
-          );
+        } else {
+          const transport = new StreamableHTTPClientTransport(new URL(this.config.url));
+          await this.client.connect(transport);
+          this.transport = transport;
         }
+        this.connected = true;
+      } else {
+        throw new Error(`MCP ${this.serverName}: no url or command configured`);
       }
 
       const result = (await this.client.listTools()) as unknown as {
@@ -69,7 +77,7 @@ export class McpConnection {
       setTimeout(() => reject(new Error(`MCP ${this.serverName}: connection timed out after ${timeoutMs}ms`)), timeoutMs),
     );
 
-    await Promise.race([connectWithFallback(), timeout]);
+    await Promise.race([connectAndListTools(), timeout]);
   }
 
   async callTool(name: string, args: Record<string, unknown>): Promise<string> {

@@ -7,8 +7,10 @@ import { loadConfig } from "../settings.js";
 
 export interface McpServerConfig {
   name: string;
-  url: string;
-  description?: string;
+  url?: string;
+  command?: string;
+  args?: string[];
+  env?: Record<string, string>;
   enabled: boolean;
   source: "builtin" | "global" | "project";
 }
@@ -31,57 +33,40 @@ export const BUILTIN_MCP_SERVERS: Omit<McpServerConfig, "source">[] = [
 
 // ── Project-level config discovery ─────────────────────────────────────────
 
-const PROJECT_CONFIG_PATHS = [
-  ".pi/mcp.json",
-  ".pi/.mcp.json",
-  ".agents/mcp.json",
-  ".agents/.mcp.json",
-  ".claude/mcp.json",
-  ".claude/.mcp.json",
-  "mcp.json",
-  ".mcp.json",
-];
-
-function readMcpJson(filePath: string): Record<string, { url: string; enabled?: boolean }> | null {
+function readMcpJson(filePath: string): Record<string, { url?: string; command?: string; args?: string[]; env?: Record<string, string>; enabled?: boolean }> | null {
   try {
     const raw = JSON.parse(fs.readFileSync(filePath, "utf-8"));
     if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
     const servers = raw.mcpServers ?? raw["mcp-servers"];
     if (!servers || typeof servers !== "object" || Array.isArray(servers)) return null;
-    return servers as Record<string, { url: string; enabled?: boolean }>;
+    return servers as Record<string, { url?: string; command?: string; args?: string[]; env?: Record<string, string>; enabled?: boolean }>;
   } catch {
     return null;
   }
 }
 
-/** Load project-level MCP configs from cwd and its ancestor directories. */
+/** Load project-level MCP configs from cwd only. */
 export function loadProjectMcpConfigs(cwd: string): McpServerConfig[] {
   const configs: McpServerConfig[] = [];
   const seen = new Set<string>();
 
-  let current = path.resolve(cwd);
-  while (true) {
-    for (const relative of PROJECT_CONFIG_PATHS) {
-      const filePath = path.join(current, relative);
-      if (!fs.existsSync(filePath)) continue;
-      const servers = readMcpJson(filePath);
-      if (!servers) continue;
+  const filePath = path.join(cwd, ".pi/agent/mcp.json");
+  if (!fs.existsSync(filePath)) return [];
+  const servers = readMcpJson(filePath);
+  if (!servers) return [];
 
-      for (const [name, entry] of Object.entries(servers)) {
-        if (seen.has(name)) continue;
-        seen.add(name);
-        configs.push({
-          name,
-          url: entry.url,
-          enabled: entry.enabled !== false,
-          source: "project",
-        });
-      }
-    }
-
-    const parent = path.dirname(current);
-    if (parent === current) break;
-    current = parent;
+  for (const [name, entry] of Object.entries(servers)) {
+    if (seen.has(name)) continue;
+    seen.add(name);
+    configs.push({
+      name,
+      url: entry.url,
+      command: entry.command,
+      args: entry.args,
+      env: entry.env,
+      enabled: entry.enabled !== false,
+      source: "project",
+    });
   }
 
   return configs;
@@ -95,9 +80,17 @@ export function loadGlobalMcpConfigs(): McpServerConfig[] {
   return Object.entries(config.mcpServers).map(([name, entry]) => ({
     name,
     url: entry.url,
+    command: entry.command,
+    args: entry.args,
+    env: entry.env,
     enabled: entry.enabled !== false,
     source: "global" as const,
   }));
+}
+
+/** Returns true if the URL should use SSE transport (path ends with /sse). */
+export function isSseUrl(url: string): boolean {
+  return url.endsWith("/sse") || url.endsWith("/sse/");
 }
 
 /**
@@ -122,5 +115,5 @@ export function resolveMcpConfigs(cwd: string): McpServerConfig[] {
     byName.set(s.name, s);
   }
 
-  return [...byName.values()].filter((s) => s.enabled);
+  return [...byName.values()].filter((s) => s.enabled && (s.url || s.command));
 }

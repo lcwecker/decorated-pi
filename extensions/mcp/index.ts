@@ -42,7 +42,7 @@ export function setupMcp(pi: ExtensionAPI) {
 
       connectPromise = Promise.all(
         configs.map(async (server) => {
-          const conn = new McpConnection(server.name, server.url);
+          const conn = new McpConnection(server.name, server);
           conn.source = server.source;
 
           try {
