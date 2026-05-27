@@ -227,16 +227,12 @@ async function applyEdits(
       } else {
         const secondAnchor = content.indexOf(anchorNorm, anchorIdx + 1);
         if (secondAnchor !== -1) {
-          throw new ApplyError(
-            `Anchor is not unique in ${displayPath}: "${truncate(edit.anchor)}" ` +
-            `found at multiple locations. Choose a more specific anchor.`
-          );
+          anchorNotFoundMessage = `Anchor is not unique in ${displayPath}: "${truncate(edit.anchor)}".`;
+        } else {
+          searchFrom = anchorIdx;
+          displayAnchor = edit.anchor;
+          anchorMissing = false;
         }
-        // Search from anchor start position onward (anchor narrows search range)
-        // old_str may start at anchor position (anchor is a prefix of old_str)
-        searchFrom = anchorIdx;
-        displayAnchor = edit.anchor;
-        anchorMissing = false;
       }
     }
 
@@ -322,9 +318,10 @@ async function applyEdits(
 
   // Generate diff using only needed context lines (no full-file split)
   const mergedRanges = mergeRanges(neededRanges);
+  const currentLineOffsets = buildLineOffsets(content);
   const neededLines: Map<number, string> = new Map();
   for (const range of mergedRanges) {
-    const lines = extractLineRange(content, lineOffsets, range.startLine, range.endLine);
+    const lines = extractLineRange(content, currentLineOffsets, range.startLine, range.endLine);
     for (let i = 0; i < lines.length; i++) {
       neededLines.set(range.startLine + i, lines[i]);
     }
@@ -410,11 +407,12 @@ export async function computePatchPreview(
           } else {
             const secondAnchor = content.indexOf(anchorNorm, idx + 1);
             if (secondAnchor !== -1) {
-              return { error: `Anchor is not unique: "${truncate(edit.anchor)}"` };
+              anchorNotFoundMessage = `Anchor is not unique: "${truncate(edit.anchor)}"`;
+            } else {
+              searchFrom = idx;
+              displayAnchor = edit.anchor;
+              anchorMissing = false;
             }
-            searchFrom = idx;
-            displayAnchor = edit.anchor;
-            anchorMissing = false;
           }
         }
 
@@ -456,9 +454,10 @@ export async function computePatchPreview(
 
       // Merge needed ranges and extract only those lines
       const mergedRanges = mergeRanges(neededRanges);
+      const currentLineOffsets = buildLineOffsets(content);
       const neededLines: Map<number, string> = new Map();
       for (const range of mergedRanges) {
-        const lines = extractLineRange(content, lineOffsets, range.startLine, range.endLine);
+        const lines = extractLineRange(content, currentLineOffsets, range.startLine, range.endLine);
         for (let i = 0; i < lines.length; i++) {
           neededLines.set(range.startLine + i, lines[i]);
         }

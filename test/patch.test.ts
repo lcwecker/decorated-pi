@@ -114,13 +114,12 @@ describe("applyPatches", () => {
     expect(readFile("f.txt")).toBe("foo\nbar\nreturn x\nbaz\nreturn 42\n");
   });
 
-  it("fails when anchor appears multiple times", async () => {
+  it("falls back to global old_str search when anchor appears multiple times", async () => {
     writeFile("f.txt", "marker\nstuff\nmarker\nmore\n");
-    await expect(
-      applyPatches([
-        { path: "f.txt", edits: [{ anchor: "marker", old_str: "stuff", new_str: "x" }] },
-      ], tmpDir),
-    ).rejects.toThrow(ApplyError);
+    await applyPatches([
+      { path: "f.txt", edits: [{ anchor: "marker", old_str: "stuff", new_str: "x" }] },
+    ], tmpDir);
+    expect(readFile("f.txt")).toBe("marker\nx\nmarker\nmore\n");
   });
 
   it("falls back to global old_str search when anchor not found", async () => {
@@ -408,6 +407,17 @@ describe("applyPatches", () => {
     const diff = generatePatchDiff(result);
 
     expect(diff).toContain("@@ lines 1 @@ anchor: nope (missing)");
+  });
+
+  it("generatePatchDiff preserves context lines after length-changing edits", async () => {
+    writeFile("f.txt", "alpha\nstuff\nbeta\ngamma\n");
+    const result = await applyPatches([
+      { path: "f.txt", edits: [{ old_str: "stuff", new_str: "x" }] },
+    ], tmpDir);
+    const diff = generatePatchDiff(result);
+    // Context lines after the edit (beta, gamma) must be intact, not garbled
+    expect(diff).toContain(" 3 beta");
+    expect(diff).toContain(" 4 gamma");
   });
 
   it("generatePatchDiff uses a single blank line between distant chunks", async () => {
