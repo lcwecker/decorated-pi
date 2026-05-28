@@ -39,6 +39,7 @@ export interface ModuleSettings {
   "smart-at"?: boolean;
   patch?: boolean;
   mcp?: boolean;
+  wakatime?: boolean;
 }
 
 export interface DecoratedPiConfig {
@@ -124,6 +125,7 @@ const DEFAULT_MODULES: Required<ModuleSettings> = {
   "smart-at": true,
   patch: true,
   mcp: true,
+  wakatime: true,
 };
 
 export function isModuleEnabled(name: keyof ModuleSettings): boolean {

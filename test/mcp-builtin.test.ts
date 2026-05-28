@@ -211,16 +211,17 @@ describe("loadProjectMcpConfigs", () => {
     expect(configs.find((c) => c.name === "enabled")?.enabled).toBe(true);
   });
 
-  it("dedupes duplicate server names (first wins)", () => {
-    writeJson(path.join(tmpDir, ".pi/agent/mcp.json"), {
-      mcpServers: {
-        "dup": { url: "http://localhost:3000/a" },
-        "dup": { url: "http://localhost:3000/b" },
-      },
-    });
+  it("dedupes duplicate server names (last JSON key wins before load)", () => {
+    fs.mkdirSync(path.join(tmpDir, ".pi/agent"), { recursive: true });
+    fs.writeFileSync(
+      path.join(tmpDir, ".pi/agent/mcp.json"),
+      '{"mcpServers":{"dup":{"url":"http://localhost:3000/a"},"dup":{"url":"http://localhost:3000/b"}}}',
+      "utf-8",
+    );
     const configs = loadProjectMcpConfigs(tmpDir);
     expect(configs).toHaveLength(1);
     expect(configs[0].name).toBe("dup");
+    expect(configs[0].url).toBe("http://localhost:3000/b");
   });
 
   it("accepts both mcpServers and mcp-servers keys", () => {

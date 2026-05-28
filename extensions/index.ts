@@ -14,6 +14,7 @@ import { setupLsp } from "./lsp/index";
 import { setupProviders } from "./providers/index";
 import { setupSmartAt } from "./smart-at";
 import { setupMcp } from "./mcp/index.js";
+import { setupWakatime } from "./wakatime";
 import { isModuleEnabled } from "./settings";
 
 export default function (pi: ExtensionAPI) {
@@ -31,4 +32,5 @@ export default function (pi: ExtensionAPI) {
   if (isModuleEnabled("lsp"))       setupLsp(pi);
   if (isModuleEnabled("smart-at"))  setupSmartAt(pi);
   if (isModuleEnabled("mcp"))       setupMcp(pi);
+  if (isModuleEnabled("wakatime")) setupWakatime(pi);
 }

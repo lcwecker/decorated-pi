@@ -66,6 +66,7 @@ const MODULE_LABELS: Record<keyof ModuleSettings, string> = {
   lsp: "LSP",
   "smart-at": "@ overload",
   mcp: "MCP",
+  wakatime: "WakaTime",
 };
 
 const MODULE_DESCS: Record<keyof ModuleSettings, string> = {
@@ -74,6 +75,7 @@ const MODULE_DESCS: Record<keyof ModuleSettings, string> = {
   lsp: "Language server diagnostics, hover, definition, references, symbols, rename",
   "smart-at": "Project-aware file search replacing default autocomplete",
   mcp: "MCP client for context7 and exa (zero-config)",
+  wakatime: "Send coding activity heartbeats to WakaTime",
 };
 
 class ModuleSettingsComponent extends Container {

@@ -31,7 +31,7 @@ export function setupMcp(pi: ExtensionAPI) {
           s.name,
           {
             name: s.name,
-            url: s.url,
+            url: s.url ?? s.command ?? "(unknown)",
             source: s.source,
             state: "connecting" as const,
             toolCount: 0,
@@ -73,7 +73,7 @@ export function setupMcp(pi: ExtensionAPI) {
 
             allServers.set(server.name, {
               name: server.name,
-              url: server.url,
+              url: server.url ?? server.command ?? "(unknown)",
               source: server.source,
               state: "connected",
               toolCount: conn.tools.length,
@@ -83,7 +83,7 @@ export function setupMcp(pi: ExtensionAPI) {
             const msg = err instanceof Error ? err.message : String(err);
             allServers.set(server.name, {
               name: server.name,
-              url: server.url,
+              url: server.url ?? server.command ?? "(unknown)",
               source: server.source,
               state: "failed",
               toolCount: 0,

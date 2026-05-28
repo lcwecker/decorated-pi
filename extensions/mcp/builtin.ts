@@ -11,6 +11,7 @@ export interface McpServerConfig {
   command?: string;
   args?: string[];
   env?: Record<string, string>;
+  description?: string;
   enabled: boolean;
   source: "builtin" | "global" | "project";
 }
@@ -65,6 +66,7 @@ export function loadProjectMcpConfigs(cwd: string): McpServerConfig[] {
       args: entry.args,
       env: entry.env,
       enabled: entry.enabled !== false,
+      description: undefined,
       source: "project",
     });
   }
@@ -83,6 +85,7 @@ export function loadGlobalMcpConfigs(): McpServerConfig[] {
     command: entry.command,
     args: entry.args,
     env: entry.env,
+    description: undefined,
     enabled: entry.enabled !== false,
     source: "global" as const,
   }));

@@ -193,7 +193,7 @@ function normalizeDisplayText(text: string): string {
 }
 
 function replaceTabs(text: string): string {
-  return text.replace(/\t/g, "   ");
+  return text.replace(/\t/g, "    ");
 }
 
 function highlightSingleLine(line: string, lang: string | undefined): string {
@@ -302,7 +302,7 @@ function appendPatchDiffChildren(parent: Box, body: string, theme: any): void {
 
   const flush = () => {
     if (buffer.length === 0) return;
-    parent.addChild(new Text(renderDiff(buffer.join("\n")), 0, 0));
+    parent.addChild(new Text(renderDiff(replaceTabs(buffer.join("\n"))), 0, 0));
     buffer = [];
   };
 
