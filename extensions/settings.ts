@@ -31,6 +31,7 @@ export interface McpServerEntry {
   args?: string[];
   env?: Record<string, string>;
   enabled?: boolean;
+  description?: string;
 }
 
 export interface ModuleSettings {
@@ -45,6 +46,8 @@ export interface ModuleSettings {
 export interface DecoratedPiConfig {
   imageModelKey?: string | null;
   compactModelKey?: string | null;
+  mcpBrokerModelKey?: string | null;
+  mcpDescriptions?: Record<string, string>;
   providers?: Record<string, ProviderCache>;
   modules?: ModuleSettings;
   mcpServers?: Record<string, McpServerEntry>;
@@ -97,6 +100,28 @@ export function removeProvider(name: string) {
   }
 }
 
+// ─── Project-level config ────────────────────────────────────────────────
+
+function projectConfigPath(cwd: string): string {
+  return path.join(cwd, ".pi", "agent", "decorated-pi.json");
+}
+
+function loadProjectConfig(cwd: string): DecoratedPiConfig {
+  try {
+    const p = projectConfigPath(cwd);
+    if (fs.existsSync(p)) return JSON.parse(fs.readFileSync(p, "utf-8"));
+  } catch {}
+  return {};
+}
+
+function saveProjectConfig(cwd: string, partial: Partial<DecoratedPiConfig>) {
+  const p = projectConfigPath(cwd);
+  const dir = path.dirname(p);
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+  const current = loadProjectConfig(cwd);
+  fs.writeFileSync(p, JSON.stringify({ ...current, ...partial }, null, 2), "utf-8");
+}
+
 // ─── Getter ─────────────────────────────────────────────────────────────────
 
 export function getImageModelKey(): string | null {
@@ -115,6 +140,36 @@ export function setImageModelKey(key: string | null) {
 
 export function setCompactModelKey(key: string | null) {
   saveConfig({ compactModelKey: key });
+}
+
+export function getMcpBrokerModelKey(): string | null {
+  return loadConfig().mcpBrokerModelKey ?? null;
+}
+
+export function setMcpBrokerModelKey(key: string | null) {
+  saveConfig({ mcpBrokerModelKey: key });
+}
+
+export function getMcpDescription(name: string, cwd?: string): string | undefined {
+  if (cwd) {
+    const projectCfg = loadProjectConfig(cwd);
+    if (projectCfg.mcpDescriptions?.[name]) return projectCfg.mcpDescriptions[name];
+  }
+  return loadConfig().mcpDescriptions?.[name];
+}
+
+export function setMcpDescription(name: string, description: string, cwd?: string) {
+  if (cwd) {
+    const cfg = loadProjectConfig(cwd);
+    const descriptions = { ...cfg.mcpDescriptions };
+    descriptions[name] = description;
+    saveProjectConfig(cwd, { mcpDescriptions: descriptions });
+    return;
+  }
+  const cfg = loadConfig();
+  const descriptions = { ...cfg.mcpDescriptions };
+  descriptions[name] = description;
+  saveConfig({ mcpDescriptions: descriptions });
 }
 
 // ─── Module Switches ──────────────────────────────────────────────────────────

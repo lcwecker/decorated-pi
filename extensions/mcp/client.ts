@@ -38,6 +38,7 @@ export class McpConnection {
           command: this.config.command,
           args: this.config.args,
           env: this.config.env,
+          stderr: "ignore",
         });
         await this.client.connect(transport);
         this.transport = transport;

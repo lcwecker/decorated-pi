@@ -25,8 +25,8 @@ import { fileTypeFromFile } from "file-type";
 import { isContextOverflow, type Model } from "@earendil-works/pi-ai";
 import {
   loadConfig, saveConfig, parseModelKey, formatModelKey,
-  getImageModelKey, getCompactModelKey,
-  setImageModelKey, setCompactModelKey,
+  getImageModelKey, getCompactModelKey, getMcpBrokerModelKey,
+  setImageModelKey, setCompactModelKey, setMcpBrokerModelKey,
 } from "./settings.js";
 import * as fs from "node:fs";
 import * as os from "node:os";
@@ -172,6 +172,7 @@ function setupImageReadFallback(pi: ExtensionAPI) {
 
 const TAB_IMAGE = 0;
 const TAB_COMPACT = 1;
+const TAB_BROKER = 2;
 
 export class ModelPickerComponent extends Container {
   private searchInput: Input;
@@ -182,6 +183,7 @@ export class ModelPickerComponent extends Container {
   private activeTab = TAB_IMAGE;
   private imageKey: string | null;
   private compactKey: string | null;
+  private brokerKey: string | null;
   private allItems: { label: string; desc: string; model: Model<any> | null; modelName?: string }[] = [];
   private filtered: typeof this.allItems = [];
   private selectedIndex = 0;
@@ -197,6 +199,7 @@ export class ModelPickerComponent extends Container {
     this.onDone = onDone;
     this.imageKey = getImageModelKey();
     this.compactKey = getCompactModelKey();
+    this.brokerKey = getMcpBrokerModelKey();
 
     this.addChild(new DynamicBorder());
     this.addChild(new Spacer(1));
@@ -232,8 +235,8 @@ export class ModelPickerComponent extends Container {
     }
   }
 
-  private currentKey() { return this.activeTab === TAB_IMAGE ? this.imageKey : this.compactKey; }
-  private currentKind() { return this.activeTab === TAB_IMAGE ? "image" : "compact"; }
+  private currentKey() { return this.activeTab === TAB_IMAGE ? this.imageKey : this.activeTab === TAB_BROKER ? this.brokerKey : this.compactKey; }
+  private currentKind() { return this.activeTab === TAB_IMAGE ? "image" : this.activeTab === TAB_BROKER ? "broker" : "compact"; }
 
   private switchTab(tab: number) {
     this.activeTab = tab;
@@ -260,16 +263,21 @@ export class ModelPickerComponent extends Container {
     const t = this.theme;
     const im = this.activeTab === TAB_IMAGE ? t.fg("accent", "●") : "○";
     const cm = this.activeTab === TAB_COMPACT ? t.fg("accent", "●") : "○";
-    const il = this.activeTab === TAB_IMAGE ? t.bold("Image Model") : t.fg("dim", "Image Model");
-    const cl = this.activeTab === TAB_COMPACT ? t.bold("Compact Model") : t.fg("dim", "Compact Model");
-    this.tabTitle.setText(`${im} ${il}  |  ${cm} ${cl}`);
+    const bm = this.activeTab === TAB_BROKER ? t.fg("accent", "●") : "○";
+    const il = this.activeTab === TAB_IMAGE ? t.bold("Image") : t.fg("dim", "Image");
+    const cl = this.activeTab === TAB_COMPACT ? t.bold("Compact") : t.fg("dim", "Compact");
+    const bl = this.activeTab === TAB_BROKER ? t.bold("Broker") : t.fg("dim", "Broker");
+    this.tabTitle.setText(`${im} ${il}  |  ${cm} ${cl}  |  ${bm} ${bl}`);
     const key = this.currentKey();
     this.subtitleText.setText(key ? t.fg("warning", `Current ${this.currentKind()} model: ${key}`) : t.fg("warning", `No ${this.currentKind()} model set`));
   }
 
   handleInput(keyData: string) {
     const kb = getKeybindings();
-    if (kb.matches(keyData, "tui.input.tab")) { this.switchTab(this.activeTab === TAB_IMAGE ? TAB_COMPACT : TAB_IMAGE); this.tui.requestRender(); return; }
+    if (kb.matches(keyData, "tui.input.tab")) {
+      const next = this.activeTab === TAB_IMAGE ? TAB_COMPACT : this.activeTab === TAB_COMPACT ? TAB_BROKER : TAB_IMAGE;
+      this.switchTab(next); this.tui.requestRender(); return;
+    }
     if (kb.matches(keyData, "tui.select.up")) { this.selectedIndex = this.selectedIndex === 0 ? this.filtered.length - 1 : this.selectedIndex - 1; this.updateList(); return; }
     if (kb.matches(keyData, "tui.select.down")) { this.selectedIndex = this.selectedIndex === this.filtered.length - 1 ? 0 : this.selectedIndex + 1; this.updateList(); return; }
     if (kb.matches(keyData, "tui.select.confirm")) { const s = this.filtered[this.selectedIndex]; if (s) this.selectModel(s.model); return; }
@@ -289,12 +297,15 @@ export class ModelPickerComponent extends Container {
     const kind = this.currentKind();
     if (model) {
       if (kind === "image") setImageModelKey(formatModelKey(model));
+      else if (kind === "broker") setMcpBrokerModelKey(formatModelKey(model));
       else setCompactModelKey(formatModelKey(model));
     } else {
       if (kind === "image") setImageModelKey(null);
+      else if (kind === "broker") setMcpBrokerModelKey(null);
       else setCompactModelKey(null);
     }
     if (kind === "image") this.imageKey = model ? formatModelKey(model) : null;
+    else if (kind === "broker") this.brokerKey = model ? formatModelKey(model) : null;
     else this.compactKey = model ? formatModelKey(model) : null;
     this.switchTab(this.activeTab); this.tui.requestRender();
   }

@@ -19,7 +19,14 @@ import {
   loadProjectMcpConfigs,
   loadGlobalMcpConfigs,
   resolveMcpConfigs,
+  loadMcpCache,
+  saveMcpCache,
+  updateServerCache,
+  cleanupStaleCache,
+  toggleMcpServerEnabled,
   BUILTIN_MCP_SERVERS,
+  BUILTIN_MCP_CACHE,
+  type McpCache,
 } from "../extensions/mcp/builtin.js";
 
 // ─── Temp dir helpers ────────────────────────────────────────────────────────
@@ -339,26 +346,28 @@ describe("resolveMcpConfigs priority", () => {
     expect(context7?.source).toBe("project");
   });
 
-  it("disables builtin server when enabled: false in global", () => {
+  it("marks builtin server as disabled when enabled: false in global", () => {
     writeJson(CONFIG_FILE, {
       mcpServers: {
         "context7": { enabled: false },
       },
     });
     const configs = resolveMcpConfigs(tmpDir);
-    const names = configs.map((c) => c.name);
-    expect(names).not.toContain("context7");
+    const context7 = configs.find((c) => c.name === "context7");
+    expect(context7).toBeDefined();
+    expect(context7!.enabled).toBe(false);
   });
 
-  it("disables builtin server when enabled: false in project", () => {
+  it("marks builtin server as disabled when enabled: false in project", () => {
     writeJson(path.join(tmpDir, ".pi/agent/mcp.json"), {
       mcpServers: {
         "exa": { enabled: false },
       },
     });
     const configs = resolveMcpConfigs(tmpDir);
-    const names = configs.map((c) => c.name);
-    expect(names).not.toContain("exa");
+    const exa = configs.find((c) => c.name === "exa");
+    expect(exa).toBeDefined();
+    expect(exa!.enabled).toBe(false);
   });
 
   it("filters out servers with neither url nor command", () => {
@@ -403,5 +412,344 @@ describe("resolveMcpConfigs priority", () => {
     const configs = resolveMcpConfigs(tmpDir);
     const names = configs.map((c) => c.name);
     expect(names).toContain("project-only");
+  });
+
+  it("preserves builtin url when global config only sets enabled", () => {
+    writeJson(CONFIG_FILE, {
+      mcpServers: {
+        "context7": { enabled: true },
+      },
+    });
+    const configs = resolveMcpConfigs(tmpDir);
+    const context7 = configs.find((c) => c.name === "context7");
+    expect(context7?.url).toBe("https://mcp.context7.com/mcp");
+  });
+
+  it("preserves builtin url when project config only sets enabled", () => {
+    writeJson(path.join(tmpDir, ".pi/agent/mcp.json"), {
+      mcpServers: {
+        "exa": { enabled: true },
+      },
+    });
+    const configs = resolveMcpConfigs(tmpDir);
+    const exa = configs.find((c) => c.name === "exa");
+    expect(exa?.url).toBe("https://mcp.exa.ai/mcp");
+  });
+
+  it("preserves builtin description when global config only sets url", () => {
+    writeJson(CONFIG_FILE, {
+      mcpServers: {
+        "context7": { url: "http://custom/mcp" },
+      },
+    });
+    const configs = resolveMcpConfigs(tmpDir);
+    const context7 = configs.find((c) => c.name === "context7");
+    expect(context7?.description).toBe("Context7 documentation and code examples");
+    expect(context7?.url).toBe("http://custom/mcp");
+  });
+
+  it("project description overrides global description overrides builtin", () => {
+    writeJson(CONFIG_FILE, {
+      mcpServers: {
+        "context7": { description: "global desc" },
+      },
+    });
+    writeJson(path.join(tmpDir, ".pi/agent/mcp.json"), {
+      mcpServers: {
+        "context7": { description: "project desc" },
+      },
+    });
+    const configs = resolveMcpConfigs(tmpDir);
+    const context7 = configs.find((c) => c.name === "context7");
+    expect(context7?.description).toBe("project desc");
+  });
+});
+
+// ═════════════════════════════════════════════════════════════════════════════
+// loadMcpCache
+// ═════════════════════════════════════════════════════════════════════════════
+
+describe("loadMcpCache", () => {
+  let tmpDir: string;
+
+  beforeEach(() => {
+    tmpDir = mkTempDir("mcp-cache-");
+  });
+
+  afterEach(() => {
+    rmrf(tmpDir);
+  });
+
+  it("returns BUILTIN_MCP_CACHE when no cache files exist", () => {
+    const cache = loadMcpCache(tmpDir);
+    expect(cache).toBeDefined();
+    expect(Object.keys(cache!.servers)).toContain("context7");
+    expect(Object.keys(cache!.servers)).toContain("exa");
+    expect(cache!.servers["context7"].tools).toHaveLength(2);
+    expect(cache!.servers["exa"].tools).toHaveLength(2);
+  });
+
+  it("global cache overrides builtin for same server", () => {
+    const globalCachePath = path.join(os.homedir(), ".pi/agent/mcp-cache.json");
+    const backup = fs.existsSync(globalCachePath) ? fs.readFileSync(globalCachePath, "utf-8") : null;
+    try {
+      saveMcpCache({
+        servers: {
+          context7: {
+            description: "overridden",
+            tools: [{ name: "custom-tool", description: "custom", inputSchema: {} }],
+            cachedAt: 12345,
+          },
+        },
+      }, "global");
+
+      const cache = loadMcpCache(tmpDir);
+      expect(cache!.servers["context7"].description).toBe("overridden");
+      expect(cache!.servers["context7"].tools).toHaveLength(1);
+      expect(cache!.servers["context7"].tools[0].name).toBe("custom-tool");
+      // exa should still be from builtin
+      expect(Object.keys(cache!.servers)).toContain("exa");
+    } finally {
+      if (backup !== null) {
+        fs.writeFileSync(globalCachePath, backup, "utf-8");
+      } else if (fs.existsSync(globalCachePath)) {
+        fs.unlinkSync(globalCachePath);
+      }
+    }
+  });
+
+  it("project cache overrides global cache", () => {
+    const globalCachePath = path.join(os.homedir(), ".pi/agent/mcp-cache.json");
+    const backup = fs.existsSync(globalCachePath) ? fs.readFileSync(globalCachePath, "utf-8") : null;
+    try {
+      saveMcpCache({
+        servers: {
+          exa: { description: "global-exa", tools: [], cachedAt: 1 },
+        },
+      }, "global");
+
+      saveMcpCache({
+        servers: {
+          exa: { description: "project-exa", tools: [], cachedAt: 2 },
+        },
+      }, "project", tmpDir);
+
+      const cache = loadMcpCache(tmpDir);
+      expect(cache!.servers["exa"].description).toBe("project-exa");
+    } finally {
+      if (backup !== null) {
+        fs.writeFileSync(globalCachePath, backup, "utf-8");
+      } else if (fs.existsSync(globalCachePath)) {
+        fs.unlinkSync(globalCachePath);
+      }
+    }
+  });
+
+  it("builtin servers have cachedAt=0 when no file cache", () => {
+    const globalCachePath = path.join(os.homedir(), ".pi/agent/mcp-cache.json");
+    const backup = fs.existsSync(globalCachePath) ? fs.readFileSync(globalCachePath, "utf-8") : null;
+    try {
+      // Ensure no global cache exists
+      if (fs.existsSync(globalCachePath)) fs.unlinkSync(globalCachePath);
+      const cache = loadMcpCache(tmpDir);
+      expect(cache!.servers["context7"].cachedAt).toBe(0);
+      expect(cache!.servers["exa"].cachedAt).toBe(0);
+    } finally {
+      if (backup !== null) {
+        fs.writeFileSync(globalCachePath, backup, "utf-8");
+      }
+    }
+  });
+});
+
+// ═════════════════════════════════════════════════════════════════════════════
+// saveMcpCache / updateServerCache
+// ═════════════════════════════════════════════════════════════════════════════
+
+describe("saveMcpCache / updateServerCache", () => {
+  let tmpDir: string;
+
+  beforeEach(() => {
+    tmpDir = mkTempDir("mcp-cache-");
+  });
+
+  afterEach(() => {
+    rmrf(tmpDir);
+  });
+
+  it("saveMcpCache writes to project scope", () => {
+    const cache: McpCache = {
+      servers: {
+        test: { description: "test", tools: [], cachedAt: 99 },
+      },
+    };
+    saveMcpCache(cache, "project", tmpDir);
+    const filePath = path.join(tmpDir, ".pi/agent/mcp-cache.json");
+    expect(fs.existsSync(filePath)).toBe(true);
+    const loaded = JSON.parse(fs.readFileSync(filePath, "utf-8"));
+    expect(loaded.servers["test"].description).toBe("test");
+  });
+
+  it("updateServerCache adds entry to existing cache", () => {
+    const cachePath = path.join(tmpDir, ".pi/agent/mcp-cache.json");
+    fs.mkdirSync(path.dirname(cachePath), { recursive: true });
+    fs.writeFileSync(cachePath, JSON.stringify({
+      servers: { existing: { description: "existing", tools: [], cachedAt: 1 } },
+    }), "utf-8");
+
+    updateServerCache("new-server", {
+      description: "new server",
+      tools: [{ name: "tool1", description: "a tool", inputSchema: {} }],
+      cachedAt: 2,
+    }, "project", tmpDir);
+
+    const loaded = JSON.parse(fs.readFileSync(cachePath, "utf-8"));
+    expect(Object.keys(loaded.servers)).toContain("existing");
+    expect(Object.keys(loaded.servers)).toContain("new-server");
+    expect(loaded.servers["new-server"].description).toBe("new server");
+  });
+
+  it("updateServerCache overwrites existing entry", () => {
+    const cachePath = path.join(tmpDir, ".pi/agent/mcp-cache.json");
+    fs.mkdirSync(path.dirname(cachePath), { recursive: true });
+    fs.writeFileSync(cachePath, JSON.stringify({
+      servers: { myserver: { description: "old", tools: [], cachedAt: 1 } },
+    }), "utf-8");
+
+    updateServerCache("myserver", {
+      description: "updated",
+      tools: [],
+      cachedAt: 99,
+    }, "project", tmpDir);
+
+    const loaded = JSON.parse(fs.readFileSync(cachePath, "utf-8"));
+    expect(loaded.servers["myserver"].description).toBe("updated");
+    expect(loaded.servers["myserver"].cachedAt).toBe(99);
+  });
+});
+
+// ═════════════════════════════════════════════════════════════════════════════
+// cleanupStaleCache
+// ═════════════════════════════════════════════════════════════════════════════
+
+describe("cleanupStaleCache", () => {
+  let tmpDir: string;
+
+  beforeEach(() => {
+    tmpDir = mkTempDir("mcp-cache-");
+  });
+
+  afterEach(() => {
+    rmrf(tmpDir);
+  });
+
+  it("removes servers not in configs from project cache", () => {
+    const cachePath = path.join(tmpDir, ".pi/agent/mcp-cache.json");
+    fs.mkdirSync(path.dirname(cachePath), { recursive: true });
+    fs.writeFileSync(cachePath, JSON.stringify({
+      servers: {
+        keep: { description: "keep", tools: [], cachedAt: 1 },
+        remove: { description: "remove", tools: [], cachedAt: 2 },
+      },
+    }), "utf-8");
+
+    cleanupStaleCache([
+      { name: "keep", url: "http://test", enabled: true, source: "project" },
+    ], tmpDir);
+
+    const loaded = JSON.parse(fs.readFileSync(cachePath, "utf-8"));
+    expect(Object.keys(loaded.servers)).toEqual(["keep"]);
+  });
+
+  it("preserves servers that are in configs", () => {
+    const cachePath = path.join(tmpDir, ".pi/agent/mcp-cache.json");
+    fs.mkdirSync(path.dirname(cachePath), { recursive: true });
+    fs.writeFileSync(cachePath, JSON.stringify({
+      servers: {
+        a: { description: "a", tools: [], cachedAt: 1 },
+        b: { description: "b", tools: [], cachedAt: 2 },
+      },
+    }), "utf-8");
+
+    cleanupStaleCache([
+      { name: "a", url: "http://a", enabled: true, source: "project" },
+      { name: "b", url: "http://b", enabled: true, source: "project" },
+    ], tmpDir);
+
+    const loaded = JSON.parse(fs.readFileSync(cachePath, "utf-8"));
+    expect(Object.keys(loaded.servers).sort()).toEqual(["a", "b"]);
+  });
+
+  it("does nothing when cache file does not exist", () => {
+    cleanupStaleCache([
+      { name: "any", url: "http://any", enabled: true, source: "project" },
+    ], tmpDir);
+    // Should not throw
+    expect(true).toBe(true);
+  });
+});
+
+// ═════════════════════════════════════════════════════════════════════════════
+// toggleMcpServerEnabled
+// ═════════════════════════════════════════════════════════════════════════════
+
+describe("toggleMcpServerEnabled", () => {
+  let tmpDir: string;
+
+  beforeEach(() => {
+    tmpDir = mkTempDir("mcp-toggle-");
+  });
+
+  afterEach(() => {
+    rmrf(tmpDir);
+  });
+
+  it("disables a project server", () => {
+    const filePath = path.join(tmpDir, ".pi/agent/mcp.json");
+    fs.mkdirSync(path.dirname(filePath), { recursive: true });
+    fs.writeFileSync(filePath, JSON.stringify({
+      mcpServers: { myserver: { url: "http://test", enabled: true } },
+    }), "utf-8");
+
+    toggleMcpServerEnabled("myserver", false, "project", tmpDir);
+
+    const loaded = JSON.parse(fs.readFileSync(filePath, "utf-8"));
+    expect(loaded.mcpServers["myserver"].enabled).toBe(false);
+  });
+
+  it("enables a project server", () => {
+    const filePath = path.join(tmpDir, ".pi/agent/mcp.json");
+    fs.mkdirSync(path.dirname(filePath), { recursive: true });
+    fs.writeFileSync(filePath, JSON.stringify({
+      mcpServers: { myserver: { url: "http://test", enabled: false } },
+    }), "utf-8");
+
+    toggleMcpServerEnabled("myserver", true, "project", tmpDir);
+
+    const loaded = JSON.parse(fs.readFileSync(filePath, "utf-8"));
+    expect(loaded.mcpServers["myserver"].enabled).toBe(true);
+  });
+
+  it("creates config entry for nonexistent server", () => {
+    toggleMcpServerEnabled("newserver", false, "project", tmpDir);
+
+    const filePath = path.join(tmpDir, ".pi/agent/mcp.json");
+    const loaded = JSON.parse(fs.readFileSync(filePath, "utf-8"));
+    expect(loaded.mcpServers["newserver"].enabled).toBe(false);
+  });
+
+  it("preserves existing config fields when toggling", () => {
+    const filePath = path.join(tmpDir, ".pi/agent/mcp.json");
+    fs.mkdirSync(path.dirname(filePath), { recursive: true });
+    fs.writeFileSync(filePath, JSON.stringify({
+      mcpServers: { myserver: { url: "http://test", enabled: true, description: "my server" } },
+    }), "utf-8");
+
+    toggleMcpServerEnabled("myserver", false, "project", tmpDir);
+
+    const loaded = JSON.parse(fs.readFileSync(filePath, "utf-8"));
+    expect(loaded.mcpServers["myserver"].enabled).toBe(false);
+    expect(loaded.mcpServers["myserver"].url).toBe("http://test");
+    expect(loaded.mcpServers["myserver"].description).toBe("my server");
   });
 });

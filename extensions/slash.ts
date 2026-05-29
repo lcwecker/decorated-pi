@@ -9,7 +9,8 @@
 import type { ExtensionAPI, ExtensionContext, Theme as PiTheme } from "@earendil-works/pi-coding-agent";
 import { ModelPickerComponent } from "./model-integration.js";
 import { getAllModuleSettings, setModuleEnabled, type ModuleSettings } from "./settings.js";
-import { getMcpStatus } from "./mcp/index.js";
+import { getMcpStatus, refreshServerCache, updateConfigEnabled } from "./mcp/index.js";
+import { toggleMcpServerEnabled } from "./mcp/builtin.js";
 import { Container, SettingsList, Spacer, Text, type TUI, type SettingsListTheme, type Component, getKeybindings } from "@earendil-works/pi-tui";
 
 // ─── Border component (matches native DynamicBorder) ────────────────────────
@@ -44,7 +45,7 @@ function getSettingsListTheme(theme: PiTheme): SettingsListTheme {
 
 function setupDpModelCommand(pi: ExtensionAPI) {
   pi.registerCommand("dp-model", {
-    description: "Configure image and compact models",
+    description: "Configure image, compact, and MCP broker models",
     handler: async (_args, ctx) => {
       if (ctx.hasUI) {
         await ctx.ui.custom<void>(
@@ -135,109 +136,244 @@ function setupDpSettingsCommand(pi: ExtensionAPI) {
 // ─── /mcp ──────────────────────────────────────────────────────────────────
 
 class McpStatusComponent extends Container {
-  private textComponent: Text;
+  private linesComponent: Text;
+  private hintComponent: Text;
+  private notifyComponent: Text;
   private tui: TUI;
   private theme: PiTheme;
   private done: () => void;
-  private timer: ReturnType<typeof setInterval> | null = null;
+  private registry: any;
+  private selected = 0;
+  private servers: ReturnType<typeof getMcpStatus> = [];
+  private notifyText = "";
+  private notifyTimer: ReturnType<typeof setTimeout> | null = null;
+  private refreshing = new Set<string>();
+  private autoRefreshTimer: ReturnType<typeof setInterval> | null = null;
 
-  constructor(tui: TUI, theme: PiTheme, onDone: () => void) {
+  private cwd: string;
+
+  constructor(tui: TUI, theme: PiTheme, registry: any, onDone: () => void, cwd: string) {
     super();
     this.tui = tui;
     this.theme = theme;
     this.done = onDone;
+    this.registry = registry;
+    this.cwd = cwd;
 
     this.addChild(new DynamicBorder(theme));
     this.addChild(new Spacer(1));
 
-    this.textComponent = new Text("", 1, 0);
-    this.addChild(this.textComponent);
+    this.linesComponent = new Text("", 1, 0);
+    this.addChild(this.linesComponent);
 
     this.addChild(new Spacer(1));
-    this.addChild(new Text(this.theme.fg("dim", "Press q to close."), 1, 0));
+
+    this.notifyComponent = new Text("", 1, 0);
+    this.addChild(this.notifyComponent);
+
+    this.hintComponent = new Text("", 1, 0);
+    this.addChild(this.hintComponent);
+
     this.addChild(new Spacer(1));
     this.addChild(new DynamicBorder(theme));
 
-    this.refresh();
+    this.updateServers();
+    this.renderView();
 
-    this.timer = setInterval(() => {
-      this.refresh();
-      const allSettled = getMcpStatus().every((s) => s.state !== "connecting");
-      if (allSettled && this.timer) {
-        clearInterval(this.timer);
-        this.timer = null;
+    // Auto-refresh while any server is still connecting
+    this.autoRefreshTimer = setInterval(() => {
+      this.updateServers();
+      this.renderView();
+      const allSettled = this.servers.every((s) => s.state !== "connecting");
+      if (allSettled && this.autoRefreshTimer) {
+        clearInterval(this.autoRefreshTimer);
+        this.autoRefreshTimer = null;
       }
     }, 500);
   }
 
-  private refresh() {
-    const servers = getMcpStatus();
+  private updateServers() {
+    this.servers = getMcpStatus();
+    if (this.selected >= this.servers.length) {
+      this.selected = Math.max(0, this.servers.length - 1);
+    }
+  }
 
-    if (servers.length === 0) {
-      this.textComponent.setText("No MCP servers configured.");
+  private renderView() {
+    if (this.servers.length === 0) {
+      this.linesComponent.setText("No MCP servers configured.");
+      this.hintComponent.setText(this.theme.fg("dim", "q close"));
       this.tui.requestRender();
       return;
     }
 
-    const connected = servers.filter((s) => s.state === "connected");
-    const connecting = servers.filter((s) => s.state === "connecting");
-    const failed = servers.filter((s) => s.state === "failed");
+    const lines: string[] = [`MCP servers (${this.servers.length}):`, ""];
 
-    const lines: string[] = [
-      `MCP servers (${servers.length}):`,
-      "",
-    ];
+    const namePad = Math.max(...this.servers.map((s) => s.name.length), 12);
 
-    for (const s of connected) {
-      lines.push(this.theme.fg("accent", `• ${s.name}`) + ` (${s.source})`);
-      lines.push(`  URL: ${s.url}`);
-      lines.push(`  Tools: ${s.toolCount}`);
-      for (const tool of s.tools) {
-        const desc = tool.description ? ` — ${tool.description.slice(0, 60)}` : "";
-        lines.push(`    - ${tool.name}${desc}`);
+    for (let i = 0; i < this.servers.length; i++) {
+      const s = this.servers[i];
+      const isSelected = i === this.selected;
+      const isDisabled = s.state === "disabled";
+      const cursor = isSelected ? this.theme.fg("accent", "→ ") : "  ";
+
+      let statusIcon: string;
+      let statusColor: (s: string) => string;
+      if (s.state === "connected") {
+        statusIcon = "🟢";
+        statusColor = (str: string) => this.theme.fg("accent", str);
+      } else if (s.state === "connecting") {
+        statusIcon = "🟡";
+        statusColor = (str: string) => this.theme.fg("warning", str);
+      } else if (s.state === "disabled") {
+        statusIcon = "⚪";
+        statusColor = (str: string) => this.theme.fg("dim", str);
+      } else {
+        statusIcon = "🔴";
+        statusColor = (str: string) => this.theme.fg("error", str);
       }
-      lines.push("");
+
+      const name = isDisabled
+        ? this.theme.fg("dim", s.name)
+        : isSelected
+          ? this.theme.fg("accent", s.name)
+          : s.name;
+      const namePadding = " ".repeat(Math.max(0, namePad - s.name.length));
+      const desc = s.description ? ` — ${s.description.slice(0, 50)}` : "";
+      const descDim = isDisabled ? this.theme.fg("dim", desc) : desc;
+      lines.push(
+        `${cursor}${name}${namePadding}  ${statusIcon} ${statusColor(s.state)}${descDim}`
+      );
+
+      if (isSelected) {
+        lines.push(`    ${this.theme.fg("dim", s.url)}`);
+        if (s.error) {
+          lines.push(`    ${this.theme.fg("error", `Error: ${s.error}`)}`);
+        }
+        if (s.tools.length > 0) {
+          lines.push(`    ${s.toolCount} tool${s.toolCount === 1 ? "" : "s"}:`);
+          for (const tool of s.tools.slice(0, 6)) {
+            const td = tool.description
+              ? ` — ${tool.description.slice(0, 55)}`
+              : "";
+            lines.push(`      ${tool.name}${td}`);
+          }
+          if (s.tools.length > 6) {
+            lines.push(`      ... and ${s.tools.length - 6} more`);
+          }
+        }
+        lines.push("");
+      }
     }
 
-    for (const s of connecting) {
-      lines.push(this.theme.fg("accent", `• ${s.name}`) + ` (${s.source})`);
-      lines.push(`  URL: ${s.url}`);
-      lines.push(`  Status: ${this.theme.fg("warning", "connecting...")}`);
-      lines.push("");
-    }
+    this.linesComponent.setText(lines.join("\n"));
 
-    for (const s of failed) {
-      lines.push(this.theme.fg("accent", `• ${s.name}`) + ` (${s.source})`);
-      lines.push(`  URL: ${s.url}`);
-      lines.push(`  Status: ${this.theme.fg("error", "failed")} — ${s.error ?? "unknown error"}`);
-      lines.push("");
-    }
+    const s = this.servers[this.selected];
+    const toggleHint = s?.state === "disabled" ? "space enable" : "space disable";
+    const hintParts = ["↑↓ navigate", toggleHint, "r refresh", "q close"];
+    this.hintComponent.setText(this.theme.fg("dim", hintParts.join(" | ")));
+    this.notifyComponent.setText(
+      this.notifyText ? this.theme.fg("warning", this.notifyText) : ""
+    );
 
-    this.textComponent.setText(lines.join("\n"));
     this.tui.requestRender();
+  }
+
+  private showNotify(text: string) {
+    this.notifyText = text;
+    this.renderView();
+    if (this.notifyTimer) clearTimeout(this.notifyTimer);
+    this.notifyTimer = setTimeout(() => {
+      this.notifyText = "";
+      this.renderView();
+    }, 3000);
+  }
+
+  private clearNotify() {
+    if (this.notifyTimer) {
+      clearTimeout(this.notifyTimer);
+      this.notifyTimer = null;
+    }
+    this.notifyText = "";
   }
 
   handleInput(data: string) {
     const kb = getKeybindings();
+
+    // Navigation
+    if (kb.matches(data, "tui.select.up")) {
+      this.selected = Math.max(0, this.selected - 1);
+      this.clearNotify();
+      this.renderView();
+      return;
+    }
+    if (kb.matches(data, "tui.select.down")) {
+      this.selected = Math.min(this.servers.length - 1, this.selected + 1);
+      this.clearNotify();
+      this.renderView();
+      return;
+    }
+
+    // Quit
     if (
       data === "q" ||
       data === "\r" ||
       data === "\n" ||
       kb.matches(data, "tui.select.cancel")
     ) {
-      if (this.timer) {
-        clearInterval(this.timer);
-        this.timer = null;
-      }
+      if (this.autoRefreshTimer) { clearInterval(this.autoRefreshTimer); this.autoRefreshTimer = null; }
+      if (this.notifyTimer) { clearTimeout(this.notifyTimer); this.notifyTimer = null; }
       this.done();
+      return;
     }
+
+    if (this.servers.length === 0) return;
+    const s = this.servers[this.selected];
+
+    // Toggle enable/disable
+    if (data === " ") {
+      const scope = s.source === "project" ? "project" : "global";
+      const newEnabled = s.state === "disabled";
+      const ok = toggleMcpServerEnabled(s.name, newEnabled, scope, this.cwd || undefined);
+      if (ok) {
+        updateConfigEnabled(s.name, newEnabled);
+      }
+      this.showNotify(
+        ok
+          ? `${newEnabled ? "Enabled" : "Disabled"} "${s.name}". Use /reload to apply.`
+          : `Failed to toggle "${s.name}".`
+      );
+      this.updateServers();
+      this.renderView();
+      return;
+    }
+
+    // Refresh cache (reconnect + update)
+    if (data === "r" || data === "r") {
+      if (this.refreshing.has(s.name)) return;
+      this.refreshing.add(s.name);
+      const targetName = s.name;
+      const targetIndex = this.selected;
+      this.showNotify(`Refreshing "${targetName}"...`);
+      (async () => {
+        const result = await refreshServerCache(targetName, this.registry);
+        this.refreshing.delete(targetName);
+        // Only update UI if user hasn't navigated away
+        if (this.selected === targetIndex) {
+          this.updateServers();
+          this.renderView();
+          this.showNotify(result.ok ? `Refreshed "${targetName}".` : `Refresh failed: ${result.error}`);
+        }
+      })();
+      return;
+    }
+
+
   }
 
   dispose() {
-    if (this.timer) {
-      clearInterval(this.timer);
-      this.timer = null;
-    }
+    if (this.autoRefreshTimer) { clearInterval(this.autoRefreshTimer); this.autoRefreshTimer = null; }
+    if (this.notifyTimer) { clearTimeout(this.notifyTimer); this.notifyTimer = null; }
   }
 }
 
@@ -247,7 +383,7 @@ function setupMcpCommand(pi: ExtensionAPI) {
     handler: async (_args, ctx) => {
       if (ctx.hasUI) {
         await ctx.ui.custom<void>(
-          (tui, theme, _kb, done) => new McpStatusComponent(tui, theme, () => done(undefined))
+          (tui, theme, _kb, done) => new McpStatusComponent(tui, theme, ctx.modelRegistry, () => done(undefined), ctx.cwd)
         );
         return;
       }
@@ -285,7 +421,6 @@ function setupMcpCommand(pi: ExtensionAPI) {
 // ─── /retry ────────────────────────────────────────────────────────────────
 
 function setupRetryCommand(pi: ExtensionAPI) {
-  let shouldInjectRetryNote = false;
   let retryInProgress = false;
 
   pi.registerCommand("retry", {
@@ -298,18 +433,11 @@ function setupRetryCommand(pi: ExtensionAPI) {
       if (!ctx.isIdle()) ctx.abort();
 
       retryInProgress = true;
-      shouldInjectRetryNote = true;
       pi.sendMessage(
         { customType: "retry-trigger", content: "Continue.", display: false },
         { triggerTurn: true }
       );
     },
-  });
-
-  pi.on("before_agent_start", async (event) => {
-    if (!shouldInjectRetryNote) return;
-    shouldInjectRetryNote = false;
-    return { systemPrompt: event.systemPrompt + "\n\nThe previous turn was interrupted by the system." };
   });
 
   pi.on("agent_start", () => { retryInProgress = false; });
