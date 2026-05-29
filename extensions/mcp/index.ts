@@ -127,22 +127,6 @@ async function summarizeWithBroker(registry: any, prompt: string): Promise<strin
   }
 }
 
-// ── regenerate (exported for TUI) ─────────────────────────────────────────
-
-export async function regenerateServerDescription(serverName: string, registry: any): Promise<string | undefined> {
-  const conn = activeConnections.find(c => c.serverName === serverName);
-  if (!conn) return undefined;
-
-  const desc = await autoDescribeServer(conn, serverName, registry);
-  if (desc) {
-    setMcpDescription(serverName, desc, cachedCwd || undefined);
-    if (cachedCwd) saveProjectMcpDescription(cachedCwd, serverName, desc);
-    const s = allServers.get(serverName);
-    if (s) s.description = desc;
-  }
-  return desc;
-}
-
 function truncateAtWord(str: string, maxLen: number): string {
   if (str.length <= maxLen) return str;
   const truncated = str.slice(0, maxLen);
