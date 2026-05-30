@@ -25,7 +25,6 @@ import {
   cleanupStaleCache,
   toggleMcpServerEnabled,
   BUILTIN_MCP_SERVERS,
-  BUILTIN_MCP_CACHE,
   type McpCache,
 } from "../extensions/mcp/builtin.js";
 
@@ -444,24 +443,23 @@ describe("resolveMcpConfigs priority", () => {
     });
     const configs = resolveMcpConfigs(tmpDir);
     const context7 = configs.find((c) => c.name === "context7");
-    expect(context7?.description).toBe("Context7 documentation and code examples");
     expect(context7?.url).toBe("http://custom/mcp");
   });
 
-  it("project description overrides global description overrides builtin", () => {
+  it("project config overrides global config for same server", () => {
     writeJson(CONFIG_FILE, {
       mcpServers: {
-        "context7": { description: "global desc" },
+        "context7": { url: "http://global/mcp" },
       },
     });
     writeJson(path.join(tmpDir, ".pi/agent/mcp.json"), {
       mcpServers: {
-        "context7": { description: "project desc" },
+        "context7": { url: "http://project/mcp" },
       },
     });
     const configs = resolveMcpConfigs(tmpDir);
     const context7 = configs.find((c) => c.name === "context7");
-    expect(context7?.description).toBe("project desc");
+    expect(context7?.url).toBe("http://project/mcp");
   });
 });
 
@@ -480,13 +478,10 @@ describe("loadMcpCache", () => {
     rmrf(tmpDir);
   });
 
-  it("returns BUILTIN_MCP_CACHE when no cache files exist", () => {
+  it("returns empty cache when no cache files exist", () => {
     const cache = loadMcpCache(tmpDir);
     expect(cache).toBeDefined();
-    expect(Object.keys(cache!.servers)).toContain("context7");
-    expect(Object.keys(cache!.servers)).toContain("exa");
-    expect(cache!.servers["context7"].tools).toHaveLength(2);
-    expect(cache!.servers["exa"].tools).toHaveLength(2);
+    expect(Object.keys(cache!.servers)).toHaveLength(0);
   });
 
   it("global cache overrides builtin for same server", () => {
@@ -507,8 +502,6 @@ describe("loadMcpCache", () => {
       expect(cache!.servers["context7"].description).toBe("overridden");
       expect(cache!.servers["context7"].tools).toHaveLength(1);
       expect(cache!.servers["context7"].tools[0].name).toBe("custom-tool");
-      // exa should still be from builtin
-      expect(Object.keys(cache!.servers)).toContain("exa");
     } finally {
       if (backup !== null) {
         fs.writeFileSync(globalCachePath, backup, "utf-8");
@@ -545,15 +538,14 @@ describe("loadMcpCache", () => {
     }
   });
 
-  it("builtin servers have cachedAt=0 when no file cache", () => {
+  it("returns empty cache when no file cache", () => {
     const globalCachePath = path.join(os.homedir(), ".pi/agent/mcp-cache.json");
     const backup = fs.existsSync(globalCachePath) ? fs.readFileSync(globalCachePath, "utf-8") : null;
     try {
       // Ensure no global cache exists
       if (fs.existsSync(globalCachePath)) fs.unlinkSync(globalCachePath);
       const cache = loadMcpCache(tmpDir);
-      expect(cache!.servers["context7"].cachedAt).toBe(0);
-      expect(cache!.servers["exa"].cachedAt).toBe(0);
+      expect(Object.keys(cache!.servers)).toHaveLength(0);
     } finally {
       if (backup !== null) {
         fs.writeFileSync(globalCachePath, backup, "utf-8");
@@ -645,7 +637,9 @@ describe("cleanupStaleCache", () => {
 
   it("removes servers not in configs from project cache", () => {
     const cachePath = path.join(tmpDir, ".pi/agent/mcp-cache.json");
+    const mcpJsonPath = path.join(tmpDir, ".pi/agent/mcp.json");
     fs.mkdirSync(path.dirname(cachePath), { recursive: true });
+    fs.writeFileSync(mcpJsonPath, JSON.stringify({ mcpServers: {} }), "utf-8");
     fs.writeFileSync(cachePath, JSON.stringify({
       servers: {
         keep: { description: "keep", tools: [], cachedAt: 1 },
@@ -663,7 +657,9 @@ describe("cleanupStaleCache", () => {
 
   it("preserves servers that are in configs", () => {
     const cachePath = path.join(tmpDir, ".pi/agent/mcp-cache.json");
+    const mcpJsonPath = path.join(tmpDir, ".pi/agent/mcp.json");
     fs.mkdirSync(path.dirname(cachePath), { recursive: true });
+    fs.writeFileSync(mcpJsonPath, JSON.stringify({ mcpServers: {} }), "utf-8");
     fs.writeFileSync(cachePath, JSON.stringify({
       servers: {
         a: { description: "a", tools: [], cachedAt: 1 },
@@ -686,6 +682,24 @@ describe("cleanupStaleCache", () => {
     ], tmpDir);
     // Should not throw
     expect(true).toBe(true);
+  });
+
+  it("removes project cache file when project mcp.json does not exist", () => {
+    const cachePath = path.join(tmpDir, ".pi/agent/mcp-cache.json");
+    fs.mkdirSync(path.dirname(cachePath), { recursive: true });
+    fs.writeFileSync(cachePath, JSON.stringify({
+      servers: {
+        context7: { tools: [], cachedAt: 1 },
+      },
+    }), "utf-8");
+
+    // No mcp.json exists in tmpDir
+    cleanupStaleCache([
+      { name: "context7", url: "http://test", enabled: true, source: "builtin" },
+    ], tmpDir);
+
+    // Project cache file should be deleted
+    expect(fs.existsSync(cachePath)).toBe(false);
   });
 });
 

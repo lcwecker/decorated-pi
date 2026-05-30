@@ -24,115 +24,14 @@ export const BUILTIN_MCP_SERVERS: Omit<McpServerConfig, "source">[] = [
   {
     name: "context7",
     url: "https://mcp.context7.com/mcp",
-    description: "Context7 documentation and code examples",
     enabled: true,
   },
   {
     name: "exa",
     url: "https://mcp.exa.ai/mcp",
-    description: "Exa web search",
     enabled: true,
   },
 ];
-
-/** Builtin tool schemas — hardcoded so builtin servers work without a prior connection. */
-export const BUILTIN_MCP_CACHE: McpCache = {
-  servers: {
-    context7: {
-      description: "Context7 documentation and code examples",
-      tools: [
-        {
-          name: "resolve-library-id",
-          description: "Resolve a library name to its Context7 library ID",
-          inputSchema: {
-            type: "object",
-            properties: {
-              libraryName: {
-                type: "string",
-                description: "Library or framework name to resolve (e.g. 'react', 'vue')",
-              },
-              filters: {
-                type: "array",
-                items: {
-                  type: "object",
-                  properties: {
-                    field: { type: "string" },
-                    operator: { type: "string" },
-                    value: { type: "string" },
-                  },
-                },
-                description: "Optional filters to narrow down results",
-              },
-            },
-            required: ["libraryName"],
-          },
-        },
-        {
-          name: "query-docs",
-          description: "Retrieve and query documentation using a Context7 library ID",
-          inputSchema: {
-            type: "object",
-            properties: {
-              libraryId: {
-                type: "string",
-                description: "Library ID returned by resolve-library-id",
-              },
-              query: {
-                type: "string",
-                description: "Question or topic to search in the documentation",
-              },
-            },
-            required: ["libraryId", "query"],
-          },
-        },
-      ],
-      cachedAt: 0,
-    },
-    exa: {
-      description: "Exa web search",
-      tools: [
-        {
-          name: "web_search_exa",
-          description: "Search the web for any topic and get results",
-          inputSchema: {
-            type: "object",
-            properties: {
-              query: {
-                type: "string",
-                description: "Search query",
-              },
-              numResults: {
-                type: "number",
-                description: "Number of results to return (default: 10)",
-              },
-            },
-            required: ["query"],
-          },
-        },
-        {
-          name: "web_fetch_exa",
-          description: "Read webpage content from specific URLs",
-          inputSchema: {
-            type: "object",
-            properties: {
-              urls: {
-                type: "array",
-                items: { type: "string" },
-                description: "URLs to fetch content from",
-              },
-              maxCharacters: {
-                type: "number",
-                description: "Maximum characters per page to return",
-              },
-            },
-            required: ["urls"],
-          },
-        },
-      ],
-      cachedAt: 0,
-    },
-  },
-};
 
 // ── Project-level config discovery ─────────────────────────────────────────
 
@@ -331,9 +230,9 @@ function writeCacheFile(p: string, cache: McpCache): void {
   fs.renameSync(tmp, p);
 }
 
-/** Load merged cache: builtin + global + project. */
+/** Load merged cache: global + project. */
 export function loadMcpCache(cwd?: string): McpCache | null {
-  const merged: McpCache = { servers: { ...BUILTIN_MCP_CACHE.servers } };
+  const merged: McpCache = { servers: {} };
 
   const globalCache = readCacheFile(globalCachePath());
   if (globalCache) {
@@ -428,5 +327,16 @@ function cleanupOneCache(p: string, names: Set<string>): void {
 export function cleanupStaleCache(configs: McpServerConfig[], cwd?: string): void {
   const names = new Set(configs.map(c => c.name));
   cleanupOneCache(globalCachePath(), names);
-  if (cwd) cleanupOneCache(projectCachePath(cwd), names);
+  if (cwd) {
+    const projectCache = projectCachePath(cwd);
+    const projectMcpJson = path.join(cwd, ".pi/agent/mcp.json");
+    // If project mcp.json doesn't exist, remove project cache entirely
+    if (!fs.existsSync(projectMcpJson)) {
+      if (fs.existsSync(projectCache)) {
+        fs.unlinkSync(projectCache);
+      }
+    } else {
+      cleanupOneCache(projectCache, names);
+    }
+  }
 }

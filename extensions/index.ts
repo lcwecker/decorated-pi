@@ -116,7 +116,7 @@ export function sortSystemPromptOptions(opts: {
   toolSnippets?: Record<string, string>;
   selectedTools?: string[];
   promptGuidelines?: string[];
-  skills?: Array<{ name: string; description: string; filePath: string; [key: string]: unknown }>;
+  skills?: Array<{ name: string; description: string; filePath: string }>;
 }) {
   const sortedToolNames = Object.keys(opts.toolSnippets ?? {}).sort((a, b) => a.localeCompare(b));
   const sortedToolSnippets: Record<string, string> = {};

@@ -55,12 +55,12 @@ Example redaction on a `read` / `bash` output:
 
 > `*` = known pattern, `#` = config key regex, `?` = entropy heuristic.
 
-### 4. Auxiliary Models (Image + Compact)
+### 4. Auxiliary Models
 
 Offloads auxiliary ops to cheaper models, reducing cost on every session. Configured via `/dp-model`:
 
 - **Image read fallback** — when the model reads an image file, detects type via magic bytes, calls a configured vision-capable model, and replaces the read result with image analysis text (jpeg, png, gif, webp)
-- **Compact model** — uses a configured model for context compaction (instead of the main model), auto-resumes after compaction.
+- **Compact model** — uses a configured model for context compaction (instead of the main model).
 
 ### 5. Progressive Context from `AGENTS.md` / `CLAUDE.md`
 

@@ -45,7 +45,7 @@ function getSettingsListTheme(theme: PiTheme): SettingsListTheme {
 
 function setupDpModelCommand(pi: ExtensionAPI) {
   pi.registerCommand("dp-model", {
-    description: "Configure image, compact, and MCP broker models",
+    description: "Configure image and compact models",
     handler: async (_args, ctx) => {
       if (ctx.hasUI) {
         await ctx.ui.custom<void>(

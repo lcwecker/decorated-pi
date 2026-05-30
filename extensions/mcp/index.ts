@@ -2,21 +2,15 @@ import { keyHint, type ExtensionAPI, type ExtensionContext } from "@earendil-wor
 import { Text } from "@earendil-works/pi-tui";
 import { McpConnection } from "./client.js";
 import {
-  resolveMcpConfigs, saveProjectMcpDescription,
+  resolveMcpConfigs,
   loadMcpCache, updateServerCache, cleanupStaleCache,
   type McpServerConfig, type McpToolCache,
 } from "./builtin.js";
-import {
-  getMcpBrokerModelKey, getCompactModelKey,
-  getMcpDescription, setMcpDescription,
-  parseModelKey,
-} from "../settings.js";
 
 export interface McpServerStatus {
   name: string;
   url: string;
   source: string;
-  description?: string;
   state: "connecting" | "connected" | "failed" | "disabled";
   toolCount: number;
   tools: Array<{ name: string; description?: string; inputSchema?: Record<string, unknown> }>;
@@ -90,10 +84,6 @@ export function updateConfigEnabled(serverName: string, enabled: boolean): void 
 
 // ── helpers ───────────────────────────────────────────────────────────────
 
-function serverDescription(s: McpServerConfig): string | undefined {
-  return s.description || getMcpDescription(s.name, cachedCwd);
-}
-
 function makeToolName(serverName: string, toolName: string): string {
   return `${serverName}_${toolName}`;
 }
@@ -106,67 +96,6 @@ function makeToolLabel(serverName: string, toolName: string, desc?: string): str
 
 function cacheScopeForSource(source: string): "global" | "project" {
   return source === "project" ? "project" : "global";
-}
-
-// ── auto-summary ──────────────────────────────────────────────────────────
-
-async function autoDescribeServer(
-  conn: McpConnection,
-  serverName: string,
-  registry: any,
-): Promise<string> {
-  const descs = conn.tools.map(t => `- ${t.name}: ${t.description || "(no description)"}`).join("\n");
-
-  const prompt = `Describe what this MCP server is and what it does, based on the tools it exposes. Start with action verbs directly, like a capability summary.
-
-Server: "${serverName}"
-Tools:
-${descs}
-
-Respond with ONLY one short sentence. No quotes.`;
-
-  return await summarizeWithBroker(registry, prompt) || `${serverName} MCP server (${conn.tools.length} tools)`;
-}
-
-async function summarizeWithBroker(registry: any, prompt: string): Promise<string | undefined> {
-  if (!registry) return undefined;
-
-  const brokerKey = getMcpBrokerModelKey() || getCompactModelKey();
-  const model = brokerKey
-    ? (() => {
-        const parsed = parseModelKey(brokerKey);
-        return parsed ? registry.find(parsed.provider, parsed.modelId) : undefined;
-      })()
-    : undefined;
-
-  if (!model) return undefined;
-
-  try {
-    const auth = await registry.getApiKeyAndHeaders(model);
-    if (!auth.ok) return undefined;
-
-    const { complete } = await import("@earendil-works/pi-ai");
-    const resp = await complete(model, {
-      systemPrompt: "You are a concise MCP server description generator.",
-      messages: [{
-        role: "user" as const,
-        content: [{ type: "text" as const, text: prompt }],
-        timestamp: Date.now(),
-      }],
-    }, {
-      maxTokens: 128,
-      apiKey: auth.apiKey ?? "",
-      headers: auth.headers,
-      signal: AbortSignal.timeout(15_000),
-    });
-
-    if (resp.stopReason === "error") return undefined;
-    return resp.content
-      .filter((c: any): c is { type: "text"; text: string } => c.type === "text")
-      .map((c: any) => c.text).join(" ").trim() || undefined;
-  } catch {
-    return undefined;
-  }
 }
 
 // ── register cached tools ─────────────────────────────────────────────────
@@ -218,7 +147,11 @@ function registerCachedTools(pi: ExtensionAPI, configs: McpServerConfig[]): void
 
 // ── connect ───────────────────────────────────────────────────────────────
 
-async function connectAll(configs: McpServerConfig[], registry: any): Promise<void> {
+async function connectAll(configs: McpServerConfig[], ui?: { notify: (msg: string, type: string) => void }): Promise<void> {
+  // Load current cache for comparison
+  const cache = loadMcpCache(cachedCwd);
+  const schemaChanges: string[] = [];
+
   allServers = new Map(
     configs.map((s) => [
       s.name,
@@ -226,7 +159,6 @@ async function connectAll(configs: McpServerConfig[], registry: any): Promise<vo
         name: s.name,
         url: s.url ?? s.command ?? "(unknown)",
         source: s.source,
-        description: serverDescription(s),
         state: "connecting" as const,
         toolCount: 0,
         tools: [],
@@ -243,12 +175,30 @@ async function connectAll(configs: McpServerConfig[], registry: any): Promise<vo
         await conn.connect(30_000);
         activeConnections.push(conn);
 
-        let desc = serverDescription(server);
-        if (!desc) {
-          desc = await autoDescribeServer(conn, server.name, registry);
-          if (desc) {
-            if (server.source === "project") saveProjectMcpDescription(cachedCwd, server.name, desc);
-            else setMcpDescription(server.name, desc);
+        const actualTools = conn.tools.map((t) => ({
+          name: t.name,
+          description: t.description,
+          inputSchema: t.inputSchema,
+        }));
+
+        // Check if schema changed
+        const cachedEntry = cache?.servers[server.name];
+        if (cachedEntry && cachedEntry.tools.length > 0) {
+          const cachedToolNames = new Set(cachedEntry.tools.map(t => t.name));
+          const actualToolNames = new Set(actualTools.map(t => t.name));
+          const added = actualTools.filter(t => !cachedToolNames.has(t.name));
+          const removed = cachedEntry.tools.filter(t => !actualToolNames.has(t.name));
+          const changed = actualTools.filter(t => {
+            const cached = cachedEntry.tools.find(ct => ct.name === t.name);
+            return cached && JSON.stringify(cached.inputSchema) !== JSON.stringify(t.inputSchema);
+          });
+
+          if (added.length > 0 || removed.length > 0 || changed.length > 0) {
+            const parts: string[] = [];
+            if (added.length) parts.push(`${added.length} added`);
+            if (removed.length) parts.push(`${removed.length} removed`);
+            if (changed.length) parts.push(`${changed.length} changed`);
+            schemaChanges.push(`${server.name} (${parts.join(', ')})`);
           }
         }
 
@@ -256,14 +206,9 @@ async function connectAll(configs: McpServerConfig[], registry: any): Promise<vo
           name: server.name,
           url: server.url ?? server.command ?? "(unknown)",
           source: server.source,
-          description: desc,
           state: "connected",
           toolCount: conn.tools.length,
-          tools: conn.tools.map((t) => ({
-            name: t.name,
-            description: t.description,
-            inputSchema: t.inputSchema,
-          })),
+          tools: actualTools,
         });
 
         // Update cache with this server's tools
@@ -274,7 +219,7 @@ async function connectAll(configs: McpServerConfig[], registry: any): Promise<vo
         }));
         updateServerCache(
           server.name,
-          { description: desc, tools, cachedAt: Date.now() },
+          { tools, cachedAt: Date.now() },
           cacheScopeForSource(server.source),
           cachedCwd || undefined,
         );
@@ -284,7 +229,6 @@ async function connectAll(configs: McpServerConfig[], registry: any): Promise<vo
           name: server.name,
           url: server.url ?? server.command ?? "(unknown)",
           source: server.source,
-          description: serverDescription(server),
           state: "failed",
           toolCount: 0,
           tools: [],
@@ -296,6 +240,11 @@ async function connectAll(configs: McpServerConfig[], registry: any): Promise<vo
 
   await connectPromise;
   connectPromise = null;
+
+  // Notify about schema changes
+  if (schemaChanges.length > 0 && ui) {
+    ui.notify(`MCP schema updated: ${schemaChanges.join('; ')}. Run /reload to apply.`, "warning");
+  }
 }
 
 // ── setup ─────────────────────────────────────────────────────────────────
@@ -317,16 +266,8 @@ export function setupMcp(pi: ExtensionAPI) {
     // Register tools from cache — prompt-stable, works even if MCP is down
     registerCachedTools(pi, enabledConfigs);
 
-    const needSummary = enabledConfigs.filter(s => !serverDescription(s));
-
-    if (needSummary.length === 0) {
-      // All servers have descriptions — connect in background, update cache
-      void connectAll(enabledConfigs, ctx.modelRegistry);
-      return;
-    }
-
-    // Some servers lack description — connect and auto-summarize synchronously
-    await connectAll(enabledConfigs, ctx.modelRegistry);
+    // Connect in background, pass UI for schema change notifications
+    void connectAll(enabledConfigs, ctx.hasUI ? ctx.ui : undefined);
   });
 
   pi.on("session_shutdown", () => {
@@ -347,7 +288,6 @@ export function getMcpStatus(): McpServerStatus[] {
         name: config.name,
         url: config.url ?? config.command ?? "(unknown)",
         source: config.source,
-        description: serverDescription(config),
         state: config.enabled ? "connecting" : "disabled",
         toolCount: cachedEntry?.tools.length ?? 0,
         tools: cachedEntry?.tools ?? [],
@@ -382,20 +322,10 @@ export async function refreshServerCache(
     await conn.connect(30_000);
     activeConnections.push(conn);
 
-    let desc = serverDescription(config);
-    if (!desc) {
-      desc = await autoDescribeServer(conn, config.name, registry);
-      if (desc) {
-        if (config.source === "project") saveProjectMcpDescription(cachedCwd, config.name, desc);
-        else setMcpDescription(config.name, desc);
-      }
-    }
-
     allServers.set(config.name, {
       name: config.name,
       url: config.url ?? config.command ?? "(unknown)",
       source: config.source,
-      description: desc,
       state: "connected",
       toolCount: conn.tools.length,
       tools: conn.tools.map(t => ({
@@ -412,7 +342,7 @@ export async function refreshServerCache(
     }));
     updateServerCache(
       config.name,
-      { description: desc, tools, cachedAt: Date.now() },
+      { tools, cachedAt: Date.now() },
       cacheScopeForSource(config.source),
       cachedCwd || undefined,
     );
@@ -424,7 +354,6 @@ export async function refreshServerCache(
       name: config.name,
       url: config.url ?? config.command ?? "(unknown)",
       source: config.source,
-      description: serverDescription(config),
       state: "failed",
       toolCount: 0,
       tools: [],

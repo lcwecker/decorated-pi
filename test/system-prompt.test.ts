@@ -83,8 +83,8 @@ describe("sortSystemPromptOptions", () => {
   });
 
   it("does not throw when fields are undefined", () => {
-    const opts = {};
-    sortSystemPromptOptions(opts as any);
+    const opts = {} as Parameters<typeof sortSystemPromptOptions>[0];
+    sortSystemPromptOptions(opts);
     // toolSnippets gets initialized to {} when undefined
     expect(opts.toolSnippets).toEqual({});
     expect(opts.selectedTools).toBeUndefined();

@@ -47,8 +47,6 @@ export interface ModuleSettings {
 export interface DecoratedPiConfig {
   imageModelKey?: string | null;
   compactModelKey?: string | null;
-  mcpBrokerModelKey?: string | null;
-  mcpDescriptions?: Record<string, string>;
   providers?: Record<string, ProviderCache>;
   modules?: ModuleSettings;
   mcpServers?: Record<string, McpServerEntry>;
@@ -141,36 +139,6 @@ export function setImageModelKey(key: string | null) {
 
 export function setCompactModelKey(key: string | null) {
   saveConfig({ compactModelKey: key });
-}
-
-export function getMcpBrokerModelKey(): string | null {
-  return loadConfig().mcpBrokerModelKey ?? null;
-}
-
-export function setMcpBrokerModelKey(key: string | null) {
-  saveConfig({ mcpBrokerModelKey: key });
-}
-
-export function getMcpDescription(name: string, cwd?: string): string | undefined {
-  if (cwd) {
-    const projectCfg = loadProjectConfig(cwd);
-    if (projectCfg.mcpDescriptions?.[name]) return projectCfg.mcpDescriptions[name];
-  }
-  return loadConfig().mcpDescriptions?.[name];
-}
-
-export function setMcpDescription(name: string, description: string, cwd?: string) {
-  if (cwd) {
-    const cfg = loadProjectConfig(cwd);
-    const descriptions = { ...cfg.mcpDescriptions };
-    descriptions[name] = description;
-    saveProjectConfig(cwd, { mcpDescriptions: descriptions });
-    return;
-  }
-  const cfg = loadConfig();
-  const descriptions = { ...cfg.mcpDescriptions };
-  descriptions[name] = description;
-  saveConfig({ mcpDescriptions: descriptions });
 }
 
 // ─── Module Switches ──────────────────────────────────────────────────────────
