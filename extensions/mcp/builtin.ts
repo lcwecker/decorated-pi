@@ -4,7 +4,9 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
+import { spawnSync } from "node:child_process";
 import { loadConfig } from "../settings.js";
+import type { DependencyStatus } from "../rtk-integration";
 
 export interface McpServerConfig {
   name: string;
@@ -247,6 +249,32 @@ export function resolveMcpConfigs(cwd: string): McpServerConfig[] {
   }
 
   return [...byName.values()].filter((s) => s.url || s.command);
+}
+
+export function collectMcpDependencyStatuses(cwd: string): DependencyStatus[] {
+  const seen = new Set<string>();
+  const statuses: DependencyStatus[] = [];
+  for (const cfg of resolveMcpConfigs(cwd)) {
+    if (!cfg.enabled || !cfg.command || seen.has(cfg.command)) continue;
+    seen.add(cfg.command);
+    statuses.push({
+      module: `mcp:${cfg.name}`,
+      label: cfg.command,
+      state: commandExists(cfg.command) ? "ok" : "missing",
+      detail: `Install the MCP server command for \"${cfg.name}\" or update its config.`,
+    });
+  }
+  return statuses;
+}
+
+function commandExists(command: string): boolean {
+  if (path.isAbsolute(command) || command.includes("/") || command.includes("\\")) {
+    return fs.existsSync(command);
+  }
+  const result = process.platform === "win32"
+    ? spawnSync("where", [command], { encoding: "utf-8" })
+    : spawnSync(process.env.SHELL || "sh", ["-lc", `command -v '${command.replace(/'/g, `'"'"'`)}'`], { encoding: "utf-8" });
+  return result.status === 0;
 }
 
 /** Write auto-generated description back to project mcp.json. */

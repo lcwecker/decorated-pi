@@ -451,7 +451,7 @@ describe("to_lsp_tool_error", () => {
   });
 
   it("handles generic errors", () => {
-    const details = to_lsp_tool_error("test.ts", "python", undefined, "pylsp", undefined, new Error("crashed"));
+    const details = to_lsp_tool_error("test.ts", "python", undefined, "pyright-langserver", undefined, new Error("crashed"));
     expect(details.kind).toBe("tool_execution_failed");
     expect(details.message).toBe("crashed");
   });

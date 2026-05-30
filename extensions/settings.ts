@@ -41,7 +41,7 @@ export interface ModuleSettings {
   patch?: boolean;
   mcp?: boolean;
   wakatime?: boolean;
-  "tool-compress"?: boolean;
+  "rtk-integration"?: boolean;
 }
 
 export interface DecoratedPiConfig {
@@ -182,7 +182,7 @@ const DEFAULT_MODULES: Required<ModuleSettings> = {
   patch: true,
   mcp: true,
   wakatime: true,
-  "tool-compress": true,
+  "rtk-integration": true,
 };
 
 export function isModuleEnabled(name: keyof ModuleSettings): boolean {

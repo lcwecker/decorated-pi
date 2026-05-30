@@ -34,6 +34,7 @@ import { spawnSync } from "child_process";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type { DependencyStatus } from "./rtk-integration";
 
 // ═══════════════════════════════════════════════════════════
 // 类型
@@ -118,6 +119,31 @@ function computePenalty(filePath: string, isDir: boolean, gitIgnored: boolean): 
 
 const SPAWN_OPTS = { timeout: 5000, encoding: "utf-8" as const, maxBuffer: 10 * 1024 * 1024 };
 
+function isGitWorkTree(cwd: string): boolean {
+  return spawnSync("git", ["rev-parse", "--is-inside-work-tree"], { ...SPAWN_OPTS, cwd }).status === 0;
+}
+
+function commandExists(command: string): boolean {
+  const result = spawnSync(
+    process.platform === "win32" ? "where" : (process.env.SHELL || "sh"),
+    process.platform === "win32" ? [command] : ["-lc", `command -v '${command.replace(/'/g, `'"'"'`)}'`],
+    SPAWN_OPTS,
+  );
+  return result.status === 0;
+}
+
+export function getSmartAtDependencyStatuses(cwd: string): DependencyStatus[] {
+  const isGit = isGitWorkTree(cwd);
+  return [{
+    module: "smart-at",
+    label: "fd",
+    state: commandExists("fd") ? "ok" : (isGit ? "n/a" : "missing"),
+    detail: isGit
+      ? "Only needed outside Git repositories."
+      : "Install fd for non-Git project file discovery.",
+  }];
+}
+
 function collectCandidates(cwd: string): FileCandidate[] {
   const candidates: FileCandidate[] = [];
 
@@ -133,7 +159,7 @@ function collectCandidates(cwd: string): FileCandidate[] {
   const opts = { ...SPAWN_OPTS, cwd };
 
   // ── 检测是否 git 仓库 ──
-  const isGit = spawnSync("git", ["rev-parse", "--is-inside-work-tree"], opts).status === 0;
+  const isGit = isGitWorkTree(cwd);
 
   if (isGit) {
     collectGit(candidates, opts, isChildOfHardExclude);

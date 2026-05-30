@@ -1,8 +1,10 @@
 /**
  * LSP Server Config — language detection, server commands, workspace roots.
  */
-import { existsSync } from "node:fs";
+import { existsSync, readdirSync, type Dirent } from "node:fs";
+import { spawnSync } from "node:child_process";
 import { dirname, extname, isAbsolute, join, resolve } from "node:path";
+import type { DependencyStatus } from "../rtk-integration";
 
 // ─── File extension → language mapping ────────────────────────────────────
 
@@ -39,8 +41,8 @@ const LANGUAGE_SERVERS: Record<string, Omit<LanguageConfig, "is_project_local">>
     install_hint: "Install clangd and ensure the clangd binary is on PATH.",
   },
   python: {
-    language: "python", command: "pylsp", args: [],
-    install_hint: "Install Python LSP with: pip install python-lsp-server",
+    language: "python", command: "pyright-langserver", args: ["--stdio"],
+    install_hint: "Install a Python LSP and ensure the pyright-langserver binary is on PATH.",
   },
   rust: {
     language: "rust", command: "rust-analyzer", args: [],
@@ -110,6 +112,54 @@ export function languageIdForFile(filePath: string): string | undefined {
   return detectLanguage(filePath);
 }
 
+export function detectProjectLanguages(cwd: string, limit = 1500): Set<string> {
+  const found = new Set<string>();
+  let seen = 0;
+  const skipDirs = new Set([".git", "node_modules", ".pi", "dist", "build", "coverage"]);
+
+  function walk(dir: string): void {
+    if (seen >= limit) return;
+    let entries: Dirent[] = [];
+    try {
+      entries = readdirSync(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      if (seen >= limit) return;
+      const full = join(dir, entry.name);
+      if (entry.isDirectory()) {
+        if (skipDirs.has(entry.name) || entry.name.startsWith('.')) continue;
+        walk(full);
+      } else if (entry.isFile()) {
+        seen++;
+        const language = detectLanguage(full);
+        if (language) found.add(language);
+      }
+    }
+  }
+
+  walk(cwd);
+  return found;
+}
+
+export function collectLspDependencyStatuses(cwd: string): DependencyStatus[] {
+  const statuses: DependencyStatus[] = [];
+  const seen = new Set<string>();
+  for (const language of listSupportedLanguages()) {
+    const cfg = getServerConfig(language, cwd);
+    if (!cfg || seen.has(cfg.command)) continue;
+    seen.add(cfg.command);
+    statuses.push({
+      module: "lsp",
+      label: cfg.command,
+      state: commandExists(cfg.command) ? "ok" : "missing",
+      detail: cfg.install_hint,
+    });
+  }
+  return statuses;
+}
+
 export function findWorkspaceRoot(
   filePath: string,
   fallback = process.cwd(),
@@ -123,6 +173,16 @@ export function findWorkspaceRoot(
 }
 
 // ─── Internal helpers ─────────────────────────────────────────────────────
+
+function commandExists(command: string): boolean {
+  if (isAbsolute(command) || command.includes("/") || command.includes("\\")) {
+    return existsSync(command);
+  }
+  const result = process.platform === "win32"
+    ? spawnSync("where", [command], { encoding: "utf-8" })
+    : spawnSync(process.env.SHELL || "sh", ["-lc", `command -v '${command.replace(/'/g, `'"'"'`)}'`], { encoding: "utf-8" });
+  return result.status === 0;
+}
 
 function resolveLocalBinary(
   command: string,
