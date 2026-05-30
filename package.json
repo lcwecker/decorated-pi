@@ -1,6 +1,6 @@
 {
   "name": "decorated-pi",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "description": "decorated-pi is a practical enhancement pack for pi — smarter tools that are token efficient and cache friendly.",
   "keywords": [
     "pi",
