@@ -176,7 +176,7 @@ export async function executeOriginalBash(command: string, cwd: string, timeout:
 
 export function getRtkDependencyStatuses(): DependencyStatus[] {
   return [{
-    module: "rtk-integration",
+    module: "rtk",
     label: "rtk",
     state: findSystemRtk() ? "ok" : "missing",
     detail: "Install RTK so bash rewrite/tagging can activate.",

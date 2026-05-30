@@ -5,13 +5,18 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   buildAppHeartbeat,
+  buildCliArgs,
   buildFileHeartbeat,
+  buildPluginString,
   classifyBash,
+  findWakatimeCli,
   heartbeatChanged,
   readWakatimeCfgApiKey,
+  resetWakatimeStateForTests,
+  setupWakatimeWithApiKey,
 } from "../extensions/wakatime.js";
 
 function countPathParts(p: string): number {
@@ -26,6 +31,10 @@ describe("wakatime", () => {
   });
 
   afterEach(() => {
+    resetWakatimeStateForTests();
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+    vi.useRealTimers();
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 
@@ -84,6 +93,197 @@ describe("wakatime", () => {
       expect(heartbeatChanged(base, { ...base, entity: "/tmp/b.ts" })).toBe(true);
       expect(heartbeatChanged(base, { ...base, category: "running tests" })).toBe(true);
       expect(heartbeatChanged(base, { ...base, project: "other" })).toBe(true);
+    });
+  });
+
+  describe("buildCliArgs", () => {
+    it("builds wakatime-cli args with plugin and project-folder", () => {
+      const hb = {
+        entity: "/tmp/demo.ts",
+        time: 123,
+        type: "file" as const,
+        category: "ai coding" as const,
+        project: "demo",
+        language: "TypeScript",
+        lines: 42,
+        is_write: true,
+      };
+      expect(buildCliArgs(hb, "abc-123", "/tmp/project", buildPluginString("9.9.9"))).toEqual([
+        "--entity", "/tmp/demo.ts",
+        "--entity-type", "file",
+        "--category", "ai coding",
+        "--plugin", "pi/9.9.9 pi/9.9.9",
+        "--key", "abc-123",
+        "--time", "123",
+        "--hostname", os.hostname(),
+        "--project-folder", "/tmp/project",
+        "--project", "demo",
+        "--language", "TypeScript",
+        "--lines-in-file", "42",
+        "--write",
+      ]);
+    });
+
+    it("omits project-folder for files outside the current project", () => {
+      const hb = {
+        entity: "/tmp/demo.ts",
+        time: 123,
+        type: "file" as const,
+        category: "ai coding" as const,
+        language: "TypeScript",
+        lines: 42,
+      };
+      expect(buildCliArgs(hb, "abc-123", "/tmp/project", buildPluginString("9.9.9"))).toEqual([
+        "--entity", "/tmp/demo.ts",
+        "--entity-type", "file",
+        "--category", "ai coding",
+        "--plugin", "pi/9.9.9 pi/9.9.9",
+        "--key", "abc-123",
+        "--time", "123",
+        "--hostname", os.hostname(),
+        "--language", "TypeScript",
+        "--lines-in-file", "42",
+      ]);
+    });
+  });
+
+  describe("findWakatimeCli", () => {
+    it("prefers PATH and caches the absolute path", () => {
+      const probePath = vi.fn(() => "bin/wakatime-cli");
+      const exists = vi.fn(() => false);
+
+      expect(findWakatimeCli({ probePath, exists })).toBe(path.resolve("bin/wakatime-cli"));
+      expect(findWakatimeCli({ probePath, exists })).toBe(path.resolve("bin/wakatime-cli"));
+      expect(probePath).toHaveBeenCalledTimes(1);
+      expect(exists).not.toHaveBeenCalled();
+    });
+
+    it("falls back to ~/.wakatime/wakatime-cli and caches it", () => {
+      const probePath = vi.fn(() => null);
+      const fallback = path.resolve(path.join(os.homedir(), ".wakatime", "wakatime-cli"));
+      const exists = vi.fn((candidate: string) => candidate === fallback);
+
+      expect(findWakatimeCli({ probePath, exists, fallbackPath: fallback })).toBe(fallback);
+      expect(findWakatimeCli({ probePath, exists, fallbackPath: fallback })).toBe(fallback);
+      expect(probePath).toHaveBeenCalledTimes(1);
+      expect(exists).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe("setupWakatime", () => {
+    function createFakePi() {
+      const handlers = new Map<string, Function[]>();
+      return {
+        handlers,
+        pi: {
+          on(event: string, handler: Function) {
+            const arr = handlers.get(event) ?? [];
+            arr.push(handler);
+            handlers.set(event, arr);
+          },
+        },
+      };
+    }
+
+    it("does nothing when no api key is configured", () => {
+      const { pi, handlers } = createFakePi();
+      setupWakatimeWithApiKey(pi as any, undefined);
+      expect(handlers.size).toBe(0);
+    });
+
+    it("keeps app heartbeat active while file heartbeats are one-shot", () => {
+      vi.useFakeTimers();
+      const sent: Array<{ hb: any; cwd?: string }> = [];
+
+      const { pi, handlers } = createFakePi();
+      setupWakatimeWithApiKey(pi as any, "abc-123", "/usr/bin/wakatime-cli", (hb, cwd) => {
+        sent.push({ hb, cwd });
+      });
+
+      const cwd = path.join(tmpDir, "repo");
+      const filePath = path.join(cwd, "src", "main.ts");
+      fs.mkdirSync(path.dirname(filePath), { recursive: true });
+      fs.writeFileSync(filePath, "const x = 1;\nconst y = 2;\n", "utf-8");
+
+      let terminalInputHandler: ((data: string) => unknown) | undefined;
+      const sessionCtx = {
+        cwd,
+        hasUI: true,
+        ui: {
+          onTerminalInput(handler: (data: string) => unknown) {
+            terminalInputHandler = handler;
+            return () => {
+              terminalInputHandler = undefined;
+            };
+          },
+        },
+      };
+
+      handlers.get("session_start")?.[0]({ reason: "startup" }, sessionCtx);
+      terminalInputHandler?.("a");
+      handlers.get("tool_result")?.[0]({ toolName: "read", input: { path: filePath } }, { cwd });
+
+      expect(sent).toHaveLength(2);
+      expect(sent[0]!.hb.entity).toBe("pi");
+      expect(sent[0]!.hb.type).toBe("app");
+      expect(sent[1]!.hb.entity).toBe(filePath);
+      expect(sent[1]!.hb.type).toBe("file");
+
+      vi.advanceTimersByTime(90_000);
+      expect(sent).toHaveLength(3);
+      expect(sent[2]!.hb.entity).toBe("pi");
+      expect(sent[2]!.hb.type).toBe("app");
+    });
+
+    it("keeps the app heartbeat active across terminal input, agent start/end, and keepalive", () => {
+      vi.useFakeTimers();
+      const sent: Array<{ hb: any; cwd?: string }> = [];
+
+      const { pi, handlers } = createFakePi();
+      setupWakatimeWithApiKey(pi as any, "abc-123", "/usr/bin/wakatime-cli", (hb, cwd) => {
+        sent.push({ hb, cwd });
+      });
+
+      const cwd = path.join(tmpDir, "repo-flow");
+      const filePath = path.join(cwd, "src", "flow.ts");
+      fs.mkdirSync(path.dirname(filePath), { recursive: true });
+      fs.writeFileSync(filePath, "export const flow = true;\n", "utf-8");
+
+      let terminalInputHandler: ((data: string) => unknown) | undefined;
+      const sessionCtx = {
+        cwd,
+        hasUI: true,
+        ui: {
+          onTerminalInput(handler: (data: string) => unknown) {
+            terminalInputHandler = handler;
+            return () => {
+              terminalInputHandler = undefined;
+            };
+          },
+        },
+      };
+
+      handlers.get("session_start")?.[0]({ reason: "startup" }, sessionCtx);
+      terminalInputHandler?.("x");
+      handlers.get("tool_result")?.[0]({ toolName: "read", input: { path: filePath } }, { cwd });
+      handlers.get("before_agent_start")?.[0]({}, { cwd });
+      handlers.get("agent_end")?.[0]({}, { cwd });
+
+      expect(sent).toHaveLength(3);
+      const bodies = sent.map((call) => call.hb);
+      expect(bodies.map((b) => `${b.type}:${b.entity}`)).toEqual([
+        "app:pi",
+        `file:${filePath}`,
+        "app:pi",
+      ]);
+
+      vi.advanceTimersByTime(89_000);
+      expect(sent).toHaveLength(3);
+      vi.advanceTimersByTime(1_000);
+      expect(sent).toHaveLength(4);
+      const keepalive = sent[3]!.hb;
+      expect(keepalive.entity).toBe("pi");
+      expect(keepalive.type).toBe("app");
     });
   });
 

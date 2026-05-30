@@ -17,12 +17,12 @@ import { getSmartAtDependencyStatuses, setupSmartAt } from "./smart-at";
 import { setupMcp } from "./mcp/index.js";
 import { collectMcpDependencyStatuses } from "./mcp/builtin";
 import { setupWakatime } from "./wakatime";
-import { findSystemRtk, getRtkDependencyStatuses, setupRtkIntegration, type DependencyStatus } from "./rtk-integration";
+import { findSystemRtk, getRtkDependencyStatuses, setupRtkIntegration, type DependencyStatus } from "./rtk";
 import { isModuleEnabled } from "./settings";
 
 function collectDependencyStatuses(cwd: string): DependencyStatus[] {
   const statuses: DependencyStatus[] = [];
-  if (isModuleEnabled("rtk-integration")) statuses.push(...getRtkDependencyStatuses());
+  if (isModuleEnabled("rtk")) statuses.push(...getRtkDependencyStatuses());
   if (isModuleEnabled("smart-at")) statuses.push(...getSmartAtDependencyStatuses(cwd));
   if (isModuleEnabled("lsp")) statuses.push(...collectLspDependencyStatuses(cwd));
   if (isModuleEnabled("mcp")) statuses.push(...collectMcpDependencyStatuses(cwd));
@@ -96,5 +96,5 @@ export default function (pi: ExtensionAPI) {
   if (isModuleEnabled("smart-at")) setupSmartAt(pi);
   if (isModuleEnabled("mcp")) setupMcp(pi);
   if (isModuleEnabled("wakatime")) setupWakatime(pi);
-  if (isModuleEnabled("rtk-integration") && findSystemRtk()) setupRtkIntegration(pi);
+  if (isModuleEnabled("rtk") && findSystemRtk()) setupRtkIntegration(pi);
 }

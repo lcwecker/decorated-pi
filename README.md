@@ -1,6 +1,6 @@
 # decorated-pi
 
-`decorated-pi` is a practical enhancement pack for [Pi](https://github.com/earendil-works/pi).
+`decorated-pi` is a practical enhancement pack for [Pi](https://github.com/earendil-works/pi) — smarter tools that are token efficient and cache friendly.
 
 ## Install
 
@@ -88,6 +88,7 @@ Zero-config MCP client with built-in servers:
 | Exa | `exa_*` | `https://mcp.exa.ai/mcp` |
 
 **Custom servers** in `.pi/agent/mcp.json` (project) or `~/.pi/agent/decorated-pi.json` (global). Project overrides global.
+Tool prompts and schemas are cached locally so MCP tools are available immediately on startup, even before servers connect.
 
 ```json
 {
@@ -121,6 +122,11 @@ Extend providers are registered via `/login` → "Use a subscription":
 | Baidu Qianfan | `qianfan.baidubce.com/v2/coding` |
 | ARK Coding | `ark.cn-beijing.volces.com/api/coding/v3` |
 
+### 9. Other
+
+- **RTK** — integrates [RTK](https://github.com/rtk-ai/rtk) for token-efficient command output.
+- **WakaTime** — tracks coding activity via [WakaTime](https://wakatime.com).
+
 ## Configuration
 
 Runtime settings are stored in:
@@ -131,26 +137,18 @@ Runtime settings are stored in:
 
 ### Module Loading
 
-Modules can be toggled on/off. Changes take effect after `/reload`.
-
-| Module | Default | Effect when disabled |
-| -------- | --------- | --------------------- |
-| `patch` | `true` | Reverts to Pi's built-in `edit` / `write` tools |
-| `safety` | `true` | No secret redaction on `read` / `bash` output |
-| `lsp` | `true` | All `lsp_*` tools unregistered — no diagnostics, hover, etc. |
-| `smart-at` | `true` | Fallback to Pi's built-in `@` file completion |
-| `mcp` | `true` | All `{server}_*` MCP tools unregistered |
-
-Use `/dp-settings` to toggle, or edit the config file directly:
+Modules can be toggled on/off by `/dp-settings`. Changes take effect after `/reload`.
 
 ```json
 {
   "modules": {
     "patch": true,
     "safety": true,
-    "lsp": false,
+    "rtk": true,
+    "lsp": true,
     "smart-at": true,
-    "mcp": true
+    "mcp": true,
+    "wakatime": true
   }
 }
 ```

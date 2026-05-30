@@ -447,6 +447,7 @@ export function setupIO(pi: ExtensionAPI) {
     promptGuidelines: [
       "Always prefer modifying files with PATCH tool over bash commands or python scripts.",
       "For full-file replacement, always use patch tool to prevent unintended edits or data loss.",
+      "To prevent hallucinations: 1. Keep each edit batch ≤ 5 changes; 2. Process remaining revisions in sequential steps",
     ],
     parameters: PatchSchema,
     renderShell: "self",

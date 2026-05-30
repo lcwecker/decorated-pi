@@ -6,7 +6,7 @@ import * as path from "node:path";
 import * as os from "node:os";
 import { spawnSync } from "node:child_process";
 import { loadConfig } from "../settings.js";
-import type { DependencyStatus } from "../rtk-integration";
+import type { DependencyStatus } from "../rtk";
 
 export interface McpServerConfig {
   name: string;

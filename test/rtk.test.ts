@@ -1,5 +1,5 @@
 /**
- * rtk-integration — Unit Tests
+ * RTK — Unit Tests
  */
 
 import { describe, it, expect } from "vitest";
@@ -10,7 +10,7 @@ import {
   extractMainCommand,
   shellQuote,
   shouldBypassRtkRewrite,
-} from "../extensions/rtk-integration";
+} from "../extensions/rtk";
 
 describe("RTK integration helpers", () => {
   it("quotes shell paths safely", () => {

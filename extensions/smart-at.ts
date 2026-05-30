@@ -34,7 +34,7 @@ import { spawnSync } from "child_process";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import type { DependencyStatus } from "./rtk-integration";
+import type { DependencyStatus } from "./rtk";
 
 // ═══════════════════════════════════════════════════════════
 // 类型
