@@ -16,6 +16,10 @@ export function setupGuidance(pi: ExtensionAPI) {
         "- Exercise caution when performing any **write** operations, especially when you are in a research or exploration phase.",
         "- You don't need to read **AGENTS.md** or **CLAUDE.md** files unless you're explicitly asked to, these files will loaded automatically if neccessary.",
         "- CAUTION: Do not perform write operations in the following directories unless explicitly instructed: `node_modules`, `venv`, `env`, `__pycache__`, `.git` or any other hidden directories.",
+        "",
+        "### Secret Redaction",
+        "",
+        "- When you see masked secret values (e.g. `sk-***...***` where `*`, `#`, or `?` are mask characters), the real value has been redacted by the system. Do not attempt to read or guess it. If you need the secret, use tools like `jq` or `grep` to extract it from the original source file.",
       ].join("\n");
 
       prompt = `${prompt}\n\n${guidance}`;
