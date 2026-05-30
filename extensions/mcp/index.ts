@@ -1,4 +1,5 @@
-import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { keyHint, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { Text } from "@earendil-works/pi-tui";
 import { McpConnection } from "./client.js";
 import {
   resolveMcpConfigs, saveProjectMcpDescription,
@@ -27,6 +28,47 @@ let allServers = new Map<string, McpServerStatus>();
 let cachedConfigs: McpServerConfig[] = [];
 let connectPromise: Promise<void> | null = null;
 let cachedCwd = "";
+
+const MCP_RESULT_FOLD_LINES = 45;
+
+function trimTrailingEmptyLines(lines: string[]): string[] {
+  let end = lines.length;
+  while (end > 0 && lines[end - 1] === "") end -= 1;
+  return lines.slice(0, end);
+}
+
+function collapseMcpText(text: string, maxLines = MCP_RESULT_FOLD_LINES) {
+  const lines = trimTrailingEmptyLines(text.split("\n"));
+  const totalLines = lines.length;
+  const displayLines = lines.slice(0, maxLines);
+  const remainingLines = Math.max(0, totalLines - maxLines);
+  return { totalLines, displayLines, remainingLines };
+}
+
+function getTextContent(result: { content?: Array<{ type: string; text?: string }> }): string {
+  return (result.content ?? [])
+    .filter((c): c is { type: "text"; text?: string } => c.type === "text")
+    .map((c) => c.text ?? "")
+    .join("\n");
+}
+
+function formatMcpResultText(text: string, expanded: boolean, theme: any): string {
+  const { totalLines, displayLines, remainingLines } = collapseMcpText(
+    text,
+    expanded ? Number.MAX_SAFE_INTEGER : MCP_RESULT_FOLD_LINES,
+  );
+  let rendered = displayLines.join("\n") ? theme.fg("toolOutput", displayLines.join("\n")) : "";
+  if (!expanded && remainingLines > 0) {
+    rendered += `${theme.fg("muted", `\n... (${remainingLines} more lines, ${totalLines} total,`)} ${keyHint("app.tools.expand", "to expand")})`;
+  }
+  return rendered;
+}
+
+function renderMcpResult(result: any, options: { expanded: boolean }, theme: any, context: any) {
+  const component = context.lastComponent ?? new Text("", 0, 0);
+  component.setText(formatMcpResultText(getTextContent(result), options.expanded, theme));
+  return component;
+}
 
 // ── config helpers ────────────────────────────────────────────────────────
 
@@ -146,6 +188,7 @@ function registerCachedTools(pi: ExtensionAPI, configs: McpServerConfig[]): void
         label: makeToolLabel(config.name, t.name, t.description),
         description: desc,
         promptSnippet: desc || `MCP tool ${config.name}/${t.name}`,
+        renderResult: renderMcpResult,
         parameters: t.inputSchema,
         execute: async (_id, params, _signal, _update, _ctx) => {
           const conn = activeConnections.find(c => c.serverName === config.name);
@@ -315,6 +358,8 @@ export function getMcpStatus(): McpServerStatus[] {
 }
 
 // ── refresh single server cache ───────────────────────────────────────────
+
+export const __mcpIndexTest = { collapseMcpText };
 
 export async function refreshServerCache(
   serverName: string,
