@@ -68,6 +68,7 @@ const MODULE_LABELS: Record<keyof ModuleSettings, string> = {
   "smart-at": "@ overload",
   mcp: "MCP",
   wakatime: "WakaTime",
+  "tool-compress": "Tool Compress",
 };
 
 const MODULE_DESCS: Record<keyof ModuleSettings, string> = {
@@ -77,6 +78,7 @@ const MODULE_DESCS: Record<keyof ModuleSettings, string> = {
   "smart-at": "Project-aware file search replacing default autocomplete",
   mcp: "MCP client for context7 and exa (zero-config)",
   wakatime: "Send coding activity heartbeats to WakaTime",
+  "tool-compress": "Compress bash output to reduce token usage",
 };
 
 class ModuleSettingsComponent extends Container {

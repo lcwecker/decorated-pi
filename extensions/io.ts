@@ -336,7 +336,7 @@ export function buildPatchCallComponent(component: PatchCallComponent, args: any
   if (args?.path) {
     label = theme.fg("accent", args.path);
     if (args.overwrite) {
-      label += theme.fg("warning", " [overwrite]");
+      label += theme.fg("error", " [overwrite]");
     } else if (args.edits?.length > 0) {
       label += theme.fg("dim", ` (${args.edits.length} edit${args.edits.length > 1 ? "s" : ""})`);
     }

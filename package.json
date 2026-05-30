@@ -38,5 +38,13 @@
   },
   "scripts": {
     "test": "vitest run"
+  },
+  "optionalDependencies": {
+    "@pleaseai/rtk": "^0.27.2",
+    "@pleaseai/rtk-darwin-arm64": "0.27.2",
+    "@pleaseai/rtk-darwin-x64": "0.27.2",
+    "@pleaseai/rtk-linux-arm64": "0.27.2",
+    "@pleaseai/rtk-linux-x64": "0.27.2",
+    "@pleaseai/rtk-win32-x64": "0.27.2"
   }
 }

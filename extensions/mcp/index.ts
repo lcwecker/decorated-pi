@@ -127,13 +127,6 @@ async function summarizeWithBroker(registry: any, prompt: string): Promise<strin
   }
 }
 
-function truncateAtWord(str: string, maxLen: number): string {
-  if (str.length <= maxLen) return str;
-  const truncated = str.slice(0, maxLen);
-  const lastSpace = truncated.lastIndexOf(" ");
-  return lastSpace > 0 ? truncated.slice(0, lastSpace) + "..." : truncated + "...";
-}
-
 // ── register cached tools ─────────────────────────────────────────────────
 
 function registerCachedTools(pi: ExtensionAPI, configs: McpServerConfig[]): void {
@@ -152,7 +145,7 @@ function registerCachedTools(pi: ExtensionAPI, configs: McpServerConfig[]): void
         name: toolName,
         label: makeToolLabel(config.name, t.name, t.description),
         description: desc,
-        promptSnippet: truncateAtWord(desc, 100) || `MCP tool ${config.name}/${t.name}`,
+        promptSnippet: desc || `MCP tool ${config.name}/${t.name}`,
         parameters: t.inputSchema,
         execute: async (_id, params, _signal, _update, _ctx) => {
           const conn = activeConnections.find(c => c.serverName === config.name);

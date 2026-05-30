@@ -15,6 +15,7 @@ import { setupProviders } from "./providers/index";
 import { setupSmartAt } from "./smart-at";
 import { setupMcp } from "./mcp/index.js";
 import { setupWakatime } from "./wakatime";
+import { setupToolCompress } from "./tool-compress";
 import { isModuleEnabled } from "./settings";
 
 export default function (pi: ExtensionAPI) {
@@ -27,10 +28,11 @@ export default function (pi: ExtensionAPI) {
   setupGuidance(pi);
 
   // Configurable modules
-  if (isModuleEnabled("patch"))     setupIO(pi);
-  if (isModuleEnabled("safety"))    setupSafety(pi);
-  if (isModuleEnabled("lsp"))       setupLsp(pi);
-  if (isModuleEnabled("smart-at"))  setupSmartAt(pi);
-  if (isModuleEnabled("mcp"))       setupMcp(pi);
+  if (isModuleEnabled("patch")) setupIO(pi);
+  if (isModuleEnabled("safety")) setupSafety(pi);
+  if (isModuleEnabled("lsp")) setupLsp(pi);
+  if (isModuleEnabled("smart-at")) setupSmartAt(pi);
+  if (isModuleEnabled("mcp")) setupMcp(pi);
   if (isModuleEnabled("wakatime")) setupWakatime(pi);
+  if (isModuleEnabled("tool-compress")) setupToolCompress(pi);
 }
