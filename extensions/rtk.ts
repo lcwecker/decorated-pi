@@ -73,32 +73,7 @@ export function buildRtkCommand(raw: string, rtkBinaryPath: string): string {
   return `export PATH=${shellQuote(binDir)}:$PATH && ${raw}`;
 }
 
-export function extractMainCommand(command: string): string {
-  let cmd = command.trim().toLowerCase();
-  cmd = cmd.replace(/^cd\s+\S+\s*(&&|;|\n)\s*/, "");
-  cmd = cmd.replace(/^(?:[a-z_][a-z0-9_]*=\S*\s+)+/, "");
-  const prefixes = ["sudo ", "time ", "nohup ", "nice ", "env "];
-  let changed = true;
-  while (changed) {
-    changed = false;
-    for (const prefix of prefixes) {
-      if (cmd.startsWith(prefix)) {
-        cmd = cmd.slice(prefix.length);
-        changed = true;
-      }
-    }
-  }
-  return cmd;
-}
-
-export function shouldBypassRtkRewrite(command: string): boolean {
-  const main = extractMainCommand(command);
-  if (!main.startsWith("find ") && main !== "find") return false;
-  return /(^|\s)(-o|-or|-a|-and|-not|!|\(|\)|-exec|-ok|-delete|-prune|-printf|-print0)(\s|$)/.test(main);
-}
-
 export function rewriteWithRtk(command: string, rtkPath: string): string | null {
-  if (shouldBypassRtkRewrite(command)) return null;
 
   // NOTE:
   // Some RTK versions return a non-zero exit code even when `rtk rewrite`

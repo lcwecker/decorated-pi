@@ -7,9 +7,7 @@ import {
   appendStatus,
   buildRtkCommand,
   executeOriginalBash,
-  extractMainCommand,
   shellQuote,
-  shouldBypassRtkRewrite,
 } from "../extensions/rtk";
 
 describe("RTK integration helpers", () => {
@@ -29,32 +27,7 @@ describe("RTK integration helpers", () => {
     expect(result).toBe("export PATH='/opt/rtk/bin':$PATH && cd /repo && rtk git log -n 5");
   });
 
-  it("extracts main command through prefixes", () => {
-    expect(extractMainCommand("cd /path && git status")).toBe("git status");
-    expect(extractMainCommand("FOO=bar BAZ=qux cargo test")).toBe("cargo test");
-    expect(extractMainCommand("time sudo npm install")).toBe("npm install");
-  });
 
-  it("does not bypass simple find commands", () => {
-    expect(shouldBypassRtkRewrite("find . -name '*.ts'"))
-      .toBe(false);
-    expect(shouldBypassRtkRewrite("cd /repo && find . -name foo | sort"))
-      .toBe(false);
-  });
-
-  it("bypasses compound find predicates", () => {
-    expect(shouldBypassRtkRewrite("find . -name a -o -name b")).toBe(true);
-    expect(shouldBypassRtkRewrite("cd /repo && find . -name a -o -name b | sort")).toBe(true);
-    expect(shouldBypassRtkRewrite("find . \\( -name a -o -name b \\)"))
-      .toBe(true);
-  });
-
-  it("bypasses unsupported find actions", () => {
-    expect(shouldBypassRtkRewrite("find . -name foo -exec cat {} \\;"))
-      .toBe(true);
-    expect(shouldBypassRtkRewrite("find . -name foo -print0 | xargs -0 rm")).toBe(true);
-    expect(shouldBypassRtkRewrite("find . -name foo -delete")).toBe(true);
-  });
 });
 
 describe("runtime fallback helpers", () => {

@@ -3,13 +3,15 @@
  */
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+
+// Extend prompt cache TTL for all providers: Anthropic 1h, OpenAI 24h
+process.env.PI_CACHE_RETENTION ??= "long";
 import { setupSafety } from "./safety/index.js";
 import { setupModelIntegration } from "./model-integration";
 import { setupSlash } from "./slash";
 import { setupSubdirAgents } from "./subdir-agents";
 import { setupSessionTitle } from "./session-title";
 import { setupIO } from "./io";
-import { setupGuidance } from "./guidance";
 import { setupLsp } from "./lsp/index";
 import { collectLspDependencyStatuses } from "./lsp/servers";
 import { setupProviders } from "./providers/index";
@@ -77,6 +79,60 @@ function setupDependencyReminders(pi: ExtensionAPI) {
     clearTimeout(notifyTimer);
     notifyTimer = undefined;
   });
+}
+
+const DECORATED_PI_GUIDANCE_MARKER = "## Decorated Pi Guidance";
+
+function setupGuidance(pi: ExtensionAPI) {
+  pi.on("before_agent_start", async (event) => {
+    // Remove "Current date: YYYY-MM-DD" from system prompt to improve cache stability
+    let prompt = event.systemPrompt.replace(/\nCurrent date: \d{4}-\d{2}-\d{2}/, "");
+
+    if (!prompt.includes(DECORATED_PI_GUIDANCE_MARKER)) {
+      const guidance = [
+        DECORATED_PI_GUIDANCE_MARKER,
+        "",
+        "- Before acting on a user's prompt, ensure you fully understand their needs. If the intent is ambiguous, ask clarifying questions. Proceed only when the intent is clear.",
+        "- Look before you leap! Ensure you have conducted thorough research before taking any action.",
+        "- Exercise caution when performing any **write** operations, especially when you are in a research or exploration phase.",
+        "- You don't need to read **AGENTS.md** or **CLAUDE.md** files unless you're explicitly asked to, these files will loaded automatically if neccessary.",
+        "- CAUTION: Do not perform write operations in the following directories unless explicitly instructed: `node_modules`, `venv`, `env`, `__pycache__`, `.git` or any other hidden directories.",
+        "",
+        "### Secret Redaction",
+        "",
+        "- When you see masked secret values (e.g. `sk-***...***` where `*`, `#`, or `?` are mask characters), the real value has been redacted by the system. Do not attempt to read or guess it. If you need the secret, use tools like `jq` or `grep` to extract it from the original source file.",
+      ].join("\n");
+
+      prompt = `${prompt}\n\n${guidance}`;
+    }
+
+    sortSystemPromptOptions(event.systemPromptOptions);
+    return { systemPrompt: prompt };
+  });
+}
+
+/** Sort all fields in systemPromptOptions alphabetically for stable system prompt. */
+export function sortSystemPromptOptions(opts: {
+  toolSnippets?: Record<string, string>;
+  selectedTools?: string[];
+  promptGuidelines?: string[];
+  skills?: Array<{ name: string; description: string; filePath: string; [key: string]: unknown }>;
+}) {
+  const sortedToolNames = Object.keys(opts.toolSnippets ?? {}).sort((a, b) => a.localeCompare(b));
+  const sortedToolSnippets: Record<string, string> = {};
+  for (const name of sortedToolNames) {
+    sortedToolSnippets[name] = opts.toolSnippets![name];
+  }
+  opts.toolSnippets = sortedToolSnippets;
+  if (opts.selectedTools) {
+    opts.selectedTools = sortedToolNames;
+  }
+  if (opts.promptGuidelines) {
+    opts.promptGuidelines = [...opts.promptGuidelines].sort((a, b) => a.localeCompare(b));
+  }
+  if (opts.skills) {
+    opts.skills = [...opts.skills].sort((a, b) => a.name.localeCompare(b.name));
+  }
 }
 
 export default function (pi: ExtensionAPI) {
