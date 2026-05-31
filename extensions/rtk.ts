@@ -173,8 +173,17 @@ export function setupRtkIntegration(pi: ExtensionAPI) {
 
   if (baseRenderCall) {
     bashTool.renderCall = (args, theme, context) => {
-      const component = baseRenderCall(args, theme, context);
+      // Avoid calling baseRenderCall when args.command is not yet available
+      // to prevent flashing "<invalid command>" in TUI
       const command = typeof args?.command === "string" ? args.command : "";
+      if (!command) {
+        const text = context.lastComponent ?? new Text("", 0, 0);
+        const placeholder = theme.fg("toolOutput", "...");
+        text.setText(theme.fg("toolTitle", theme.bold(`$ ${placeholder}`)));
+        return text;
+      }
+
+      const component = baseRenderCall(args, theme, context);
       const predicted = command
         ? (rewriteabilityCache.get(command) ?? (() => {
             const value = rewriteWithRtk(command, rtkBinary!) !== null;
