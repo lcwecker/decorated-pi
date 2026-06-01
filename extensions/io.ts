@@ -26,7 +26,7 @@
  *   6. prepareArguments must handle literal newlines in JSON strings
  */
 
-import { defineTool, isReadToolResult, keyHint, getLanguageFromPath, highlightCode, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { defineTool, isReadToolResult, keyHint, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { renderDiff } from "@earendil-works/pi-coding-agent";
 import { Box, Container, Spacer, Text, truncateToWidth } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
@@ -64,15 +64,9 @@ const PatchSchema = Type.Object({
   path: Type.String({
     description: "Path to the file to edit (relative or absolute).",
   }),
-  edits: Type.Optional(Type.Array(EditSchema, {
-    description: "Targeted replacements applied sequentially.",
-  })),
-  overwrite: Type.Optional(Type.Boolean({
-    description: "If true, replace the entire file atomically (write temp → mv).",
-  })),
-  new_str: Type.Optional(Type.String({
-    description: "Entire new file content when overwrite is true.",
-  })),
+  edits: Type.Array(EditSchema, {
+    description: "Targeted replacements applied sequentially. Each edit does exact string replacement with optional anchor.",
+  }),
 });
 
 // ─── Argument repair ───────────────────────────────────────────────────────────────
@@ -105,26 +99,6 @@ export function preparePatchArguments(input: any): any {
 
   const args = input as Record<string, any>;
 
-  // Legacy multi-file format: { patches: [{ path, edits }] } → extract first
-  if (Array.isArray(args.patches) && !args.path) {
-    const first = args.patches[0];
-    if (first && typeof first === "object" && first.path) {
-      Object.assign(args, first);
-      delete args.patches;
-    }
-  } else if (typeof args.patches === "string" && !args.path) {
-    try {
-      const parsed = jsonParseWithNewlineFix(args.patches);
-      if (Array.isArray(parsed) && parsed.length > 0 && parsed[0]?.path) {
-        Object.assign(args, parsed[0]);
-        delete args.patches;
-      } else if (parsed && typeof parsed === "object" && parsed.path) {
-        Object.assign(args, parsed);
-        delete args.patches;
-      }
-    } catch { /* keep original */ }
-  }
-
   // Edits serialized as JSON string
   if (typeof args.edits === "string") {
     try {
@@ -153,14 +127,6 @@ interface PatchCallComponent extends Box {
   previewArgsKey?: string;
   previewPending?: boolean;
   settledError: boolean;
-  /** Overwrite streaming highlight cache (mirrors write tool design) */
-  overwriteHighlightCache?: {
-    rawPath: string;
-    lang: string | undefined;
-    rawContent: string;
-    normalizedLines: string[];
-    highlightedLines: string[];
-  };
 }
 
 export function createPatchCallComponent(): PatchCallComponent {
@@ -184,86 +150,8 @@ function getPatchCallComponent(state: any, lastComponent: any): PatchCallCompone
   return comp;
 }
 
-// ─── Syntax highlighting for overwrite mode (mirrors write tool's incremental design) ──
-
-const OVERWRITE_PARTIAL_HIGHLIGHT_LINES = 50;
-
-function normalizeDisplayText(text: string): string {
-  return text.replace(/\r/g, "");
-}
-
 function replaceTabs(text: string): string {
   return text.replace(/\t/g, "    ");
-}
-
-function highlightSingleLine(line: string, lang: string | undefined): string {
-  const highlighted = highlightCode(line, lang);
-  return highlighted[0] ?? "";
-}
-
-function refreshOverwriteHighlightPrefix(cache: NonNullable<PatchCallComponent["overwriteHighlightCache"]>): void {
-  const prefixCount = Math.min(OVERWRITE_PARTIAL_HIGHLIGHT_LINES, cache.normalizedLines.length);
-  if (prefixCount === 0) return;
-  const prefixSource = cache.normalizedLines.slice(0, prefixCount).join("\n");
-  const prefixHighlighted = highlightCode(prefixSource, cache.lang);
-  for (let i = 0; i < prefixCount; i++) {
-    cache.highlightedLines[i] =
-      prefixHighlighted[i] ?? highlightSingleLine(cache.normalizedLines[i] ?? "", cache.lang);
-  }
-}
-
-function rebuildOverwriteHighlightCache(rawPath: string, fileContent: string): PatchCallComponent["overwriteHighlightCache"] | undefined {
-  const lang = rawPath ? getLanguageFromPath(rawPath) : undefined;
-  if (!lang) return undefined;
-  const normalized = replaceTabs(normalizeDisplayText(fileContent));
-  return {
-    rawPath,
-    lang,
-    rawContent: fileContent,
-    normalizedLines: normalized.split("\n"),
-    highlightedLines: highlightCode(normalized, lang),
-  };
-}
-
-function updateOverwriteHighlightCache(
-  cache: PatchCallComponent["overwriteHighlightCache"] | undefined,
-  rawPath: string,
-  fileContent: string,
-): PatchCallComponent["overwriteHighlightCache"] | undefined {
-  if (cache) {
-    const lang = rawPath ? getLanguageFromPath(rawPath) : undefined;
-    if (!lang || cache.lang !== lang || cache.rawPath !== rawPath) {
-      return rebuildOverwriteHighlightCache(rawPath, fileContent);
-    }
-    if (!fileContent.startsWith(cache.rawContent)) {
-      return rebuildOverwriteHighlightCache(rawPath, fileContent);
-    }
-    if (fileContent.length === cache.rawContent.length) return cache;
-    const deltaRaw = fileContent.slice(cache.rawContent.length);
-    const deltaNormalized = replaceTabs(normalizeDisplayText(deltaRaw));
-    cache.rawContent = fileContent;
-    if (cache.normalizedLines.length === 0) {
-      cache.normalizedLines.push("");
-      cache.highlightedLines.push("");
-    }
-    const segments = deltaNormalized.split("\n");
-    const lastIndex = cache.normalizedLines.length - 1;
-    cache.normalizedLines[lastIndex] += segments[0];
-    cache.highlightedLines[lastIndex] = highlightSingleLine(cache.normalizedLines[lastIndex]!, cache.lang);
-    for (let i = 1; i < segments.length; i++) {
-      cache.normalizedLines.push(segments[i]!);
-      cache.highlightedLines.push(highlightSingleLine(segments[i]!, cache.lang));
-    }
-    refreshOverwriteHighlightPrefix(cache);
-    return cache;
-  }
-  return rebuildOverwriteHighlightCache(rawPath, fileContent);
-}
-
-function addHighlightedContent(parent: Box, lines: string[]): void {
-  for (const line of lines) {
-    parent.addChild(new Text(line, 0, 0));
-  }
 }
 
 function getPatchHeaderBg(component: PatchCallComponent, theme: any) {
@@ -335,9 +223,7 @@ export function buildPatchCallComponent(component: PatchCallComponent, args: any
   let label = "";
   if (args?.path) {
     label = theme.fg("accent", args.path);
-    if (args.overwrite) {
-      label += theme.fg("error", " [overwrite]");
-    } else if (args.edits?.length > 0) {
+    if (Array.isArray(args.edits) && args.edits.length > 0) {
       label += theme.fg("dim", ` (${args.edits.length} edit${args.edits.length > 1 ? "s" : ""})`);
     }
   }
@@ -348,9 +234,7 @@ export function buildPatchCallComponent(component: PatchCallComponent, args: any
 
   const preview = component.preview;
   let body = "";
-  if ("isOverwrite" in preview && preview.isOverwrite && preview.preview) {
-    body = preview.preview;
-  } else if ("diff" in preview && preview.diff) {
+  if ("diff" in preview && preview.diff) {
     body = preview.diff;
   } else if ("error" in preview && preview.error) {
     component.addChild(new Spacer(1));
@@ -364,36 +248,18 @@ export function buildPatchCallComponent(component: PatchCallComponent, args: any
   const FOLD_THRESHOLD = 45;
 
   component.addChild(new Spacer(1));
-  const isOverwrite = "isOverwrite" in preview && preview.isOverwrite;
 
   if (lines.length > FOLD_THRESHOLD && !expanded) {
     // 折叠态: 显示前几行 + 摘要
-    if (isOverwrite) {
-      if (component.overwriteHighlightCache) {
-        const n = Math.min(10, component.overwriteHighlightCache.highlightedLines.length);
-        addHighlightedContent(component, component.overwriteHighlightCache.highlightedLines.slice(0, n));
-      } else {
-        component.addChild(new Text(theme.fg("toolDiffAdded", lines.slice(0, 10).join("\n")), 0, 0));
-      }
-    } else {
-      const shown = lines.slice(0, 10).join("\n");
-      appendPatchDiffChildren(component, shown, theme);
-    }
+    const shown = lines.slice(0, 10).join("\n");
+    appendPatchDiffChildren(component, shown, theme);
     component.addChild(new Text(
       theme.fg("dim", `  ... ${lines.length - 10} more lines (`) + keyHint("app.tools.expand", "expand") + theme.fg("dim", ")"),
       0, 0,
     ));
   } else {
     // 展开态: 完整显示
-    if (isOverwrite) {
-      if (component.overwriteHighlightCache) {
-        addHighlightedContent(component, component.overwriteHighlightCache.highlightedLines);
-      } else {
-        component.addChild(new Text(theme.fg("toolDiffAdded", body), 0, 0));
-      }
-    } else {
-      appendPatchDiffChildren(component, body, theme);
-    }
+    appendPatchDiffChildren(component, body, theme);
   }
 
   return component;
@@ -405,7 +271,9 @@ export function setupIO(pi: ExtensionAPI) {
   pi.on("session_start", (_event, ctx) => {
     restoreReadMarkersFromBranch(ctx.sessionManager.getBranch() as any[], ctx.cwd);
     const active = pi.getActiveTools();
-    pi.setActiveTools(active.filter(t => !["edit", "write", "grep", "find", "ls"].includes(t)));
+    // Remove: edit (replaced by patch), grep/find/ls (replaced by bash)
+    // Keep: write (full-file write)
+    pi.setActiveTools(active.filter(t => !["edit", "grep", "find", "ls"].includes(t)));
   });
 
   pi.on("session_compact", () => {
@@ -428,14 +296,13 @@ export function setupIO(pi: ExtensionAPI) {
     name: "patch",
     label: "Patch",
     description: [
-      "Edits a file using exact string replacement, with anchor support and overwrite mode.",
+      "Edits a file using exact string replacement, with anchor support.",
       "When old_str is not unique, add more surrounding context or use anchor to narrow search.",
       "",
       "Examples:",
       '  { path: "src/foo.ts", edits: [{ old_str: "return 1", new_str: "return 42" }] }',
       '  { path: "src/foo.ts", edits: [{ anchor: "function bar() {", old_str: "return x", new_str: "return x + 1" }] }',
       '  { path: "src/foo.ts", edits: [{ anchor: "function init() {", old_str: "const DEBUG = true;", new_str: "const DEBUG = false;" }, { old_str: "log(\"debug\");", new_str: "// debug disabled" }] }',
-      '  { path: "src/bar.ts", overwrite: true, new_str: "entire file content" }',
       "",
       "Anchor (optional): narrows old_str search to lines after a unique marker.",
       "  Code: use the enclosing definition — function/class/struct/method signature.",
@@ -443,21 +310,20 @@ export function setupIO(pi: ExtensionAPI) {
       "  Non-code (markdown, config, etc.): use section headings, key names, or distinctive lines.",
       '  e.g. "## API Reference" in .md or "[dependencies]" in .toml files.',
     ].join("\n"),
-    promptSnippet: "Edits a file using exact string replacement, with anchor support and overwrite mode.",
+    promptSnippet: "Edits a file using exact string replacement, with anchor support.",
     promptGuidelines: [
-      "Always prefer modifying files with PATCH tool over bash commands or python scripts.",
-      "For full-file replacement, always use patch tool to prevent unintended edits or data loss.",
+      "Always prefer modifying files with patch tool over bash commands or python scripts.",
       "To prevent hallucinations: 1. Keep each edit batch ≤ 5 changes; 2. Process remaining revisions in sequential steps",
       "On repeated failures: read the file first to confirm information accuracy.",
     ],
     parameters: PatchSchema,
     renderShell: "self",
     prepareArguments: preparePatchArguments,
-    execute: async (_toolCallId: string, input: { path: string; edits?: any[]; overwrite?: boolean; new_str?: string }, _signal: any, _onUpdate: any, ctx: any) => {
+    execute: async (_toolCallId: string, input: { path: string; edits: any[] }, _signal: any, _onUpdate: any, ctx: any) => {
       const cwd: string = ctx.cwd ?? process.cwd();
 
-      // Stale-read protection (only for edits, not overwrite)
-      if (!input.overwrite && input.path?.trim()) {
+      // Stale-read protection
+      if (input.path?.trim()) {
         const absPath = resolveAbsolutePath(cwd, input.path);
         const staleError = checkStaleFile(absPath, input.path);
         if (staleError) throw new Error(staleError);
@@ -491,28 +357,6 @@ export function setupIO(pi: ExtensionAPI) {
         component.previewArgsKey = argsKey;
         component.previewPending = false;
         component.settledError = false;
-        component.overwriteHighlightCache = undefined;
-      }
-
-      // Overwrite streaming: incrementally highlight as new_str streams in
-      if (args?.overwrite && typeof args?.path === "string" && typeof args?.new_str === "string") {
-        if (context.argsComplete) {
-          // Final: full rebuild for best quality
-          component.overwriteHighlightCache = rebuildOverwriteHighlightCache(args.path, args.new_str);
-        } else {
-          // Streaming: incremental update
-          component.overwriteHighlightCache = updateOverwriteHighlightCache(
-            component.overwriteHighlightCache, args.path, args.new_str,
-          );
-        }
-        // Inject highlighted content as synthetic preview for buildPatchCallComponent
-        const cache = component.overwriteHighlightCache;
-        if (cache) {
-          component.preview = { preview: cache.rawContent, isOverwrite: true };
-        } else {
-          // No language detected: fall back to plain text
-          component.preview = { preview: args.new_str, isOverwrite: true };
-        }
       }
 
       // Preview diff is computed during execute and delivered via result.details.diff.
@@ -527,37 +371,17 @@ export function setupIO(pi: ExtensionAPI) {
       let changed = false;
 
       if (callComponent) {
-        // overwrite: 保留完整文件预览，不要被空 diff 覆盖成只剩 header
-        const overwriteContent = !context.isError && context.args?.overwrite && typeof context.args?.new_str === "string"
-          ? context.args.new_str
-          : undefined;
-
-        if (typeof overwriteContent === "string") {
-          const nextCache = rebuildOverwriteHighlightCache(context.args?.path, overwriteContent);
-          const prevContent = (callComponent.overwriteHighlightCache?.rawContent ?? undefined);
-          const prevPath = callComponent.overwriteHighlightCache?.rawPath;
-          callComponent.overwriteHighlightCache = nextCache;
-          if (
-            !(callComponent.preview && "isOverwrite" in callComponent.preview && callComponent.preview.isOverwrite && callComponent.preview.preview === overwriteContent) ||
-            prevContent !== overwriteContent ||
-            prevPath !== context.args?.path
-          ) {
-            callComponent.preview = { preview: overwriteContent, isOverwrite: true };
+        // Use execute's returned diff (same design as Pi's native edit tool)
+        const resultDiff = !context.isError && result.details?.diff;
+        if (typeof resultDiff === "string") {
+          const newPreview = { diff: resultDiff };
+          if (callComponent.preview?.diff !== resultDiff) {
+            callComponent.preview = newPreview;
             changed = true;
-          }
-        } else {
-          // 非 overwrite：优先使用 execute 返回的 diff（与 Pi 原生 edit 工具一致）
-          const resultDiff = !context.isError && result.details?.diff;
-          if (typeof resultDiff === "string") {
-            const newPreview = { diff: resultDiff };
-            if (callComponent.preview?.diff !== resultDiff) {
-              callComponent.preview = newPreview;
-              changed = true;
-            }
           }
         }
 
-        // 更新错误状态
+        // Update error state
         if (callComponent.settledError !== context.isError) {
           callComponent.settledError = context.isError;
           changed = true;

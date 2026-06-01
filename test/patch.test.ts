@@ -17,6 +17,7 @@ import {
   diagnoseOldStrMismatch,
   diagnoseOldStrNotUnique,
 } from "../extensions/patch.js";
+import { preparePatchArguments } from "../extensions/io.js";
 
 // ═══════════════════════════════════════════════════════════════════════════
 // applyPatches Tests
@@ -161,31 +162,6 @@ describe("applyPatches", () => {
     ).rejects.toThrow(ApplyError);
   });
 
-  // ── Overwrite ───────────────────────────────────────────────────────────
-
-  it("overwrites existing file atomically", async () => {
-    writeFile("f.txt", "old content\n");
-    const result = await applyPatches([
-      { path: "f.txt", overwrite: true, new_str: "new content\n" },
-    ], tmpDir);
-    expect(readFile("f.txt")).toBe("new content\n");
-    expect(result.modified).toContain("f.txt");
-  });
-
-  it("overwrite creates file if not exists", async () => {
-    const result = await applyPatches([
-      { path: "new.txt", overwrite: true, new_str: "created\n" },
-    ], tmpDir);
-    expect(readFile("new.txt")).toBe("created\n");
-    expect(result.created).toContain("new.txt");
-  });
-
-  it("overwrite creates parent directories", async () => {
-    await applyPatches([
-      { path: "sub/dir/f.txt", overwrite: true, new_str: "hi\n" },
-    ], tmpDir);
-    expect(readFile("sub/dir/f.txt")).toBe("hi\n");
-  });
 
   // ── Multi-file ──────────────────────────────────────────────────────────
 
@@ -200,18 +176,6 @@ describe("applyPatches", () => {
     expect(readFile("b.txt")).toBe("BB\n");
     expect(result.modified).toContain("a.txt");
     expect(result.modified).toContain("b.txt");
-  });
-
-  it("mixes edits and overwrite in one call", async () => {
-    writeFile("a.txt", "old\n");
-    const result = await applyPatches([
-      { path: "a.txt", edits: [{ old_str: "old", new_str: "new" }] },
-      { path: "b.txt", overwrite: true, new_str: "created\n" },
-    ], tmpDir);
-    expect(readFile("a.txt")).toBe("new\n");
-    expect(readFile("b.txt")).toBe("created\n");
-    expect(result.modified).toContain("a.txt");
-    expect(result.created).toContain("b.txt");
   });
 
   // ── CRLF handling ──────────────────────────────────────────────────────
@@ -242,12 +206,6 @@ describe("applyPatches", () => {
   it("rejects empty file path", async () => {
     await expect(
       applyPatches([{ path: "", edits: [{ old_str: "x", new_str: "y" }] }], tmpDir),
-    ).rejects.toThrow(ParseError);
-  });
-
-  it("rejects patch with no edits and no overwrite", async () => {
-    await expect(
-      applyPatches([{ path: "f.txt" }], tmpDir),
     ).rejects.toThrow(ParseError);
   });
 
@@ -464,16 +422,6 @@ describe("applyPatches", () => {
     expect(diff).toContain("  4 a04\n\n@@ lines 11-14 @@\n 11 a11");
   });
 
-  it("generatePatchDiff skips overwrite files (no diff generated)", async () => {
-    writeFile("f.txt", "old content\n");
-    const result = await applyPatches([
-      { path: "f.txt", overwrite: true, new_str: "new content\n" },
-    ], tmpDir);
-    const diff = generatePatchDiff(result);
-    // Overwrite files have no replacement info, so diff is empty
-    expect(diff).toBe("");
-  });
-
   // ── computePatchPreview ────────────────────────────────────────────────
 
   it("computePatchPreview generates preview diff (single-file API)", async () => {
@@ -495,28 +443,6 @@ describe("applyPatches", () => {
     expect(p.error).toBeTruthy();
   });
 
-  it("computePatchPreview returns full content for overwrite", async () => {
-    const longContent = Array.from({ length: 30 }, (_, i) => `line ${i + 1}`).join("\n");
-    writeFile("f.txt", "old\n");
-    const p = await computePatchPreview(
-      { path: "f.txt", overwrite: true, new_str: longContent },
-      tmpDir,
-    );
-    expect(p.isOverwrite).toBe(true);
-    expect(p.preview).toBe(longContent);
-    expect(p.preview!.split("\n")).toHaveLength(30);
-    expect(p.diff).toBeUndefined();
-  });
-});
-
-
-// ═══════════════════════════════════════════════════════════════════════════
-// preparePatchArguments Tests (single-file schema)
-// ═══════════════════════════════════════════════════════════════════════════
-
-import { preparePatchArguments } from "../extensions/io.js";
-
-describe("preparePatchArguments", () => {
   it("passes through normal single-file input unchanged", () => {
     const input = { path: "a.ts", edits: [{ old_str: "x", new_str: "y" }] };
     const result = preparePatchArguments(input);
@@ -524,33 +450,6 @@ describe("preparePatchArguments", () => {
     expect(result.edits).toEqual([{ old_str: "x", new_str: "y" }]);
   });
 
-  it("unwraps legacy patches array to single-file", () => {
-    const input = {
-      patches: [{ path: "a.ts", edits: [{ old_str: "x", new_str: "y" }] }],
-    };
-    const result = preparePatchArguments(input);
-    expect(result.path).toBe("a.ts");
-    expect(result.edits).toEqual([{ old_str: "x", new_str: "y" }]);
-    expect(result.patches).toBeUndefined();
-  });
-
-  it("unwraps legacy patches JSON string", () => {
-    const input = {
-      patches: JSON.stringify([{ path: "a.ts", edits: [{ old_str: "x", new_str: "y" }] }]),
-    };
-    const result = preparePatchArguments(input);
-    expect(result.path).toBe("a.ts");
-    expect(result.edits).toEqual([{ old_str: "x", new_str: "y" }]);
-  });
-
-  it("unwraps legacy single object string", () => {
-    const input = {
-      patches: JSON.stringify({ path: "a.ts", edits: [{ old_str: "x", new_str: "y" }] }),
-    };
-    const result = preparePatchArguments(input);
-    expect(result.path).toBe("a.ts");
-    expect(result.edits).toEqual([{ old_str: "x", new_str: "y" }]);
-  });
 
   it("repairs edits serialized as string", () => {
     const edits = [{ old_str: "x", new_str: "y" }];
@@ -610,21 +509,6 @@ describe("preparePatchArguments → applyPatch pipeline", () => {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 
-  it("legacy patches string → repair → apply", async () => {
-    const filePath = path.join(tmpDir, "test.txt");
-    fs.writeFileSync(filePath, "hello world\n");
-
-    const input = {
-      patches: JSON.stringify([{ path: filePath, edits: [{ old_str: "hello", new_str: "goodbye" }] }]),
-    };
-    const repaired = preparePatchArguments(input);
-    expect(repaired.path).toBe(filePath);
-
-    const result = await applyPatch(repaired, tmpDir);
-    expect(result.modified).toContain(filePath);
-    expect(fs.readFileSync(filePath, "utf8")).toBe("goodbye world\n");
-  });
-
   it("edits as string → repair → apply", async () => {
     const filePath = path.join(tmpDir, "test2.txt");
     fs.writeFileSync(filePath, "foo bar baz\n");
@@ -638,41 +522,6 @@ describe("preparePatchArguments → applyPatch pipeline", () => {
     expect(fs.readFileSync(filePath, "utf8")).toBe("foo BAR baz\n");
   });
 
-  it("legacy patches string with anchor → repair → apply", async () => {
-    const filePath = path.join(tmpDir, "test3.txt");
-    fs.writeFileSync(filePath, "function foo() {\n  return 1;\n}\n\nfunction bar() {\n  return 2;\n}\n");
-
-    const input = {
-      patches: JSON.stringify([{
-        path: filePath,
-        edits: [{ anchor: "function bar() {", old_str: "return 2;", new_str: "return 42;" }],
-      }]),
-    };
-    const repaired = preparePatchArguments(input);
-    const result = await applyPatch(repaired, tmpDir);
-    expect(fs.readFileSync(filePath, "utf8")).toContain("return 42;");
-    expect(fs.readFileSync(filePath, "utf8")).toContain("return 1;");
-  });
-
-  it("overwrite via legacy patches string", async () => {
-    const filePath = path.join(tmpDir, "test4.txt");
-    fs.writeFileSync(filePath, "old content\n");
-
-    const input = {
-      patches: JSON.stringify([{ path: filePath, overwrite: true, new_str: "new content\n" }]),
-    };
-    const repaired = preparePatchArguments(input);
-    const result = await applyPatch(repaired, tmpDir);
-    expect(result.modified).toContain(filePath);
-    expect(fs.readFileSync(filePath, "utf8")).toBe("new content\n");
-  });
-});
-
-// ═══════════════════════════════════════════════════════════════════════════
-// Mismatch Diagnostics
-// ═══════════════════════════════════════════════════════════════════════════
-
-describe("diagnoseOldStrMismatch", () => {
   it("detects tab vs space mismatch", () => {
     const diag = diagnoseOldStrMismatch("        code", "\t\tcode\n");
     expect(diag).toContain("tab vs space");

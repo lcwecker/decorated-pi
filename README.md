@@ -14,12 +14,10 @@ pi install /path/to/decorated-pi
 
 ### 1. Patch Tool
 
-Replaces Pi's built-in `edit` / `write` with a stronger `patch` tool that adds unique safety and usability improvements on top of the native tools.
+Replaces Pi's built-in `edit` with a stronger `patch` tool that adds unique safety and usability improvements on top of the native tools.
 
 | Capability | Pi native `edit` | `patch` |
 | ------ | :---: | :---: |
-| Exact string replacement | ✅ `oldText` | ✅ `old_str` |
-| Atomic overwrite | ✅ `write` | ✅ `overwrite` |
 | Syntax‑highlighted overwrite | ✅ streaming | ✅ incremental |
 | **Anchor‑based search** | ❌ extending `oldText` for uniqueness | ✅ `anchor` bounds scope for precise matching |
 | **Fuzzy whitespace match** | ❌ only reports "not found" | ✅ auto‑corrects tab↔space / trailing whitespace mismatches |
