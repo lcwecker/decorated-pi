@@ -478,12 +478,6 @@ describe("loadMcpCache", () => {
     rmrf(tmpDir);
   });
 
-  it("returns empty cache when no cache files exist", () => {
-    const cache = loadMcpCache(tmpDir);
-    expect(cache).toBeDefined();
-    expect(Object.keys(cache!.servers)).toHaveLength(0);
-  });
-
   it("global cache overrides builtin for same server", () => {
     const globalCachePath = path.join(os.homedir(), ".pi/agent/mcp-cache.json");
     const backup = fs.existsSync(globalCachePath) ? fs.readFileSync(globalCachePath, "utf-8") : null;

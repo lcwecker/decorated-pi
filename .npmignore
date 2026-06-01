@@ -1,4 +1,4 @@
 test/
 vitest.config.ts
-.mcp.json
+.opencode/
 *.tgz

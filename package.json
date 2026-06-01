@@ -1,44 +1,51 @@
 {
-  "name": "decorated-pi",
-  "version": "0.5.1",
-  "description": "decorated-pi is a practical enhancement pack for pi — smarter tools that are token efficient and cache friendly.",
-  "keywords": [
-    "pi",
-    "pi-package",
-    "pi-extension",
-    "rtk",
-    "mcp",
-    "security",
-    "lsp",
-    "language-server",
-    "secret-detection"
-  ],
-  "license": "MIT",
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/lcwecker/decorated-pi.git"
-  },
-  "homepage": "https://github.com/lcwecker/decorated-pi#readme",
-  "bugs": "https://github.com/lcwecker/decorated-pi/issues",
-  "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.29.0",
-    "openai": "^6.37.0"
-  },
-  "peerDependencies": {
-    "@earendil-works/pi-ai": "*",
-    "@earendil-works/pi-coding-agent": "*",
-    "@earendil-works/pi-tui": "*",
-    "typebox": "*"
-  },
-  "pi": {
-    "extensions": [
-      "./extensions/index.ts"
-    ]
-  },
-  "devDependencies": {
-    "vitest": "^4.1.6"
-  },
-  "scripts": {
-    "test": "vitest run"
-  }
+    "name": "decorated-pi",
+    "version": "0.5.2",
+    "description": "decorated-pi is a practical enhancement pack for pi — smarter tools that are token efficient and cache friendly.",
+    "keywords": [
+        "pi",
+        "pi-package",
+        "pi-extension",
+        "rtk",
+        "mcp",
+        "security",
+        "lsp",
+        "language-server",
+        "secret-detection"
+    ],
+    "type": "commonjs",
+    "license": "MIT",
+    "repository": {
+        "type": "git",
+        "url": "git+https://github.com/lcwecker/decorated-pi.git"
+    },
+    "homepage": "https://github.com/lcwecker/decorated-pi#readme",
+    "bugs": "https://github.com/lcwecker/decorated-pi/issues",
+    "dependencies": {
+        "@modelcontextprotocol/sdk": "^1.29.0",
+        "file-type": "^21.3.4",
+        "openai": "^6.37.0"
+    },
+    "peerDependencies": {
+        "@earendil-works/pi-ai": "*",
+        "@earendil-works/pi-coding-agent": "*",
+        "@earendil-works/pi-tui": "*",
+        "typebox": "*"
+    },
+    "pi": {
+        "extensions": [
+            "./extensions/index.ts"
+        ]
+    },
+    "devDependencies": {
+        "@types/node": "^22.15.3",
+        "depcheck": "^1.4.7",
+        "publint": "^0.3.21",
+        "vitest": "^4.1.6"
+    },
+    "scripts": {
+        "prepack": "depcheck --fail-on-missing",
+        "test": "vitest run",
+        "prepublishOnly": "npm install --package-lock-only --no-audit --no-fund && npm test && depcheck --fail-on-missing && publint"
+    }
 }
