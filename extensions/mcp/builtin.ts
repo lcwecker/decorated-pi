@@ -340,3 +340,43 @@ export function cleanupStaleCache(configs: McpServerConfig[], cwd?: string): voi
     }
   }
 }
+
+// ── Large result externalization ────────────────────────────────────────
+
+export const EXTERNALIZE_THRESHOLD = 50_000; // 50KB
+export const EXTERNALIZE_PREVIEW_SIZE = 2_000; // 2KB preview
+const EXTERNALIZE_TEMP_DIR = path.join(os.tmpdir(), "decorated-pi-results");
+
+/**
+ * If content exceeds threshold, save to temp file and return preview + path.
+ * Otherwise return original content unchanged.
+ * Falls back to returning full text if file write fails.
+ */
+export function maybeExternalizeMcpResult(
+  text: string,
+  toolName: string,
+  toolCallId: string,
+): { content: Array<{ type: "text"; text: string }>; details: Record<string, unknown> } {
+  if (text.length <= EXTERNALIZE_THRESHOLD) {
+    return { content: [{ type: "text", text }], details: {} };
+  }
+  
+  try {
+    if (!fs.existsSync(EXTERNALIZE_TEMP_DIR)) {
+      fs.mkdirSync(EXTERNALIZE_TEMP_DIR, { recursive: true });
+    }
+    const filePath = path.join(EXTERNALIZE_TEMP_DIR, `${toolName}-${toolCallId}.txt`);
+    fs.writeFileSync(filePath, text, "utf-8");
+    const preview = text.slice(0, EXTERNALIZE_PREVIEW_SIZE);
+    return {
+      content: [{ type: "text", text: `${preview}\n\n[Truncated: ${text.length.toLocaleString()} chars total. Full output saved to: ${filePath}]` }],
+      details: {
+        fullOutputPath: filePath,
+        truncation: { truncated: true, outputChars: EXTERNALIZE_PREVIEW_SIZE, totalChars: text.length, maxBytes: EXTERNALIZE_THRESHOLD },
+      },
+    };
+  } catch (err) {
+    // Fallback: return full text if file write fails
+    return { content: [{ type: "text", text }], details: {} };
+  }
+}

@@ -4,6 +4,8 @@ import { McpConnection } from "./client.js";
 import {
   resolveMcpConfigs,
   loadMcpCache, updateServerCache, cleanupStaleCache,
+  maybeExternalizeMcpResult,
+  BUILTIN_MCP_SERVERS,
   type McpServerConfig, type McpToolCache,
 } from "./builtin.js";
 
@@ -51,7 +53,24 @@ function formatMcpResultText(text: string, expanded: boolean, theme: any): strin
     text,
     expanded ? Number.MAX_SAFE_INTEGER : MCP_RESULT_FOLD_LINES,
   );
-  let rendered = displayLines.join("\n") ? theme.fg("toolOutput", displayLines.join("\n")) : "";
+  
+  // Check for externalization message in the last line
+  const lastLine = displayLines[displayLines.length - 1] || "";
+  let outputLines = [...displayLines];
+  let truncationMsg = "";
+  
+  if (lastLine.startsWith('[Truncated: ') && lastLine.endsWith(']')) {
+    truncationMsg = lastLine;
+    outputLines = outputLines.slice(0, -1);
+  }
+  
+  const outputText = outputLines.join("\n");
+  let rendered = outputText ? theme.fg("toolOutput", outputText) : "";
+  
+  if (truncationMsg) {
+    rendered += (rendered ? "\n" : "") + theme.fg("warning", truncationMsg);
+  }
+  
   if (!expanded && remainingLines > 0) {
     rendered += `${theme.fg("muted", `\n... (${remainingLines} more lines, ${totalLines} total,`)} ${keyHint("app.tools.expand", "to expand")})`;
   }
@@ -100,10 +119,11 @@ function cacheScopeForSource(source: string): "global" | "project" {
 
 // ── register cached tools ─────────────────────────────────────────────────
 
-function registerCachedTools(pi: ExtensionAPI, configs: McpServerConfig[]): void {
-  const cache = loadMcpCache(cachedCwd);
-  if (!cache) return;
-
+function registerCachedToolsFromCache(
+  pi: ExtensionAPI,
+  cache: McpCache,
+  configs: McpServerConfig[]
+): void {
   for (const config of configs) {
     if (!config.enabled) continue;
     const entry = cache.servers[config.name];
@@ -122,15 +142,19 @@ function registerCachedTools(pi: ExtensionAPI, configs: McpServerConfig[]): void
         execute: async (_id, params, _signal, _update, _ctx) => {
           const conn = activeConnections.find(c => c.serverName === config.name);
           if (!conn) {
+            // Tool is registered from cache before connectAll finishes. Tell the
+            // model to retry — connection is establishing in the background.
+            const status = allServers.get(config.name);
+            const state = status?.state ?? "connecting";
             return {
-              content: [{ type: "text", text: `MCP server "${config.name}" is not connected.` }],
-              isError: true,
+              content: [{ type: "text", text: `MCP server "${config.name}" is ${state}. Please retry shortly.` }],
+              isError: false,
               details: {},
             };
           }
           try {
             const text = await conn.callTool(t.name, params as Record<string, unknown>);
-            return { content: [{ type: "text", text }], isError: false, details: {} };
+            return maybeExternalizeMcpResult(text, toolName, _id);
           } catch (err) {
             const msg = err instanceof Error ? err.message : String(err);
             return {
@@ -145,9 +169,18 @@ function registerCachedTools(pi: ExtensionAPI, configs: McpServerConfig[]): void
   }
 }
 
+function registerCachedTools(pi: ExtensionAPI, configs: McpServerConfig[]): void {
+  const cache = loadMcpCache(cachedCwd);
+  if (!cache) return;
+  registerCachedToolsFromCache(pi, cache, configs);
+}
+
 // ── connect ───────────────────────────────────────────────────────────────
 
-async function connectAll(configs: McpServerConfig[], ui?: { notify: (msg: string, type: string) => void }): Promise<void> {
+async function connectAll(
+  configs: McpServerConfig[],
+  ui?: { notify: (msg: string, type: string) => void }
+): Promise<{ schemaChanges: string[]; hasNewServer: boolean }> {
   // Load current cache for comparison
   const cache = loadMcpCache(cachedCwd);
   const schemaChanges: string[] = [];
@@ -241,10 +274,17 @@ async function connectAll(configs: McpServerConfig[], ui?: { notify: (msg: strin
   await connectPromise;
   connectPromise = null;
 
-  // Notify about schema changes
-  if (schemaChanges.length > 0 && ui) {
-    ui.notify(`MCP schema updated: ${schemaChanges.join('; ')}. Run /reload to apply.`, "warning");
+  // Determine whether any server had no cached tools (first-time connection).
+  let hasNewServer = false;
+  for (const server of configs) {
+    const cachedEntry = cache?.servers[server.name];
+    if (!cachedEntry || cachedEntry.tools.length === 0) {
+      hasNewServer = true;
+      break;
+    }
   }
+
+  return { schemaChanges, hasNewServer };
 }
 
 // ── setup ─────────────────────────────────────────────────────────────────
@@ -263,11 +303,27 @@ export function setupMcp(pi: ExtensionAPI) {
 
     const enabledConfigs = configs.filter(s => s.enabled);
 
-    // Register tools from cache — prompt-stable, works even if MCP is down
-    registerCachedTools(pi, enabledConfigs);
+    // Load cache and register tools immediately (before connectAll)
+    const cache = loadMcpCache(cachedCwd);
+    if (cache) {
+      registerCachedToolsFromCache(pi, cache, enabledConfigs);
+    }
 
-    // Connect in background, pass UI for schema change notifications
-    void connectAll(enabledConfigs, ctx.hasUI ? ctx.ui : undefined);
+    // Connect in background (fire-and-forget, don't block session_start)
+    void connectAll(enabledConfigs, ctx.hasUI ? ctx.ui : undefined).then(({ schemaChanges, hasNewServer }) => {
+      // Re-register tools when:
+      //   - A server was not in cache before (first connection)
+      //   - Schema changed (tools added/removed/changed)
+      if (hasNewServer || schemaChanges.length > 0) {
+        const cache = loadMcpCache(cachedCwd);
+        if (cache) {
+          registerCachedToolsFromCache(pi, cache, enabledConfigs);
+        }
+      }
+      if (schemaChanges.length > 0 && ctx.hasUI) {
+        ctx.ui.notify(`MCP schema updated: ${schemaChanges.join('; ')}.`, "info");
+      }
+    });
   });
 
   pi.on("session_shutdown", () => {

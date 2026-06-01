@@ -13,7 +13,6 @@
         "language-server",
         "secret-detection"
     ],
-    "type": "commonjs",
     "license": "MIT",
     "repository": {
         "type": "git",
