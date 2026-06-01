@@ -255,8 +255,11 @@ class McpStatusComponent extends Container {
         if (s.tools.length > 0) {
           lines.push(`    ${s.toolCount} tool${s.toolCount === 1 ? "" : "s"}:`);
           for (const tool of s.tools.slice(0, 6)) {
-            const td = tool.description
-              ? ` — ${tool.description.slice(0, 55)}`
+            const flat = (tool.description ?? "").replace(/\s+/g, " ").trim();
+            const td = flat
+              ? flat.length > 55
+                ? ` — ${flat.slice(0, 55)}…`
+                : ` — ${flat}`
               : "";
             lines.push(`      ${tool.name}${td}`);
           }
