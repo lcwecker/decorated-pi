@@ -26,7 +26,7 @@
  *   6. prepareArguments must handle literal newlines in JSON strings
  */
 
-import { defineTool, isReadToolResult, keyHint, type ExtensionAPI, type ToolResultEvent, type ToolResultEventResult } from "@earendil-works/pi-coding-agent";
+import { defineTool, isEditToolResult, isReadToolResult, isWriteToolResult, keyHint, type ExtensionAPI, type ToolResultEvent, type ToolResultEventResult } from "@earendil-works/pi-coding-agent";
 import { renderDiff } from "@earendil-works/pi-coding-agent";
 import { Box, Container, Spacer, Text, truncateToWidth } from "@earendil-works/pi-tui";
 import { writeOutputToTemp } from "./io-tool-output.js";
@@ -320,6 +320,20 @@ export function setupIO(pi: ExtensionAPI) {
     if (typeof filePath !== "string" || !filePath.trim()) return;
     const cwd: string = ctx.cwd ?? process.cwd();
     const absPath = resolveAbsolutePath(cwd, filePath);
+    recordReadTime(absPath);
+    const marker = createFileTimeMarkerData(cwd, absPath);
+    if (marker) pi.appendEntry(FILE_TIMES_CUSTOM_TYPE, marker);
+  });
+
+  // Track file write times (for write and edit, in case patch module is disabled)
+  pi.on("tool_result", (event, ctx) => {
+    if (!isWriteToolResult(event) && !isEditToolResult(event)) return;
+    const filePath = event.input?.path;
+    if (typeof filePath !== "string" || !filePath.trim()) return;
+    const cwd: string = ctx.cwd ?? process.cwd();
+    const absPath = resolveAbsolutePath(cwd, filePath);
+    // Only record if the write succeeded (not an error result)
+    if (event.isError) return;
     recordReadTime(absPath);
     const marker = createFileTimeMarkerData(cwd, absPath);
     if (marker) pi.appendEntry(FILE_TIMES_CUSTOM_TYPE, marker);
