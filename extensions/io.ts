@@ -26,9 +26,10 @@
  *   6. prepareArguments must handle literal newlines in JSON strings
  */
 
-import { defineTool, isReadToolResult, keyHint, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { defineTool, isReadToolResult, keyHint, type ExtensionAPI, type ToolResultEvent, type ToolResultEventResult } from "@earendil-works/pi-coding-agent";
 import { renderDiff } from "@earendil-works/pi-coding-agent";
 import { Box, Container, Spacer, Text, truncateToWidth } from "@earendil-works/pi-tui";
+import { writeOutputToTemp } from "./io-tool-output.js";
 import { Type } from "typebox";
 import {
   applyPatch,
@@ -267,6 +268,31 @@ export function buildPatchCallComponent(component: PatchCallComponent, args: any
 
 // ─── Setup ──────────────────────────────────────────────────────────────────────────
 
+export const OUTPUT_EXTERNALIZE_THRESHOLD = 30_000; // 30KB — match Claude Code's bash truncation threshold
+
+/** If the tool result content is a single text string longer than the
+ *  threshold, replace it with a one-line placeholder pointing at the
+ *  full output on disk. Returns the modified result, or undefined to
+ *  leave the original content untouched. */
+export function maybeExternalizeToolResult(event: ToolResultEvent): ToolResultEventResult | undefined {
+  const content = event.content;
+  if (!Array.isArray(content) || content.length === 0) return undefined;
+  const first = content[0];
+  if (first?.type !== "text" || typeof first.text !== "string") return undefined;
+  const text = first.text;
+  if (text.length <= OUTPUT_EXTERNALIZE_THRESHOLD) return undefined;
+
+  const filePath = writeOutputToTemp(event.toolName, event.toolCallId, text);
+  if (!filePath) return undefined; // write failed — keep original content
+
+  return {
+    content: [{
+      type: "text" as const,
+      text: `[Output truncated: ${text.length.toLocaleString()} chars. Full output: ${filePath}]`,
+    }],
+  };
+}
+
 export function setupIO(pi: ExtensionAPI) {
   pi.on("session_start", (_event, ctx) => {
     restoreReadMarkersFromBranch(ctx.sessionManager.getBranch() as any[], ctx.cwd);
@@ -278,6 +304,13 @@ export function setupIO(pi: ExtensionAPI) {
 
   pi.on("session_compact", () => {
     clearReadMarkers();
+  });
+
+  // Externalize large tool results (read / bash) to a temp file.
+  // Keeps the messages segment small so prompt cache stays warm across turns.
+  pi.on("tool_result", (event) => {
+    if (event.toolName !== "read" && event.toolName !== "bash") return;
+    return maybeExternalizeToolResult(event);
   });
 
   // Track file read times
