@@ -4,8 +4,6 @@
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
-// Extend prompt cache TTL for all providers: Anthropic 1h, OpenAI 24h
-process.env.PI_CACHE_RETENTION ??= "long";
 import { setupSafety } from "./safety/index.js";
 import { setupModelIntegration } from "./model-integration";
 import { setupSlash } from "./slash";
