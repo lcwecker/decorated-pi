@@ -1,6 +1,6 @@
 {
     "name": "decorated-pi",
-    "version": "0.5.2",
+    "version": "0.5.3",
     "description": "decorated-pi is a practical enhancement pack for pi — smarter tools that are token efficient and cache friendly.",
     "keywords": [
         "pi",
@@ -45,6 +45,6 @@
     "scripts": {
         "prepack": "depcheck --fail-on-missing",
         "test": "vitest run",
-        "prepublishOnly": "npm install --package-lock-only --no-audit --no-fund && npm test && depcheck --fail-on-missing && publint"
+        "prepublishOnly": "npm install --no-audit --no-fund && npm test && depcheck --fail-on-missing && publint"
     }
 }
