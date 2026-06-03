@@ -192,7 +192,8 @@ async function applyEdits(
 
   const rawContent = fs.readFileSync(absPath, "utf8");
   const lineEnding = detectLineEnding(rawContent);
-  let content = normalizeLineEndings(rawContent);
+  const originalContent = normalizeLineEndings(rawContent);
+  let content = originalContent;
 
   // Precompute line offsets for O(log n) line number lookups
   const lineOffsets = buildLineOffsets(rawContent);
@@ -325,11 +326,13 @@ async function applyEdits(
   }
 
   // Generate diff using only needed context lines (no full-file split)
+  // Use originalContent (snapshot before edits) because neededRanges use
+  // original-file line numbers (oldStartLine/oldEndLine), not post-edit offsets.
   const mergedRanges = mergeRanges(neededRanges);
-  const currentLineOffsets = buildLineOffsets(content);
+  const originalLineOffsets = buildLineOffsets(originalContent);
   const neededLines: Map<number, string> = new Map();
   for (const range of mergedRanges) {
-    const lines = extractLineRange(content, currentLineOffsets, range.startLine, range.endLine);
+    const lines = extractLineRange(originalContent, originalLineOffsets, range.startLine, range.endLine);
     for (let i = 0; i < lines.length; i++) {
       neededLines.set(range.startLine + i, lines[i]);
     }

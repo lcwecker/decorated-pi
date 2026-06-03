@@ -380,6 +380,21 @@ describe("applyPatches", () => {
     expect(diff).toContain(" 4 gamma");
   });
 
+  it("context lines after an insert use original content, not shifted post-edit lines", async () => {
+    // old_str=line2, new_str=line2+line2.5 → inserts line2.5. Trailing context must
+    // come from the original file (line3, line4), NOT from the shifted post-edit content.
+    writeFile("f.txt", "line1\nline2\nline3\nline4\n");
+    const result = await applyPatches([
+      { path: "f.txt", edits: [{ old_str: "line2", new_str: "line2\nline2.5" }] },
+    ], tmpDir);
+    const diff = generatePatchDiff(result);
+    // Trailing context must be the original line3, not the shifted line2.5 from post-edit content
+    expect(diff).toContain(" 3 line3");
+    expect(diff).toContain(" 4 line4");
+    // Must NOT leak the inserted content into context position
+    expect(diff).not.toContain(" 3 line2.5");
+  });
+
   it("applyPatches with anchor substring of old_str still matches", async () => {
     writeFile("f.txt", "    if (has_mounted && m_bformatting == 0 && m_reinit_sta\n    next line\n");
     const result = await applyPatches([
