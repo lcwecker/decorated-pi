@@ -142,6 +142,30 @@ describe("applyPatches", () => {
     ).rejects.toThrow(/Anchor not found[\s\S]*old_str not found/);
   });
 
+  it("reports old_str not found after a valid unique anchor", async () => {
+    writeFile("f.txt", "function foo() {\n  return 1;\n}\n");
+    await expect(
+      applyPatches([
+        { path: "f.txt", edits: [{ anchor: "function foo() {", old_str: "return 2;", new_str: "return 3;" }] },
+      ], tmpDir),
+    ).rejects.toThrow(/old_str not found in f\.txt after anchor "function foo\(\) \{"/);
+  });
+
+  it("preserves valid-anchor diagnostics after sequential fallback", async () => {
+    writeFile("f.txt", "function foo() {\n  return 1;\n}\n");
+    await expect(
+      applyPatches([
+        {
+          path: "f.txt",
+          edits: [
+            { old_str: "return 1;", new_str: "return 2;" },
+            { anchor: "function foo() {", old_str: "return 3;", new_str: "return 4;" },
+          ],
+        },
+      ], tmpDir),
+    ).rejects.toThrow(/old_str not found in f\.txt after anchor "function foo\(\) \{"/);
+  });
+
   // ── Uniqueness ──────────────────────────────────────────────────────────
 
   it("fails when old_str is not unique", async () => {
@@ -354,6 +378,26 @@ describe("applyPatches", () => {
     expect(diff).not.toContain("  -   if (true) {");
   });
 
+  it("generatePatchDiff collapses multi-step chained edits to net effect", async () => {
+    writeFile("f.txt", "alpha\nbeta\ngamma\ndelta\n");
+    const result = await applyPatches([
+      {
+        path: "f.txt",
+        edits: [
+          { old_str: "beta", new_str: "BETA_1" },
+          { old_str: "BETA_1", new_str: "BETA_2" },
+          { old_str: "BETA_2", new_str: "BETA_FINAL" },
+        ],
+      },
+    ], tmpDir);
+    const diff = generatePatchDiff(result);
+
+    expect(diff).toContain("-2 beta");
+    expect(diff).toContain("+2 BETA_FINAL");
+    expect(diff).not.toContain("BETA_1");
+    expect(diff).not.toContain("BETA_2");
+  });
+
   it("generatePatchDiff shows missing anchor when fallback search succeeds", async () => {
     writeFile("f.txt", "hello world\n");
     const result = await applyPatches([
@@ -393,6 +437,53 @@ describe("applyPatches", () => {
     expect(diff).toContain(" 4 line4");
     // Must NOT leak the inserted content into context position
     expect(diff).not.toContain(" 3 line2.5");
+  });
+
+  it("rejects overlapping edits targeting the same region", async () => {
+    writeFile("f.txt", "alpha\nbeta\ngamma\ndelta\n");
+    await expect(applyPatches([
+      {
+        path: "f.txt",
+        edits: [
+          { old_str: "beta\ngamma", new_str: "BETA\nGAMMA" },
+          { old_str: "gamma\ndelta", new_str: "GAMMA\nDELTA" },
+        ],
+      },
+    ], tmpDir)).rejects.toThrow(/Edits target overlapping regions/);
+  });
+
+  it("allows non-overlapping edits in a single batch (one-shot)", async () => {
+    writeFile("f.txt", "line1\nline2\nline3\nline4\n");
+    const result = await applyPatches([
+      {
+        path: "f.txt",
+        edits: [
+          { old_str: "line1", new_str: "LINE1" },
+          { old_str: "line4", new_str: "LINE4" },
+        ],
+      },
+    ], tmpDir);
+    const final = readFile("f.txt");
+    expect(final).toBe("LINE1\nline2\nline3\nLINE4\n");
+    const diff = generatePatchDiff(result);
+    expect(diff).toContain("LINE1");
+    expect(diff).toContain("LINE4");
+  });
+
+  it("allows edits sent in reverse order (sorted by position internally)", async () => {
+    writeFile("f.txt", "aaa\nbbb\nccc\n");
+    // Send edits out of order: line3 first, line1 second
+    const result = await applyPatches([
+      {
+        path: "f.txt",
+        edits: [
+          { old_str: "ccc", new_str: "CCC" },
+          { old_str: "aaa", new_str: "AAA" },
+        ],
+      },
+    ], tmpDir);
+    const final = readFile("f.txt");
+    expect(final).toBe("AAA\nbbb\nCCC\n");
   });
 
   it("applyPatches with anchor substring of old_str still matches", async () => {

@@ -176,6 +176,103 @@ function applyOverwrite(
 // Edits (exact string replacement)
 // ═══════════════════════════════════════════════════════════════════════════
 
+type LocateEditResult =
+  | {
+      found: true;
+      oldNorm: string;
+      newNorm: string;
+      matchIdx: number;
+      displayAnchor?: string;
+      anchorMissing: boolean;
+    }
+  | {
+      found: false;
+      oldNorm: string;
+      anchorState: "ok" | "missing" | "not_unique";
+      anchorMessage?: string;
+    };
+
+/** Shared edit location logic used by both one-shot and sequential paths.
+ *  Returns structured failure details when old_str is not found so callers can
+ *  preserve precise diagnostics instead of guessing why matching failed.
+ *  Throws ApplyError on duplicate global matches or non-unique old_str. */
+function locateEdit(
+  edit: { old_str: string; new_str: string; anchor?: string },
+  content: string,
+  displayPath: string,
+): LocateEditResult {
+  let oldNorm = normalizeLineEndings(edit.old_str);
+  let newNorm = normalizeLineEndings(edit.new_str);
+
+  let searchFrom = 0;
+  let displayAnchor: string | undefined;
+  let anchorMissing = false;
+  let anchorState: "ok" | "missing" | "not_unique" = "ok";
+  let anchorMessage: string | undefined;
+
+  // ── Anchor parsing ──
+  if (edit.anchor) {
+    const anchorNorm = normalizeLineEndings(edit.anchor);
+    const anchorIdx = content.indexOf(anchorNorm);
+    if (anchorIdx === -1) {
+      anchorState = "missing";
+      anchorMessage = `Anchor not found in ${displayPath}: "${truncate(edit.anchor)}".`;
+    } else {
+      const secondAnchor = content.indexOf(anchorNorm, anchorIdx + 1);
+      if (secondAnchor !== -1) {
+        anchorState = "not_unique";
+        anchorMessage = `Anchor is not unique in ${displayPath}: "${truncate(edit.anchor)}".`;
+      } else {
+        searchFrom = Math.max(0, anchorIdx - (oldNorm.length - 1));
+        displayAnchor = edit.anchor;
+      }
+    }
+  }
+
+  // ── Exact match in search range ──
+  let matchIdx = anchorMessage ? -1 : content.indexOf(oldNorm, searchFrom);
+
+  // ── Global exact match fallback (when anchor was missing/unusable) ──
+  if (matchIdx === -1 && anchorMessage) {
+    displayAnchor = edit.anchor;
+    anchorMissing = true;
+    matchIdx = content.indexOf(oldNorm, 0);
+    if (matchIdx !== -1) {
+      const secondGlobalMatch = content.indexOf(oldNorm, matchIdx + 1);
+      if (secondGlobalMatch !== -1) {
+        const dupDiag = diagnoseOldStrNotUnique(oldNorm, content);
+        throw new ApplyError(`${anchorMessage}\n${dupDiag}`);
+      }
+    }
+  }
+
+  // ── Fuzzy match ──
+  if (matchIdx === -1) {
+    const searchLine = searchFrom === 0 ? 0 : content.substring(0, searchFrom).split("\n").length - 1;
+    const fuzzy = tryFuzzyLineMatch(oldNorm, content, searchLine);
+    if (fuzzy) {
+      oldNorm = fuzzy.matched;
+      matchIdx = fuzzy.idx;
+      newNorm = normalizeIndentForFuzzy(fuzzy.matched.split("\n")[0] ?? "", newNorm);
+    }
+  }
+
+  if (matchIdx === -1) {
+    return { found: false, oldNorm, anchorState, anchorMessage };
+  }
+
+  // ── Uniqueness check (skip when anchor was used as a fallback) ──
+  if (!anchorMessage) {
+    const secondMatch = content.indexOf(oldNorm, matchIdx + 1);
+    if (secondMatch !== -1) {
+      const dupDiag = diagnoseOldStrNotUnique(oldNorm, content);
+      throw new ApplyError(`${dupDiag}`);
+    }
+  }
+
+  return { found: true, oldNorm, newNorm, matchIdx, displayAnchor, anchorMissing };
+}
+
 async function applyEdits(
   absPath: string,
   displayPath: string,
@@ -193,141 +290,194 @@ async function applyEdits(
   const rawContent = fs.readFileSync(absPath, "utf8");
   const lineEnding = detectLineEnding(rawContent);
   const originalContent = normalizeLineEndings(rawContent);
-  let content = originalContent;
 
-  // Precompute line offsets for O(log n) line number lookups
-  const lineOffsets = buildLineOffsets(rawContent);
+  // Precompute line offsets for the original file (used throughout)
+  const lineOffsets = buildLineOffsets(originalContent);
   const totalLines = lineOffsets.length - 1;
 
-  // Track cumulative offset for mapping current positions back to original
-  let cumulativeOffset = 0;
-  const replacements: ReplacementInfo[] = [];
-  const neededRanges: LineRange[] = [];
+  // ═══════════════════════════════════════════════════════════════════
+  // Phase 1: try matching every old_str against the ORIGINAL snapshot.
+  // If any edit requires content from a prior edit (chained dependency),
+  // fall back to sequential mode.
+  // ═══════════════════════════════════════════════════════════════════
+
+  const planned: Array<Extract<LocateEditResult, { found: true }>> = [];
+  let needsSequential = false;
 
   for (const edit of edits) {
     if (!edit.old_str) {
       throw new ApplyError(`old_str must not be empty in ${displayPath}.`);
     }
 
-    let oldNorm = normalizeLineEndings(edit.old_str);
-    let newNorm = normalizeLineEndings(edit.new_str);
-
-    // Determine search range
-    let searchFrom = 0;
-    let displayAnchor: string | undefined;
-    let anchorMissing = false;
-    let anchorNotFoundMessage: string | undefined;
-
-    if (edit.anchor) {
-      const anchorNorm = normalizeLineEndings(edit.anchor);
-
-      // Find anchor — must be unique when present
-      const anchorIdx = content.indexOf(anchorNorm);
-      if (anchorIdx === -1) {
-        anchorNotFoundMessage = `Anchor not found in ${displayPath}: "${truncate(edit.anchor)}".`;
-      } else {
-        const secondAnchor = content.indexOf(anchorNorm, anchorIdx + 1);
-        if (secondAnchor !== -1) {
-          anchorNotFoundMessage = `Anchor is not unique in ${displayPath}: "${truncate(edit.anchor)}".`;
-        } else {
-          searchFrom = Math.max(0, anchorIdx - (oldNorm.length - 1));
-          displayAnchor = edit.anchor;
-          anchorMissing = false;
-        }
-      }
+    const located = locateEdit(edit, originalContent, displayPath);
+    if (!located.found) {
+      // old_str not found in the original snapshot — likely chained edit.
+      // Fall back to sequential mode.
+      needsSequential = true;
+      break;
     }
 
-    // Find old_str in range — must be unique
-    let matchIdx = anchorNotFoundMessage ? -1 : content.indexOf(oldNorm, searchFrom);
-    if (matchIdx === -1 && anchorNotFoundMessage) {
-      // Anchor was missing/unusable — try global exact match first
-      displayAnchor = edit.anchor;
-      anchorMissing = true;
-      matchIdx = content.indexOf(oldNorm, 0);
-      if (matchIdx !== -1) {
-        const secondGlobalMatch = content.indexOf(oldNorm, matchIdx + 1);
-        if (secondGlobalMatch !== -1) {
-          const dupDiag = diagnoseOldStrNotUnique(oldNorm, content);
-          throw new ApplyError(`${anchorNotFoundMessage}\n${dupDiag}`);
-        }
-      }
-    }
+    planned.push(located);
+  }
 
-    if (matchIdx === -1) {
-      // Fuzzy match fallback: normalize tab↔space + trailing whitespace
-      const searchLine = searchFrom === 0 ? 0 : content.substring(0, searchFrom).split("\n").length - 1;
-      const fuzzy = tryFuzzyLineMatch(oldNorm, content, searchLine);
-      if (fuzzy) {
-        oldNorm = fuzzy.matched;
-        matchIdx = fuzzy.idx;
-        newNorm = normalizeIndentForFuzzy(fuzzy.matched.split("\n")[0] ?? "", newNorm);
-      } else if (anchorNotFoundMessage) {
-        const diag = diagnoseOldStrMismatch(oldNorm, content);
-        throw new ApplyError(
-          `${anchorNotFoundMessage}\nold_str not found in ${displayPath}: "${truncate(edit.old_str)}".\n${diag}`
-        );
-      } else {
-        const diag = diagnoseOldStrMismatch(oldNorm, content);
+  // ═══════════════════════════════════════════════════════════════════
+  // Sequential fallback — old behaviour for chained edits
+  // ═══════════════════════════════════════════════════════════════════
+
+  if (needsSequential) {
+    let content = originalContent;
+    let cumulativeOffset = 0;
+    const rawReplacements: ReplacementInfo[] = [];
+
+    for (const edit of edits) {
+      const located = locateEdit(edit, content, displayPath);
+      if (!located.found) {
+        const diag = diagnoseOldStrMismatch(located.oldNorm, content);
+        if (located.anchorState === "missing" || located.anchorState === "not_unique") {
+          throw new ApplyError(
+            `${located.anchorMessage}\nold_str not found in ${displayPath}: "${truncate(edit.old_str)}".\n${diag}`
+          );
+        }
         throw new ApplyError(
           `old_str not found in ${displayPath}` +
           (edit.anchor ? ` after anchor "${truncate(edit.anchor)}"` : "") +
           `: "${truncate(edit.old_str)}".\n${diag}`
         );
       }
+
+      const { oldNorm, newNorm, matchIdx, displayAnchor, anchorMissing } = located;
+
+      const oldStartLine = lineAtOffset(lineOffsets, matchIdx - cumulativeOffset);
+      const oldEndLine = lineAtOffset(lineOffsets, matchIdx - cumulativeOffset + oldNorm.length - 1);
+
+      content =
+        content.substring(0, matchIdx) +
+        newNorm +
+        content.substring(matchIdx + oldNorm.length);
+
+      cumulativeOffset += newNorm.length - oldNorm.length;
+
+      rawReplacements.push({
+        oldStartLine,
+        oldEndLine,
+        newStartLine: 0, // placeholder — recalculated after collapse
+        newEndLine: 0,
+        oldLines: oldNorm.split("\n").filter((l, i, arr) => !(i === arr.length - 1 && l === "")),
+        newLines: newNorm.split("\n").filter((l, i, arr) => !(i === arr.length - 1 && l === "")),
+        anchor: displayAnchor ? displayAnchor.split("\n")[0] : undefined,
+        anchorMissing,
+      });
     }
 
-    // Check uniqueness in anchor-narrowed / plain search path only when anchor was used normally
-    if (!anchorNotFoundMessage) {
-      const secondMatch = content.indexOf(oldNorm, matchIdx + 1);
-      if (secondMatch !== -1) {
-        const dupDiag = diagnoseOldStrNotUnique(oldNorm, content);
-        throw new ApplyError(
-          `${dupDiag}`
-        );
+    // Collapse chained-edit replacements into net-change replacements,
+    // so the TUI diff shows only the net effect (original→final).
+    const cleanReplacements = collapseSequentialReplacements(rawReplacements);
+
+    const mergedRanges = mergeRanges(cleanReplacements.map(r => ({
+      startLine: Math.max(1, r.oldStartLine - CONTEXT_LINES),
+      endLine: Math.min(totalLines, r.oldEndLine + CONTEXT_LINES),
+    })));
+    const neededLines: Map<number, string> = new Map();
+    for (const range of mergedRanges) {
+      const lines = extractLineRange(originalContent, lineOffsets, range.startLine, range.endLine);
+      for (let i = 0; i < lines.length; i++) {
+        neededLines.set(range.startLine + i, lines[i]);
       }
     }
 
-    // Compute line numbers in the original file for diff generation (O(log n) via binary search)
-    // matchIdx is in the modified content; subtract cumulative offset to map back to original
-    const origMatchIdx = matchIdx - cumulativeOffset;
-    const oldStartLine = lineAtOffset(lineOffsets, origMatchIdx);
-    const oldEndLine = lineAtOffset(lineOffsets, origMatchIdx + oldNorm.length - 1);
+    const fileDiff = generateLocalDiff(displayPath, cleanReplacements, neededLines, totalLines);
+    if (result.diff) {
+      result.diff += "\n" + fileDiff;
+    } else {
+      result.diff = fileDiff;
+    }
 
-    // Apply replacement
-    content =
-      content.substring(0, matchIdx) +
-      newNorm +
-      content.substring(matchIdx + oldNorm.length);
+    const finalContent = restoreLineEndings(content, lineEnding);
+    if (lineEnding === "\r\n" && rawContent.includes("\r\n")) {
+      result.warnings.push(`${displayPath}: CRLF line endings were normalized to LF during editing.`);
+    }
 
-    // Track the offset shift for subsequent edits
-    cumulativeOffset += newNorm.length - oldNorm.length;
+    fs.writeFileSync(absPath, finalContent, "utf8");
+    result.modified.push(displayPath);
+    result.replacements.set(displayPath, cleanReplacements);
+    return;
+  }
 
-    // Compute new_str line numbers in the result
-    const newStartLine = charOffsetToLine(content, matchIdx);
-    const newEndLine = charOffsetToLine(content, matchIdx + newNorm.length - 1);
+  // ═══════════════════════════════════════════════════════════════════
+  // Phase 2: Conflict detection — sort by position, check for overlaps
+  // ═══════════════════════════════════════════════════════════════════
 
-    // Record replacement info
+  const sorted = [...planned].sort((a, b) => a.matchIdx - b.matchIdx);
+
+  for (let i = 0; i < sorted.length - 1; i++) {
+    const cur = sorted[i]!;
+    const next = sorted[i + 1]!;
+    const curEnd = cur.matchIdx + cur.oldNorm.length;
+    if (curEnd > next.matchIdx) {
+      const curStartLine = lineAtOffset(lineOffsets, cur.matchIdx);
+      const curEndLine = lineAtOffset(lineOffsets, curEnd - 1);
+      const nextStartLine = lineAtOffset(lineOffsets, next.matchIdx);
+      const overlapEnd = Math.min(curEnd, next.matchIdx + next.oldNorm.length);
+      const overlapEndLine = lineAtOffset(lineOffsets, overlapEnd - 1);
+      throw new ApplyError(
+        `Edits target overlapping regions in ${displayPath}: ` +
+        `edit targeting lines ${curStartLine}-${curEndLine} overlaps with ` +
+        `edit targeting lines ${nextStartLine}-${overlapEndLine}. ` +
+        `Split overlapping edits into separate patch calls.`
+      );
+    }
+  }
+
+  // ═══════════════════════════════════════════════════════════════════
+  // Phase 3: One-shot assembly — splice replacements into final content
+  // ═══════════════════════════════════════════════════════════════════
+
+  let content = "";
+  let cursor = 0;
+  const replacements: ReplacementInfo[] = [];
+  const neededRanges: LineRange[] = [];
+
+  for (const p of sorted) {
+    // Copy original content up to this edit
+    content += originalContent.substring(cursor, p.matchIdx);
+
+    // Record where new_str lands in the assembled content
+    const newStartIdx = content.length;
+    content += p.newNorm;
+    const newEndIdx = content.length - 1;
+
+    // Compute line numbers (original file coordinates for old, result for new)
+    const oldStartLine = lineAtOffset(lineOffsets, p.matchIdx);
+    const oldEndLine = lineAtOffset(lineOffsets, p.matchIdx + p.oldNorm.length - 1);
+    const newStartLine = charOffsetToLine(content, newStartIdx);
+    const newEndLine = charOffsetToLine(content, newEndIdx);
+
     replacements.push({
       oldStartLine,
       oldEndLine,
       newStartLine,
       newEndLine,
-      oldLines: oldNorm.split("\n").filter((l, i, arr) => !(i === arr.length - 1 && l === "")),
-      newLines: newNorm.split("\n").filter((l, i, arr) => !(i === arr.length - 1 && l === "")),
-      anchor: displayAnchor ? displayAnchor.split("\n")[0] : undefined,
-      anchorMissing,
+      oldLines: p.oldNorm.split("\n").filter((l, i, arr) => !(i === arr.length - 1 && l === "")),
+      newLines: p.newNorm.split("\n").filter((l, i, arr) => !(i === arr.length - 1 && l === "")),
+      anchor: p.displayAnchor ? p.displayAnchor.split("\n")[0] : undefined,
+      anchorMissing: p.anchorMissing,
     });
 
-    // Collect context range for this edit
     neededRanges.push({
       startLine: Math.max(1, oldStartLine - CONTEXT_LINES),
       endLine: Math.min(totalLines, oldEndLine + CONTEXT_LINES),
     });
+
+    cursor = p.matchIdx + p.oldNorm.length;
   }
 
-  // Generate diff using only needed context lines (no full-file split)
-  // Use originalContent (snapshot before edits) because neededRanges use
-  // original-file line numbers (oldStartLine/oldEndLine), not post-edit offsets.
+  // Copy trailing original content
+  content += originalContent.substring(cursor);
+
+  // ═══════════════════════════════════════════════════════════════════
+  // Diff generation
+  // ═══════════════════════════════════════════════════════════════════
+
   const mergedRanges = mergeRanges(neededRanges);
   const originalLineOffsets = buildLineOffsets(originalContent);
   const neededLines: Map<number, string> = new Map();
@@ -338,7 +488,6 @@ async function applyEdits(
     }
   }
 
-  // Build diff for this file and append to result
   const fileDiff = generateLocalDiff(displayPath, replacements, neededLines, totalLines);
   if (result.diff) {
     result.diff += "\n" + fileDiff;
@@ -349,7 +498,6 @@ async function applyEdits(
   // Restore line endings
   const finalContent = restoreLineEndings(content, lineEnding);
 
-  // Warn if line endings were normalized (CRLF → LF)
   if (lineEnding === "\r\n" && rawContent.includes("\r\n")) {
     result.warnings.push(`${displayPath}: CRLF line endings were normalized to LF during editing.`);
   }
@@ -563,14 +711,17 @@ interface ChunkAnchor {
 function getChunkAnchors(chunk: ReplacementChunk): ChunkAnchor[] {
   const byText = new Map<string, ChunkAnchor>();
   for (const rep of chunk.reps) {
-    const text = rep.anchor?.trim();
-    if (!text) continue;
-    const existing = byText.get(text);
-    if (!existing) {
-      byText.set(text, { text, missing: Boolean(rep.anchorMissing) });
-    } else if (!rep.anchorMissing) {
-      // If any replacement successfully used this anchor, do not mark it missing.
-      existing.missing = false;
+    const raw = rep.anchor?.trim();
+    if (!raw) continue;
+    // Support \n-separated anchors from collapsed sequential replacements
+    const texts = raw.includes("\n") ? raw.split("\n").map(s => s.trim()).filter(Boolean) : [raw];
+    for (const text of texts) {
+      const existing = byText.get(text);
+      if (!existing) {
+        byText.set(text, { text, missing: Boolean(rep.anchorMissing) });
+      } else if (!rep.anchorMissing) {
+        existing.missing = false;
+      }
     }
   }
   return [...byText.values()];
@@ -798,6 +949,76 @@ function charOffsetToLine(content: string, offset: number): number {
 /**
  * Generate diff using only the needed lines (partial file context).
  */
+/** Collapse chained-edit replacements (where out[i] === in[i+1]) into
+ *  net-change replacements showing only the net effect (original→final). */
+function collapseSequentialReplacements(
+  reps: ReplacementInfo[],
+): ReplacementInfo[] {
+  const collapsed: ReplacementInfo[] = [];
+  let i = 0;
+  while (i < reps.length) {
+    const start = reps[i]!;
+    let merged: ReplacementInfo = {
+      ...start,
+      newStartLine: start.oldStartLine,
+      newEndLine: start.oldStartLine + start.newLines.length - 1,
+    };
+
+    const anchors: string[] = [];
+    const seenAnchors = new Set<string>();
+    const addAnchor = (raw?: string) => {
+      if (!raw) return;
+      for (const text of raw.split("\n").map(s => s.trim()).filter(Boolean)) {
+        if (seenAnchors.has(text)) continue;
+        seenAnchors.add(text);
+        anchors.push(text);
+      }
+    };
+    addAnchor(start.anchor);
+
+    let j = i + 1;
+    while (j < reps.length) {
+      const next = reps[j]!;
+      // Merge chained edits when next edit's input matches merged output.
+      // We allow slightly shifted line numbers because sequential edits can
+      // change string lengths before we compute displayed line ranges.
+      if (!(linesEqual(merged.newLines, next.oldLines) && next.oldStartLine <= merged.oldEndLine + 1)) {
+        break;
+      }
+      addAnchor(next.anchor);
+      merged = {
+        // Keep the ORIGINAL region from the first replacement in the chain.
+        // Later chained replacements may have shifted line numbers, but the
+        // net diff should still point at the original file region.
+        oldStartLine: merged.oldStartLine,
+        oldEndLine: merged.oldEndLine,
+        newStartLine: merged.oldStartLine,
+        newEndLine: merged.oldStartLine + next.newLines.length - 1,
+        oldLines: merged.oldLines,
+        newLines: next.newLines,
+        anchor: undefined,
+        anchorMissing: merged.anchorMissing || next.anchorMissing,
+      };
+      j++;
+    }
+
+    collapsed.push({
+      ...merged,
+      anchor: anchors.length > 0 ? anchors.join("\n") : undefined,
+    });
+    i = j;
+  }
+  return collapsed;
+}
+
+function linesEqual(a: string[], b: string[]): boolean {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) {
+    if (a[i] !== b[i]) return false;
+  }
+  return true;
+}
+
 function generateLocalDiff(
   filePath: string,
   reps: ReplacementInfo[],
