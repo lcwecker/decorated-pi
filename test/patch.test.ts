@@ -55,6 +55,18 @@ describe("applyPatches", () => {
     expect(result.modified).toContain("f.txt");
   });
 
+  it("emits no hunk when old_str === new_str (no-op patch)", async () => {
+    writeFile("f.txt", "hello world\n");
+    const result = await applyPatches([
+      { path: "f.txt", edits: [{ old_str: "hello world", new_str: "hello world" }] },
+    ], tmpDir);
+    // File untouched
+    expect(readFile("f.txt")).toBe("hello world\n");
+    // Diff should be empty (no hunk to render)
+    const diff = generatePatchDiff(result);
+    expect(diff).not.toContain("@@");
+  });
+
   it("replaces with empty string (delete)", async () => {
     writeFile("f.txt", "foo bar baz\n");
     await applyPatches([
@@ -439,6 +451,158 @@ describe("applyPatches", () => {
     expect(diff).not.toContain(" 3 line2.5");
   });
 
+  it("hides unchanged interior lines as context, not as fake removals/additions", async () => {
+    // LLM supplies a large old_str spanning 12 lines but only two are actually
+    // removed. The diff must NOT paint every line as -/+; identical lines
+    // inside the block must appear as plain context.
+    const oldLines = [
+      "static int timer_hb_proc(HEVT hevent, void *p);",            // 1
+      "static int timer_event_bus_scheduler(HEVT hevent, void *p);", // 2 (REMOVED)
+      "static int backend_ai_init_timer(HEVT hevent, void *p);",     // 3
+      "static int on_msg_proc(rpc_msg_param_set_t nparamset);",      // 4
+      "",                                                              // 5
+      "static int on_task_loop(int stat, bc_mod_base *pmod, void *pctx, int *handled);", // 6
+      "static int on_encode_task_loop(int stat, bc_mod_base *pmod, void *pctx, int *handled);", // 7
+      "static int on_task_handle(int stat, bc_mod_base *pmod, void *pctx, bc_task_t *ptask);", // 8
+      "static int on_task_alarm_oar_notify(int stat, bc_mod_base *pmod, void *pctx, bc_task_t *ptask);", // 9 (REMOVED)
+      "static int on_task_end(int stat, bc_mod_base *pmod, void *pctx, bc_task_t *ptask);", // 10
+      "};",                                                            // 11
+      "#endif",                                                        // 12
+    ];
+    const newLines = [
+      "static int timer_hb_proc(HEVT hevent, void *p);",            // matches old[0]
+      "static int backend_ai_init_timer(HEVT hevent, void *p);",     // matches old[2]
+      "static int on_msg_proc(rpc_msg_param_set_t nparamset);",      // matches old[3]
+      "",                                                              // matches old[4]
+      "static int on_task_loop(int stat, bc_mod_base *pmod, void *pctx, int *handled);", // matches old[5]
+      "static int on_encode_task_loop(int stat, bc_mod_base *pmod, void *pctx, int *handled);", // matches old[6]
+      "static int on_task_handle(int stat, bc_mod_base *pmod, void *pctx, bc_task_t *ptask);", // matches old[7]
+      "static int on_task_end(int stat, bc_mod_base *pmod, void *pctx, bc_task_t *ptask);", // matches old[9]
+      "};",                                                            // matches old[10]
+      "#endif",                                                        // matches old[11]
+    ];
+    const oldStr = oldLines.join("\n");
+    const newStr = newLines.join("\n");
+    writeFile("h.h", oldStr + "\n");
+    const result = await applyPatches([
+      { path: "h.h", edits: [{ old_str: oldStr, new_str: newStr }] },
+    ], tmpDir);
+    const diff = generatePatchDiff(result);
+
+    // The two lines that were actually removed must appear as - with their
+    // original line numbers from the file.
+    expect(diff).toContain("- 2 static int timer_event_bus_scheduler");
+    expect(diff).toContain("- 9 static int on_task_alarm_oar_notify");
+
+    // Lines that didn't change must NOT appear as -.
+    expect(diff).not.toContain("- 1 static int timer_hb_proc");
+    expect(diff).not.toContain("- 3 static int backend_ai_init_timer");
+    expect(diff).not.toContain("- 4 static int on_msg_proc");
+    expect(diff).not.toContain("-10 static int on_task_end");
+    expect(diff).not.toContain("-11 };");
+    expect(diff).not.toContain("-12 #endif");
+
+    // Unchanged interior lines must surface as context.
+    expect(diff).toContain(" 1 static int timer_hb_proc");
+    expect(diff).toContain(" 3 static int backend_ai_init_timer");
+    expect(diff).toContain(" 4 static int on_msg_proc");
+    expect(diff).toContain(" 5 ");
+    expect(diff).toContain(" 6 static int on_task_loop");
+    expect(diff).toContain(" 7 static int on_encode_task_loop");
+    expect(diff).toContain(" 8 static int on_task_handle");
+    expect(diff).toContain("10 static int on_task_end");
+    expect(diff).toContain("11 };");
+    expect(diff).toContain("12 #endif");
+
+    // No + lines in a pure-deletion case.
+    expect(diff).not.toMatch(/^\+ /m);
+  });
+
+  it("trims interior context so the hunk doesn't grow with the LLM's old_str", async () => {
+    // LLM sends a 22-line old_str block, removing only `do_dispatch:` from the middle.
+    // The hunk should NOT show 22 lines of context — it should trim to ~3 lines
+    // before and after the actual change.
+    const oldLines = [
+      "}",
+      "if (pos < 0) return false;",
+      "",
+      "// 写锁 pop + dispatch",
+      "beai_event_t evt{};",
+      "{",
+      "    std::unique_lock wlock(s_evt_queue_rwlock);",
+      "    auto& q = s_evt_queue();",
+      "    if (pos < (int)q.size() && q[pos].chn == m_chn && q[pos].model == m_model) {",
+      "        evt = q[pos];",
+      "        q.erase(q.begin() + pos);",
+      "    } else {",
+      "        return false;  // 被其他 slave 抢走了",
+      "    }",
+      "}",
+      "do_dispatch:",
+      "std::visit([this](auto&& payload) { dispatch(payload); }, evt.data);",
+      "return true;",
+      "}",
+      "",
+      "void beai_evt_bus_slave::dispatch(const beai_oar_request_payload_t& p)",
+      "{",
+    ];
+    const newLines = [
+      "}",
+      "if (pos < 0) return false;",
+      "",
+      "// 写锁 pop + dispatch",
+      "beai_event_t evt{};",
+      "{",
+      "    std::unique_lock wlock(s_evt_queue_rwlock);",
+      "    auto& q = s_evt_queue();",
+      "    if (pos < (int)q.size() && q[pos].chn == m_chn && q[pos].model == m_model) {",
+      "        evt = q[pos];",
+      "        q.erase(q.begin() + pos);",
+      "    } else {",
+      "        return false;  // 被其他 slave 抢走了",
+      "    }",
+      "}",
+      "std::visit([this](auto&& payload) { dispatch(payload); }, evt.data);",
+      "return true;",
+      "}",
+      "",
+      "void beai_evt_bus_slave::dispatch(const beai_oar_request_payload_t& p)",
+      "{",
+    ];
+    const oldStr = oldLines.join("\n");
+    const newStr = newLines.join("\n");
+    writeFile("c.cpp", oldStr + "\n");
+    const result = await applyPatches([
+      { path: "c.cpp", edits: [{ old_str: oldStr, new_str: newStr }] },
+    ], tmpDir);
+    const diff = generatePatchDiff(result);
+
+    // Lines far from the change should NOT appear in the diff.
+    expect(diff).not.toContain(" 1 }");
+    expect(diff).not.toContain(" 2 if (pos < 0) return false;");
+    // The hunk body should be small (a handful of context lines + 1 removed).
+    const hunkBody = diff.split("\n").filter(l => /^[ +-]\d/.test(l));
+    expect(hunkBody.length).toBeLessThan(12);
+  });
+
+  it("falls back to minimal-diff rendering for multi-line block edits", async () => {
+    // old_str is identical to new_str except one new line is inserted in the middle.
+    writeFile("f.txt", "line1\nline2\nline3\n");
+    const result = await applyPatches([
+      { path: "f.txt", edits: [{ old_str: "line1\nline2\nline3", new_str: "line1\nINSERTED\nline2\nline3" }] },
+    ], tmpDir);
+    const diff = generatePatchDiff(result);
+
+    // The identical prefix/suffix must be context, not + and -.
+    expect(diff).toMatch(/^ 1 line1/m);
+    expect(diff).toMatch(/^ 2 line2/m);
+    expect(diff).toMatch(/^ 3 line3/m);
+    // Only the inserted line should appear as +.
+    expect(diff).toMatch(/^\+[0-9 ]+INSERTED/m);
+    // No - lines, since old_str was a superset of new_str's content.
+    expect(diff).not.toMatch(/^-[0-9 ]/m);
+  });
+
   it("rejects overlapping edits targeting the same region", async () => {
     writeFile("f.txt", "alpha\nbeta\ngamma\ndelta\n");
     await expect(applyPatches([
@@ -537,7 +701,12 @@ describe("applyPatches", () => {
       tmpDir,
     );
     expect(p.diff).toBeTruthy();
-    expect(p.diff).toContain("-1 hello");
+    // `-` line shows the file's actual line content (with full leading
+    // whitespace), not the LLM's old_str. So we expect "hello world",
+    // not just "hello".
+    expect(p.diff).toContain("-1 hello world");
+    // `+` line shows the LLM's new_str verbatim (we don't synthesize
+    // context for new lines).
     expect(p.diff).toContain("+1 HELLO");
   });
 
@@ -680,5 +849,64 @@ describe("diagnoseOldStrNotUnique", () => {
     const diag = diagnoseOldStrNotUnique("dup", content);
     expect(diag).toContain("appears 7 times");
     expect(diag).toContain("and 2 more occurrence");
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Diff display: leading whitespace preservation
+// ═══════════════════════════════════════════════════════════════════════════
+
+describe("diff display: leading whitespace", () => {
+  let tmpDir: string;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "ws-test-"));
+  });
+
+  afterEach(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it("preserves file's leading whitespace on `-` line even when LLM's old_str has none", async () => {
+    fs.writeFileSync(path.join(tmpDir, "f.txt"), "    hello world\n    foo\n");
+    const p = await computePatchPreview(
+      { path: "f.txt", edits: [{ old_str: "hello world", new_str: "    HELLO world" }] },
+      tmpDir,
+    );
+    // `-` line must show the file's actual content (4-space indent),
+    // not the LLM's stripped `old_str`.
+    expect(p.diff).toContain("-1     hello world");
+    expect(p.diff).toContain("+1     HELLO world");
+  });
+
+  it("multi-line old_str with correct context renders all lines with indent", async () => {
+    fs.writeFileSync(path.join(tmpDir, "f.txt"), "    line1\n    line2_old\n    line3\n");
+    const p = await computePatchPreview(
+      { path: "f.txt", edits: [{ old_str: "    line1\n    line2_old\n", new_str: "    line1\n    line2_new\n" }] },
+      tmpDir,
+    );
+    expect(p.diff).toBeTruthy();
+    expect(p.diff).toContain("    line1");
+    expect(p.diff).toContain("    line2_old");
+    expect(p.diff).toContain("    line2_new");
+  });
+
+  it("no-op patch produces empty diff (no hunk, no file headers)", async () => {
+    fs.writeFileSync(path.join(tmpDir, "f.txt"), "    foo\n    bar\n");
+    const p = await computePatchPreview(
+      { path: "f.txt", edits: [{ old_str: "    foo", new_str: "    foo" }] },
+      tmpDir,
+    );
+    expect(p.diff ?? "").not.toContain("@@");
+  });
+
+  it("LLM strips whitespace from multi-line old_str → patch fails (not our concern)", async () => {
+    fs.writeFileSync(path.join(tmpDir, "f.txt"), "    line1\n    line2\n");
+    const p = await computePatchPreview(
+      { path: "f.txt", edits: [{ old_str: "line1\nline2", new_str: "    line1\n    line2_new\n" }] },
+      tmpDir,
+    );
+    // "line1\nline2" is not a substring of "    line1\n    line2" so it must fail.
+    expect(p.error).toBeTruthy();
   });
 });

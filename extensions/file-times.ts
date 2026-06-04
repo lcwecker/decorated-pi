@@ -53,16 +53,16 @@ export function checkStaleFile(absPath: string, displayPath: string): string | u
   if (lastRead === undefined) {
     // File exists but never read — must read first to avoid blind edits
     return (
-      `File not read yet: ${displayPath}. ` +
-      `Please read the file with the read tool before editing.`
+      `Please read the file with the read tool before editing. ` +
+      `File not read yet: ${displayPath}.`
     );
   }
 
   const currentMtime = getFileMtime(absPath);
   if (currentMtime > lastRead) {
     return (
-      `File modified since last read: ${displayPath}. ` +
-      `Please re-read the file with the read tool before editing.`
+      `Please re-read the file with the read tool before editing. ` +
+      `File modified since last read: ${displayPath}.`
     );
   }
 

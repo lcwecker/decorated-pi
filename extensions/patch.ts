@@ -545,6 +545,11 @@ export async function computePatchPreview(
     const lineOffsets = buildLineOffsets(rawContent);
     const totalLines = lineOffsets.length - 1;
     let content = normalizeLineEndings(rawContent);
+    // Snapshot the original (pre-edit) content for diff display. The
+    // `content` variable below is mutated in-place as edits are applied,
+    // but the TUI diff should show the ORIGINAL lines (not the post-edit
+    // content) so leading whitespace is preserved correctly.
+    const originalContent = content;
     const allReplacements: ReplacementInfo[] = [];
     const neededRanges: LineRange[] = [];
     let cumulativeOffset = 0;
@@ -622,12 +627,13 @@ export async function computePatchPreview(
         cumulativeOffset += newNorm.length - oldNorm.length;
       }
 
-      // Merge needed ranges and extract only those lines
+      // Merge needed ranges and extract lines from the ORIGINAL content
+      // (not the mutated `content`), so the diff shows pre-edit lines.
       const mergedRanges = mergeRanges(neededRanges);
-      const currentLineOffsets = buildLineOffsets(content);
+      const originalLineOffsets = buildLineOffsets(originalContent);
       const neededLines: Map<number, string> = new Map();
       for (const range of mergedRanges) {
-        const lines = extractLineRange(content, currentLineOffsets, range.startLine, range.endLine);
+        const lines = extractLineRange(originalContent, originalLineOffsets, range.startLine, range.endLine);
         for (let i = 0; i < lines.length; i++) {
           neededLines.set(range.startLine + i, lines[i]);
         }
@@ -761,6 +767,132 @@ function formatChunkMetadataLines(chunk: ReplacementChunk): string[] {
   return lines;
 }
 
+type RenderOp =
+  | { type: "context"; line: number; text: string }
+  | { type: "removed"; line: number; text: string }
+  | { type: "added"; line: number; text: string };
+
+interface RenderableReplacement {
+  operations: RenderOp[];
+  /** Line number of the first removed/added operation (BEFORE trimming).
+   *  Used to limit how far "context before" extends. */
+  firstChangeLine: number;
+  /** Line number of the last removed/added operation (BEFORE trimming). */
+  lastChangeLine: number;
+}
+
+/** Compute a minimal line-level diff between old and new lines using LCS.
+ *  Common lines become context, while only truly different lines become
+ *  removed/added. The resulting context is trimmed to `contextLines` lines
+ *  before the first and after the last non-context operation so the TUI hunk
+ *  doesn't grow with the size of the LLM's old_str. */
+function splitReplacementForRender(
+  rep: ReplacementInfo,
+  contextLines: number,
+): RenderableReplacement {
+  const m = rep.oldLines.length;
+  const n = rep.newLines.length;
+
+  // DP table: dp[i][j] = LCS length of oldLines[0..i) and newLines[0..j)
+  const dp: number[][] = Array.from({ length: m + 1 }, () => new Array<number>(n + 1).fill(0));
+  for (let i = 1; i <= m; i++) {
+    for (let j = 1; j <= n; j++) {
+      if (rep.oldLines[i - 1] === rep.newLines[j - 1]) {
+        dp[i]![j] = dp[i - 1]![j - 1]! + 1;
+      } else {
+        dp[i]![j] = Math.max(dp[i - 1]![j]!, dp[i]![j - 1]!);
+      }
+    }
+  }
+
+  // Backtrack to produce operations in reverse order.
+  const stack: RenderOp[] = [];
+  let i = m;
+  let j = n;
+  while (i > 0 && j > 0) {
+    if (rep.oldLines[i - 1] === rep.newLines[j - 1]) {
+      stack.push({ type: "context", line: rep.oldStartLine + i - 1, text: rep.oldLines[i - 1]! });
+      i--;
+      j--;
+    } else if (dp[i - 1]![j]! > dp[i]![j - 1]!) {
+      stack.push({ type: "removed", line: rep.oldStartLine + i - 1, text: rep.oldLines[i - 1]! });
+      i--;
+    } else {
+      stack.push({ type: "added", line: rep.oldStartLine + j - 1, text: rep.newLines[j - 1]! });
+      j--;
+    }
+  }
+  while (i > 0) {
+    stack.push({ type: "removed", line: rep.oldStartLine + i - 1, text: rep.oldLines[i - 1]! });
+    i--;
+  }
+  while (j > 0) {
+    stack.push({ type: "added", line: rep.oldStartLine + j - 1, text: rep.newLines[j - 1]! });
+    j--;
+  }
+
+  // Reverse to get the final order.
+  const operations: RenderOp[] = [];
+  while (stack.length > 0) operations.push(stack.pop()!);
+
+  // Find first and last non-context operations (in the original order).
+  let firstChangeLine = rep.oldStartLine;
+  let lastChangeLine = rep.oldStartLine;
+  for (const op of operations) {
+    if (op.type !== "context") {
+      firstChangeLine = op.line;
+      break;
+    }
+  }
+  for (let k = operations.length - 1; k >= 0; k--) {
+    if (operations[k]!.type !== "context") {
+      lastChangeLine = operations[k]!.line;
+      break;
+    }
+  }
+
+  // Trim context operations that sit far from any non-context change.
+  const firstNonContextIdx = operations.findIndex(op => op.type !== "context");
+  if (firstNonContextIdx === -1) {
+    return { operations: [], firstChangeLine, lastChangeLine };
+  }
+  let lastNonContextIdx = operations.length - 1;
+  for (let k = operations.length - 1; k >= 0; k--) {
+    if (operations[k]!.type !== "context") { lastNonContextIdx = k; break; }
+  }
+  const start = Math.max(0, firstNonContextIdx - contextLines);
+  const end = Math.min(operations.length - 1, lastNonContextIdx + contextLines);
+  const trimmed = operations.slice(start, end + 1);
+
+  return { operations: trimmed, firstChangeLine, lastChangeLine };
+}
+
+/** Compute the actual hunk range for a chunk by looking at the rendered
+ *  context (before / after) and the LCS-trimmed operations. Returns
+ *  [startLine, endLine] (1-based, inclusive). */
+function computeRenderedRange(
+  chunk: ReplacementChunk,
+  repViews: Array<{ rep: ReplacementInfo; view: RenderableReplacement; beforeStart: number; afterEnd: number }>,
+  totalLines: number,
+  contextLines: number,
+): { startLine: number; endLine: number } {
+  let renderedStart = Infinity;
+  let renderedEnd = -Infinity;
+  for (const { rep, view, beforeStart, afterEnd } of repViews) {
+    if (view.operations.length === 0 && beforeStart >= rep.oldStartLine && afterEnd <= rep.oldEndLine) continue;
+    const opStart = view.operations[0]!.line;
+    const opEnd = view.operations[view.operations.length - 1]!.line;
+    const s = Math.min(beforeStart, opStart);
+    const e = Math.max(afterEnd, opEnd);
+    if (s < renderedStart) renderedStart = s;
+    if (e > renderedEnd) renderedEnd = e;
+  }
+  if (renderedStart === Infinity) {
+    return { startLine: chunk.startLine, endLine: chunk.endLine };
+  }
+  return { startLine: renderedStart, endLine: Math.min(totalLines, renderedEnd) };
+}
+
 /**
  * Generate diff as visual chunks merged by overlapping/adjacent context windows.
  * This keeps spacing stable when multiple nearby edits would otherwise create
@@ -768,57 +900,72 @@ function formatChunkMetadataLines(chunk: ReplacementChunk): string[] {
  */
 function generateReplacementDiff(filePath: string, reps: ReplacementInfo[], originalLines: string[]): string {
   const parts: string[] = [];
-  parts.push(`--- ${filePath}`);
-  parts.push(`+++ ${filePath}`);
 
   if (reps.length === 0) {
-    parts.push("");
-    return parts.join("\n");
+    return "";
   }
 
   const maxLineNum = Math.max(originalLines.length, ...reps.map(r => r.oldEndLine));
   const numWidth = String(maxLineNum).length;
   const CONTEXT = 3;
   const chunks = buildReplacementChunks(reps, originalLines.length, CONTEXT);
+  let firstHunk = true;
 
   for (let c = 0; c < chunks.length; c++) {
     const chunk = chunks[c]!;
-    if (c > 0) parts.push("");
-    parts.push(formatChunkHeader(chunk));
-    parts.push(...formatChunkMetadataLines(chunk));
 
-    let cursor = chunk.startLine;
+    // Pre-compute the rendered range for this chunk so the hunk header
+    // reflects what we actually emit (not the full chunk window).
+    const repViews = chunk.reps.map(rep => {
+      const v = splitReplacementForRender(rep, CONTEXT);
+      const beforeStart = Math.max(chunk.startLine, v.firstChangeLine - CONTEXT);
+      const afterEnd = Math.min(chunk.endLine, v.lastChangeLine + CONTEXT);
+      return { rep, view: v, beforeStart, afterEnd };
+    });
 
-    for (const rep of chunk.reps) {
-      // Context before this replacement (only once per original line)
-      for (let i = cursor; i < rep.oldStartLine; i++) {
+    // Skip hunk entirely if every rep produced no effective changes
+    // (e.g., LLM sent old_str === new_str). Rendering context-only hunks
+    // is misleading — there is nothing to show.
+    if (repViews.every(r => r.view.operations.length === 0)) continue;
+
+    const { startLine: renderedStart, endLine: renderedEnd } = computeRenderedRange(
+      chunk, repViews, originalLines.length, CONTEXT,
+    );
+    const syntheticChunk = { ...chunk, startLine: renderedStart, endLine: renderedEnd };
+    parts.push(formatChunkHeader(syntheticChunk));
+    parts.push(...formatChunkMetadataLines(syntheticChunk));
+
+    for (const { rep, view, beforeStart } of repViews) {
+      // Context before this rep: only lines within CONTEXT of the first change.
+      for (let i = beforeStart; i < rep.oldStartLine; i++) {
         const num = String(i).padStart(numWidth, " ");
         parts.push(` ${num} ${originalLines[i - 1]}`);
       }
 
-      // Removed lines (from original)
-      for (let i = 0; i < rep.oldLines.length; i++) {
-        const num = String(rep.oldStartLine + i).padStart(numWidth, " ");
-        parts.push(`-${num} ${rep.oldLines[i]}`);
+      for (const op of view.operations) {
+        const num = String(op.line).padStart(numWidth, " ");
+        if (op.type === "context") parts.push(` ${num} ${op.text}`);
+        // For removed lines, use the file's actual content (not the LLM's
+        // old_str) so leading whitespace is preserved even if the LLM
+        // stripped it from the old_str.
+        else if (op.type === "removed") {
+          const fileLine = originalLines[op.line - 1] ?? op.text;
+          parts.push(`-${num} ${fileLine}`);
+        }
+        else parts.push(`+${num} ${op.text}`);
       }
-
-      // Added lines
-      for (let i = 0; i < rep.newLines.length; i++) {
-        const num = String(rep.oldStartLine + i).padStart(numWidth, " ");
-        parts.push(`+${num} ${rep.newLines[i]}`);
-      }
-
-      cursor = rep.oldEndLine + 1;
     }
 
-    // Trailing context for the merged chunk
-    for (let i = cursor; i <= chunk.endLine; i++) {
-      const num = String(i).padStart(numWidth, " ");
-      parts.push(` ${num} ${originalLines[i - 1]}`);
+    // Trailing context after the last rep (already bounded by afterEnd).
+    const lastEntry = repViews[repViews.length - 1];
+    if (lastEntry) {
+      for (let i = lastEntry.rep.oldEndLine + 1; i <= lastEntry.afterEnd; i++) {
+        const num = String(i).padStart(numWidth, " ");
+        parts.push(` ${num} ${originalLines[i - 1]}`);
+      }
     }
   }
 
-  if (parts[parts.length - 1] !== "") parts.push("");
   return parts.join("\n");
 }
 
@@ -1028,8 +1175,7 @@ function generateLocalDiff(
   if (reps.length === 0) return "";
 
   const parts: string[] = [];
-  parts.push(`--- ${filePath}`);
-  parts.push(`+++ ${filePath}`);
+  let firstHunk = true;
 
   // Calculate dynamic width based on max line number
   const maxLineNum = Math.max(totalLines, ...reps.map(r => r.oldEndLine));
@@ -1038,36 +1184,69 @@ function generateLocalDiff(
   // Merge replacement chunks
   const chunks = buildReplacementChunks(reps, totalLines, CONTEXT_LINES);
   for (let c = 0; c < chunks.length; c++) {
-    if (c > 0) parts.push("");
     const chunk = chunks[c]!;
-    parts.push(formatChunkHeader(chunk));
-    parts.push(...formatChunkMetadataLines(chunk));
+
+    // Pre-compute the rendered range so the hunk header reflects what we
+    // actually emit (not the full chunk window).
+    const repViews = chunk.reps.map(rep => {
+      const view = splitReplacementForRender(rep, CONTEXT_LINES);
+      const beforeStart = Math.max(chunk.startLine, view.firstChangeLine - CONTEXT_LINES);
+      const afterEnd = Math.min(chunk.endLine, view.lastChangeLine + CONTEXT_LINES);
+      return { rep, view, beforeStart, afterEnd };
+    });
+
+    // Skip hunk entirely if every rep produced no effective changes
+    // (e.g., LLM sent old_str === new_str). Rendering context-only hunks
+    // is misleading — there is nothing to show.
+    if (repViews.every(r => r.view.operations.length === 0)) continue;
+
+    if (firstHunk) {
+      parts.push(`--- ${filePath}`);
+      parts.push(`+++ ${filePath}`);
+      firstHunk = false;
+    } else {
+      parts.push("");
+    }
+
+    const { startLine: renderedStart, endLine: renderedEnd } = computeRenderedRange(
+      chunk, repViews, totalLines, CONTEXT_LINES,
+    );
+    const syntheticChunk = { ...chunk, startLine: renderedStart, endLine: renderedEnd };
+    parts.push(formatChunkHeader(syntheticChunk));
+    parts.push(...formatChunkMetadataLines(syntheticChunk));
 
     // Output context + removed + added
-    let cursor = chunk.startLine;
-    for (const rep of chunk.reps) {
-      // Context before this replacement
-      for (let i = cursor; i < rep.oldStartLine; i++) {
+    for (const { rep, view, beforeStart } of repViews) {
+      // Context before this replacement (only lines close to the first change)
+      for (let i = beforeStart; i < rep.oldStartLine; i++) {
         const lineText = neededLines.get(i);
         if (lineText !== undefined) {
           parts.push(` ${String(i).padStart(numWidth, " ")} ${lineText}`);
         }
       }
-      // Removed lines
-      for (let i = 0; i < rep.oldLines.length; i++) {
-        parts.push(`-${String(rep.oldStartLine + i).padStart(numWidth, " ")} ${rep.oldLines[i]}`);
+
+      for (const op of view.operations) {
+        const num = String(op.line).padStart(numWidth, " ");
+        if (op.type === "context") parts.push(` ${num} ${op.text}`);
+        // For removed lines, use the file's actual content (not the LLM's
+        // old_str) so leading whitespace is preserved even if the LLM
+        // stripped it from the old_str.
+        else if (op.type === "removed") {
+          const fileLine = neededLines.get(op.line) ?? op.text;
+          parts.push(`-${num} ${fileLine}`);
+        }
+        else parts.push(`+${num} ${op.text}`);
       }
-      // Added lines
-      for (let i = 0; i < rep.newLines.length; i++) {
-        parts.push(`+${String(rep.oldStartLine + i).padStart(numWidth, " ")} ${rep.newLines[i]}`);
-      }
-      cursor = rep.oldEndLine + 1;
     }
-    // Trailing context
-    for (let i = cursor; i <= chunk.endLine; i++) {
-      const lineText = neededLines.get(i);
-      if (lineText !== undefined) {
-        parts.push(` ${String(i).padStart(numWidth, " ")} ${lineText}`);
+
+    // Trailing context after the last rep (already bounded by afterEnd).
+    const lastEntry = repViews[repViews.length - 1];
+    if (lastEntry) {
+      for (let i = lastEntry.rep.oldEndLine + 1; i <= lastEntry.afterEnd; i++) {
+        const lineText = neededLines.get(i);
+        if (lineText !== undefined) {
+          parts.push(` ${String(i).padStart(numWidth, " ")} ${lineText}`);
+        }
       }
     }
   }

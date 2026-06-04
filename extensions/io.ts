@@ -243,7 +243,13 @@ export function buildPatchCallComponent(component: PatchCallComponent, args: any
     return component;
   }
 
-  if (!body) return component;
+  if (!body) {
+    // Patch succeeded but the diff is empty (e.g., old_str === new_str, or
+    // every hunk's reps were skipped). Tell the user nothing changed.
+    component.addChild(new Spacer(1));
+    component.addChild(new Text(theme.fg("dim", `  (no changes)`), 0, 0));
+    return component;
+  }
 
   const lines = body.split("\n");
   const FOLD_THRESHOLD = 45;
