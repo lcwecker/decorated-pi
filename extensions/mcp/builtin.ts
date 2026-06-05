@@ -5,7 +5,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
 import { spawnSync } from "node:child_process";
-import { loadConfig } from "../settings.js";
+import { loadConfig, isCodegraphModuleEnabled } from "../settings.js";
 import type { DependencyStatus } from "../rtk";
 
 export interface McpServerConfig {
@@ -19,7 +19,10 @@ export interface McpServerConfig {
   source: "builtin" | "global" | "project";
 }
 
-/** Builtin servers — zero-config, always available unless overridden. */
+/** Builtin servers — zero-config, always available unless overridden.
+ *  The cross-source priority is `builtin < global < project`; the order
+ *  WITHIN this array doesn't matter for resolution because each entry
+ *  has a unique `name`. */
 export const BUILTIN_MCP_SERVERS: Omit<McpServerConfig, "source">[] = [
   {
     name: "context7",
@@ -30,6 +33,18 @@ export const BUILTIN_MCP_SERVERS: Omit<McpServerConfig, "source">[] = [
     name: "exa",
     url: "https://mcp.exa.ai/mcp",
     enabled: true,
+  },
+  {
+    // Local code knowledge graph (colbymchenry/codegraph). Opt-in via
+    // the decorated-pi module toggle (`modules.codegraph` / /dp-settings).
+    // The `enabled: false` here is a placeholder — resolveMcpConfigs
+    // overrides it with `isCodegraphModuleEnabled()` at resolve time,
+    // so this literal value is never what ends up in the resolved list.
+    name: "codegraph",
+    command: "codegraph",
+    args: ["serve", "--mcp"],
+    enabled: false,
+    description: "Local code knowledge graph (colbymchenry/codegraph). Enable via /dp-settings.",
   },
 ];
 
@@ -104,9 +119,17 @@ export function isSseUrl(url: string): boolean {
 export function resolveMcpConfigs(cwd: string): McpServerConfig[] {
   const byName = new Map<string, McpServerConfig>();
 
-  // Builtin (lowest priority)
+  // Builtin (lowest priority). The codegraph entry's `enabled` flag is
+  // computed at resolve time from the dp-settings module toggle — see
+  // `isCodegraphModuleEnabled`. We don't probe `.codegraph/codegraph.db`
+  // here; if the project hasn't been initialised yet, the tools will
+  // error at call time, which the system-prompt guidance handles.
   for (const s of BUILTIN_MCP_SERVERS) {
-    byName.set(s.name, { ...s, source: "builtin" });
+    if (s.name === "codegraph") {
+      byName.set(s.name, { ...s, enabled: isCodegraphModuleEnabled(), source: "builtin" });
+    } else {
+      byName.set(s.name, { ...s, source: "builtin" });
+    }
   }
 
   // Global — preserve url/command/description from builtin if not overridden

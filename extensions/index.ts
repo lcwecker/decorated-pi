@@ -23,7 +23,7 @@ import {
     setupRtkIntegration,
     type DependencyStatus,
 } from "./rtk";
-import { isModuleEnabled } from "./settings";
+import { isModuleEnabled, isCodegraphModuleEnabled } from "./settings";
 
 function collectDependencyStatuses(cwd: string): DependencyStatus[] {
     const statuses: DependencyStatus[] = [];
@@ -89,6 +89,20 @@ function setupDependencyReminders(pi: ExtensionAPI) {
 
 const DECORATED_PI_GUIDANCE_MARKER = "## Decorated Pi Guidance";
 
+/**
+ * True when the codegraph guidance should be injected into the system
+ * prompt. Mirrors the MCP broker's gating (`computeCodegraphEnabled` in
+ * `mcp/builtin.ts`): once the user enables the codegraph module via
+ * /dp-settings, the server is registered and the 8 `codegraph_*` tools
+ * become available. We do NOT probe for `.codegraph/codegraph.db` — the
+ * project may or may not have run `codegraph init` yet; if it hasn't,
+ * the tools will error at call time and the guidance tells the LLM to
+ * ask the user to run `codegraph init -i` in their terminal.
+ */
+export function isCodegraphActive(): boolean {
+    return isCodegraphModuleEnabled();
+}
+
 function setupGuidance(pi: ExtensionAPI) {
     pi.on("before_agent_start", async (event) => {
         // Remove "Current date: YYYY-MM-DD" from system prompt to improve cache stability
@@ -98,18 +112,47 @@ function setupGuidance(pi: ExtensionAPI) {
         );
 
         if (!prompt.includes(DECORATED_PI_GUIDANCE_MARKER)) {
-            const guidance = [
+            const sections: string[] = [
                 DECORATED_PI_GUIDANCE_MARKER,
                 "",
+                "### Workflow",
                 "- Before acting on a prompt: 1. ensure you fully understand the user's intent — if ambiguous, ask clarifying questions; 2. have researched the existing state — read files, search, investigate. Proceed only when both are clear.",
                 "- Exercise caution when performing any **write** operations, especially when you are in a research or exploration phase.",
                 "- Before modifying code, match the user's existing code style (naming, formatting, patterns). Do not re-modify lines the user has manually edited since your last change.",
+                "",
+                "### Context Loading",
                 "- You don't need to read **AGENTS.md** or **CLAUDE.md** files unless you're explicitly asked to, these files will loaded automatically if necessary.",
+                "",
+                "### Filesystem Safety",
                 "- CAUTION: Do not perform write operations in the following directories unless explicitly instructed: `node_modules`, `venv`, `env`, `__pycache__`, `.git` or any other hidden directories.",
+                "",
+                "### Secret Masking",
                 "- When you see masked secret values (e.g. `sk-***...***` where `*`, `#`, or `?` are mask characters), the real value has been redacted by the system. Do not attempt to read or guess it. If you need the secret, use tools like `jq` or `grep` to extract it from the original source file.",
-            ].join("\n");
+            ];
 
-            prompt = `${prompt}\n\n${guidance}`;
+            // Only inject the CodeGraph guidance when the module is
+            // enabled in /dp-settings. We deliberately do NOT claim
+            // `.codegraph/` exists — that probe was removed because
+            // dp-settings is the single source of truth and we want a
+            // stable prompt prefix for cache reuse. If a tool returns
+            // "project not initialized", the LLM should tell the user
+            // to run `codegraph init -i` in their terminal.
+            if (isCodegraphActive()) {
+                sections.push(
+                    "",
+                    "### CodeGraph",
+                    "- This project's `codegraph_*` MCP tools are enabled (via /dp-settings). Prefer them over grep/glob/Read for code structure questions:",
+                    "  • `codegraph_explore` — first call for \"how does X work\" / architecture / survey questions",
+                    "  • `codegraph_impact` — before refactoring or deleting code",
+                    "  • `codegraph_callers` / `codegraph_callees` — trace call flow up/down",
+                    "  • `codegraph_search` — find symbols by name (FTS5 full-text)",
+                    "  • `codegraph_node` — get a single symbol's full source",
+                    "- Treat returned source as already read; do not re-open shown files. The graph is pre-built — grep is just repeating work it already did.",
+                    "- If a tool reports the project isn't initialized, ask the user to run `codegraph init -i` in their terminal; the tools will work once the index is built.",
+                );
+            }
+
+            prompt = `${prompt}\n\n${sections.join("\n")}`;
         }
 
         sortSystemPromptOptions(event.systemPromptOptions);

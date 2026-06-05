@@ -143,5 +143,6 @@ vite.config.js.timestamp-*
 vite.config.ts.timestamp-*
 .vite/
 
-#other coding agents
+#other coding agents and tools
 .opencode/
+.codegraph/

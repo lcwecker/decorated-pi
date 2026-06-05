@@ -13,6 +13,7 @@ export interface McpServerStatus {
   name: string;
   url: string;
   source: string;
+  description?: string;
   state: "connecting" | "connected" | "failed" | "disabled";
   toolCount: number;
   tools: Array<{ name: string; description?: string; inputSchema?: Record<string, unknown> }>;
@@ -239,6 +240,7 @@ async function connectAll(
           name: server.name,
           url: server.url ?? server.command ?? "(unknown)",
           source: server.source,
+          description: server.description,
           state: "connected",
           toolCount: conn.tools.length,
           tools: actualTools,
@@ -262,6 +264,7 @@ async function connectAll(
           name: server.name,
           url: server.url ?? server.command ?? "(unknown)",
           source: server.source,
+          description: server.description,
           state: "failed",
           toolCount: 0,
           tools: [],
@@ -344,6 +347,7 @@ export function getMcpStatus(): McpServerStatus[] {
         name: config.name,
         url: config.url ?? config.command ?? "(unknown)",
         source: config.source,
+        description: config.description,
         state: config.enabled ? "connecting" : "disabled",
         toolCount: cachedEntry?.tools.length ?? 0,
         tools: cachedEntry?.tools ?? [],
@@ -382,6 +386,7 @@ export async function refreshServerCache(
       name: config.name,
       url: config.url ?? config.command ?? "(unknown)",
       source: config.source,
+      description: config.description,
       state: "connected",
       toolCount: conn.tools.length,
       tools: conn.tools.map(t => ({
@@ -410,6 +415,7 @@ export async function refreshServerCache(
       name: config.name,
       url: config.url ?? config.command ?? "(unknown)",
       source: config.source,
+      description: config.description,
       state: "failed",
       toolCount: 0,
       tools: [],

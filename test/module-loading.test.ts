@@ -205,6 +205,8 @@ describe("index.ts — conditional loading structure", () => {
   });
 
   it("imports isModuleEnabled from settings", () => {
-    expect(indexSrc).toContain('import { isModuleEnabled } from "./settings"');
+    // Allow other named imports alongside isModuleEnabled in the same
+    // destructuring (e.g. codegraph helpers added later).
+    expect(indexSrc).toMatch(/import\s*\{[^}]*\bisModuleEnabled\b[^}]*\}\s*from\s*"\.\/settings"/);
   });
 });

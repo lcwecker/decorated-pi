@@ -144,6 +144,14 @@ describe("Module Settings", () => {
     expect(settings["smart-at"]).toBe(true);
   });
 
+  it("defaults codegraph to DISABLED (opt-in, unlike the rest)", () => {
+    // codegraph pulls in a heavy bundled Node runtime and a per-project
+    // SQLite DB; defaulting to on would surprise users who never asked
+    // for it. /dp-settings must therefore show it as "off" out of the box.
+    expect(getAllModuleSettings().codegraph).toBe(false);
+    expect(isModuleEnabled("codegraph")).toBe(false);
+  });
+
   it("isModuleEnabled returns true by default", () => {
     expect(isModuleEnabled("safety")).toBe(true);
     expect(isModuleEnabled("lsp")).toBe(true);

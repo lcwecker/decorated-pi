@@ -2,7 +2,8 @@
  * Slash — 所有扩展命令
  *
  * /dp-model    → 模型选择器 (TAB 切换 Image/Compact)
- * /dp-settings → 模块开关 (patch / safety / lsp / smart-at)
+ * /dp-settings → 模块开关 (patch / safety / lsp / smart-at, codegraph)
+ * /mcp         → MCP server 状态
  * /retry       → 中断后继续
  */
 
@@ -69,6 +70,7 @@ const MODULE_LABELS: Record<keyof ModuleSettings, string> = {
   mcp: "MCP",
   wakatime: "WakaTime",
   "rtk": "RTK",
+  codegraph: "CodeGraph",
 };
 
 const MODULE_DESCS: Record<keyof ModuleSettings, string> = {
@@ -79,6 +81,7 @@ const MODULE_DESCS: Record<keyof ModuleSettings, string> = {
   mcp: "MCP client for context7 and exa (zero-config)",
   wakatime: "Send coding activity heartbeats to WakaTime",
   "rtk": "Rewrite bash through system RTK when available",
+  codegraph: "Local code knowledge graph (colbymchenry/codegraph). Off by default — enable in /dp-settings, then run `codegraph init -i` in your terminal.",
 };
 
 class ModuleSettingsComponent extends Container {
