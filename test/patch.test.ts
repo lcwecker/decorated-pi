@@ -67,6 +67,117 @@ describe("applyPatches", () => {
     expect(diff).not.toContain("@@");
   });
 
+  it("multi-edit with no-op rep on line > CONTEXT does not throw", async () => {
+    // Regression: a no-op rep (old_str === new_str) at a line beyond CONTEXT_LINES
+    // used to crash with "Cannot read properties of undefined (reading 'line')"
+    // because the empty-hunk guard in computeRenderedRange didn't account for
+    // beforeStart being < oldStartLine (which happens when oldStartLine > CONTEXT).
+    writeFile("f.txt", "line 1\nline 2\nline 3\nline 4\nline 5\nline 6\nline 7\nline 8\nline 9\nlast\n");
+    const result = await applyPatches(
+      [
+        {
+          path: "f.txt",
+          edits: [
+            { old_str: "line 1", new_str: "LINE 1" },
+            { old_str: "last", new_str: "last" }, // no-op on a line > CONTEXT (3)
+            { old_str: "line 5", new_str: "LINE 5" },
+          ],
+        },
+      ],
+      tmpDir,
+    );
+    expect(readFile("f.txt")).toBe("LINE 1\nline 2\nline 3\nline 4\nLINE 5\nline 6\nline 7\nline 8\nline 9\nlast\n");
+    // The diff should render without throwing, and the no-op rep should be skipped
+    const diff = generatePatchDiff(result);
+    expect(diff).toBeTruthy();
+    expect(diff).toContain("LINE 1");
+    expect(diff).toContain("LINE 5");
+  });
+
+  it("multi-edit with no-op rep does not emit its context lines in diff", async () => {
+    // Regression: a no-op rep at line 10 (oldStartLine > CONTEXT=3) used to
+    // emit lines 7, 8, 9 as its "before context" in the diff, even though
+    // there were no actual changes from that rep. Combined with the real
+    // edits at lines 1 and 5, this produced a garbled diff that omitted
+    // line 6 (which falls between the no-op's before-context and the
+    // trailing context of the last real edit).
+    writeFile("f.txt", "line 1\nline 2\nline 3\nline 4\nline 5\nline 6\nline 7\nline 8\nline 9\nlast\n");
+    const result = await applyPatches(
+      [
+        {
+          path: "f.txt",
+          edits: [
+            { old_str: "line 1", new_str: "LINE 1" },
+            { old_str: "last", new_str: "last" }, // no-op at line 10
+            { old_str: "line 5", new_str: "LINE 5" },
+          ],
+        },
+      ],
+      tmpDir,
+    );
+    const diff = generatePatchDiff(result);
+    // The diff should contain line 6 (which is the trailing context for
+    // the line 5 change — 3 lines after).
+    expect(diff).toContain(" 6 line 6");
+    expect(diff).toContain(" 7 line 7");
+    expect(diff).toContain(" 8 line 8");
+    // The no-op rep at line 10 should NOT pull in line 9 (its before
+    // context) or "last" (the no-op line itself).
+    expect(diff).not.toContain(" 9 line 9");
+    expect(diff).not.toContain("last");
+  });
+
+  it("LCS added lines use new-file line numbers (no conflict with trailing context)", async () => {
+    // Regression: LCS used to label `+` lines with the same formula as
+    // context lines (`rep.oldStartLine + j - 1`), which caused added lines
+    // and trailing-context lines to share line numbers (e.g. both
+    // labelled 944). Fix: context + added now use the new-file line
+    // number (computed by a second pass after the LCS), so the line
+    // numbers within a hunk are monotonically increasing.
+    writeFile(
+      "f.txt",
+      "line 1\nline 2\nline 3\nline 4\nline 5\nline 6\nline 7\nline 8\nline 9\nline 10\n",
+    );
+    const result = await applyPatches(
+      [
+        {
+          path: "f.txt",
+          edits: [
+            {
+              // Multi-line edit inserting 2 lines after line 3 inside a
+              // surrounding context. LCS context lines (the parts of
+              // old_str that match new_str) and the 2 added lines must
+              // have monotonically increasing new-file line numbers.
+              old_str: "line 1\nline 2\nline 3\nline 4\nline 5",
+              new_str: "line 1\nline 2\nline 3\nINSERTED_A\nINSERTED_B\nline 4\nline 5",
+            },
+          ],
+        },
+      ],
+      tmpDir,
+    );
+    const diff = generatePatchDiff(result);
+    // Hunk covers 3 before-context + 2 added + 2 inner-context + 3 trailing
+    // (lines 6, 7, 8 of original, now at new positions 8, 9, 10)
+    expect(diff).toMatch(/@@ lines 1-10 @@/);
+    // Added lines at new-file positions 4 and 5
+    expect(diff).toContain("+ 4 INSERTED_A");
+    expect(diff).toContain("+ 5 INSERTED_B");
+    // Context line "line 4" (original line 4) at new-file position 6
+    expect(diff).toContain(" 6 line 4");
+    // Context line "line 5" (original line 5) at new-file position 7
+    expect(diff).toContain(" 7 line 5");
+    // Trailing context lines (original 6, 7, 8) at new-file positions 8, 9, 10
+    expect(diff).toContain(" 8 line 6");
+    expect(diff).toContain(" 9 line 7");
+    expect(diff).toContain("10 line 8");
+    // Sanity: line numbers in the hunk must be monotonically non-decreasing
+    const lineNums = [...diff.matchAll(/^[+\s ]\s*(\d+)/gm)].map(m => Number(m[1]));
+    for (let i = 1; i < lineNums.length; i++) {
+      expect(lineNums[i]).toBeGreaterThanOrEqual(lineNums[i - 1]!);
+    }
+  });
+
   it("replaces with empty string (delete)", async () => {
     writeFile("f.txt", "foo bar baz\n");
     await applyPatches([
@@ -502,17 +613,19 @@ describe("applyPatches", () => {
     expect(diff).not.toContain("-11 };");
     expect(diff).not.toContain("-12 #endif");
 
-    // Unchanged interior lines must surface as context.
+    // Unchanged interior lines must surface as context. With new-file
+    // line numbering, after the 2 lines are removed, the remaining
+    // lines shift up: old 3 → new 2, old 4 → new 3, ..., old 12 → new 10.
     expect(diff).toContain(" 1 static int timer_hb_proc");
-    expect(diff).toContain(" 3 static int backend_ai_init_timer");
-    expect(diff).toContain(" 4 static int on_msg_proc");
-    expect(diff).toContain(" 5 ");
-    expect(diff).toContain(" 6 static int on_task_loop");
-    expect(diff).toContain(" 7 static int on_encode_task_loop");
-    expect(diff).toContain(" 8 static int on_task_handle");
-    expect(diff).toContain("10 static int on_task_end");
-    expect(diff).toContain("11 };");
-    expect(diff).toContain("12 #endif");
+    expect(diff).toContain(" 2 static int backend_ai_init_timer");
+    expect(diff).toContain(" 3 static int on_msg_proc");
+    expect(diff).toContain(" 4 ");
+    expect(diff).toContain(" 5 static int on_task_loop");
+    expect(diff).toContain(" 6 static int on_encode_task_loop");
+    expect(diff).toContain(" 7 static int on_task_handle");
+    expect(diff).toContain(" 8 static int on_task_end");
+    expect(diff).toContain(" 9 };");
+    expect(diff).toContain("10 #endif");
 
     // No + lines in a pure-deletion case.
     expect(diff).not.toMatch(/^\+ /m);
@@ -594,9 +707,11 @@ describe("applyPatches", () => {
     const diff = generatePatchDiff(result);
 
     // The identical prefix/suffix must be context, not + and -.
+    // With new-file line numbering, after the inserted line at position 2,
+    // line2 moves to position 3 and line3 moves to position 4.
     expect(diff).toMatch(/^ 1 line1/m);
-    expect(diff).toMatch(/^ 2 line2/m);
-    expect(diff).toMatch(/^ 3 line3/m);
+    expect(diff).toMatch(/^ 3 line2/m);
+    expect(diff).toMatch(/^ 4 line3/m);
     // Only the inserted line should appear as +.
     expect(diff).toMatch(/^\+[0-9 ]+INSERTED/m);
     // No - lines, since old_str was a superset of new_str's content.

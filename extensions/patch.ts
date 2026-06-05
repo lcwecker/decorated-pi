@@ -770,7 +770,7 @@ function formatChunkMetadataLines(chunk: ReplacementChunk): string[] {
 type RenderOp =
   | { type: "context"; line: number; text: string }
   | { type: "removed"; line: number; text: string }
-  | { type: "added"; line: number; text: string };
+  | { type: "added"; line: number; text: string; /** New-file line number (differs from `line` when there are added/removed lines before it). Optional for backward compat. */ newLine?: number };
 
 interface RenderableReplacement {
   operations: RenderOp[];
@@ -864,6 +864,19 @@ function splitReplacementForRender(
   const end = Math.min(operations.length - 1, lastNonContextIdx + contextLines);
   const trimmed = operations.slice(start, end + 1);
 
+  // Second pass: compute the new-file line number for each operation.
+  // Standard unified-diff convention: context/removed use ORIGINAL line
+  // numbers; added use NEW-file line numbers (so they don't collide with
+  // the line numbers of unchanged lines that follow in the file).
+  let newLineCounter = rep.oldStartLine;
+  for (const op of trimmed) {
+    if (op.type === "context" || op.type === "added") {
+      op.newLine = newLineCounter;
+      newLineCounter++;
+    }
+    // removed: no new-file line; skip increment
+  }
+
   return { operations: trimmed, firstChangeLine, lastChangeLine };
 }
 
@@ -878,12 +891,27 @@ function computeRenderedRange(
 ): { startLine: number; endLine: number } {
   let renderedStart = Infinity;
   let renderedEnd = -Infinity;
-  for (const { rep, view, beforeStart, afterEnd } of repViews) {
-    if (view.operations.length === 0 && beforeStart >= rep.oldStartLine && afterEnd <= rep.oldEndLine) continue;
-    const opStart = view.operations[0]!.line;
-    const opEnd = view.operations[view.operations.length - 1]!.line;
-    const s = Math.min(beforeStart, opStart);
-    const e = Math.max(afterEnd, opEnd);
+  for (const { view, beforeStart, afterEnd } of repViews) {
+    // Skip reps with no operations (no changes to render). The original
+    // check also required beforeStart >= oldStartLine && afterEnd <= oldEndLine,
+    // but that fails when oldStartLine > CONTEXT_LINES (beforeStart would be
+    // oldStartLine - CONTEXT_LINES < oldStartLine), causing view.operations[0]
+    // to be undefined and throw "Cannot read properties of undefined".
+    if (view.operations.length === 0) continue;
+    // Use the new-file line number of the first/last operations so the
+    // hunk header matches the line numbers used in the diff content.
+    const opStart = view.operations[0]!.newLine ?? view.operations[0]!.line;
+    const opEnd = view.operations[view.operations.length - 1]!.newLine ?? view.operations[view.operations.length - 1]!.line;
+    // beforeStart / afterEnd are in original line numbers; convert via
+    // the offset of this rep's operations. For a clean approximation
+    // (and to avoid running into line-number collisions), use the rep's
+    // own oldStartLine/oldEndLine as the anchor for the conversion.
+    const origStart = view.operations[0]!.line;
+    const origEnd = view.operations[view.operations.length - 1]!.line;
+    const beforeNew = opStart - (origStart - beforeStart);
+    const afterNew = opEnd + (afterEnd - origEnd);
+    const s = Math.min(beforeNew, opStart);
+    const e = Math.max(afterNew, opEnd);
     if (s < renderedStart) renderedStart = s;
     if (e > renderedEnd) renderedEnd = e;
   }
@@ -935,32 +963,64 @@ function generateReplacementDiff(filePath: string, reps: ReplacementInfo[], orig
     parts.push(formatChunkHeader(syntheticChunk));
     parts.push(...formatChunkMetadataLines(syntheticChunk));
 
+    let lastOutputLine = 0;
     for (const { rep, view, beforeStart } of repViews) {
-      // Context before this rep: only lines within CONTEXT of the first change.
-      for (let i = beforeStart; i < rep.oldStartLine; i++) {
+      // Skip no-op reps (old_str === new_str): no changes to show, and
+      // emitting their context lines would mislead the reader.
+      if (view.operations.length === 0) continue;
+
+      // Context before this rep. Start from `lastOutputLine + 1` to
+      // avoid duplicating context lines already emitted by the previous
+      // rep's before-context window or operations.
+      const ctxStart = Math.max(lastOutputLine + 1, beforeStart);
+      for (let i = ctxStart; i < rep.oldStartLine; i++) {
         const num = String(i).padStart(numWidth, " ");
         parts.push(` ${num} ${originalLines[i - 1]}`);
+        lastOutputLine = i;
       }
 
       for (const op of view.operations) {
-        const num = String(op.line).padStart(numWidth, " ");
-        if (op.type === "context") parts.push(` ${num} ${op.text}`);
+        // Use the new-file line number for context and added lines so
+        // they don't conflict with the original-file line numbers used by
+        // the trailing-context loop. Removed lines keep the original.
+        const newNum = op.newLine !== undefined
+          ? String(op.newLine).padStart(numWidth, " ")
+          : String(op.line).padStart(numWidth, " ");
+        const origNum = String(op.line).padStart(numWidth, " ");
+        if (op.type === "context") {
+          parts.push(` ${newNum} ${op.text}`);
+          lastOutputLine = op.line;
+        }
         // For removed lines, use the file's actual content (not the LLM's
         // old_str) so leading whitespace is preserved even if the LLM
         // stripped it from the old_str.
         else if (op.type === "removed") {
           const fileLine = originalLines[op.line - 1] ?? op.text;
-          parts.push(`-${num} ${fileLine}`);
+          parts.push(`-${origNum} ${fileLine}`);
+          lastOutputLine = op.line;
         }
-        else parts.push(`+${num} ${op.text}`);
+        else {
+          parts.push(`+${newNum} ${op.text}`);
+        }
       }
     }
 
-    // Trailing context after the last rep (already bounded by afterEnd).
-    const lastEntry = repViews[repViews.length - 1];
-    if (lastEntry) {
-      for (let i = lastEntry.rep.oldEndLine + 1; i <= lastEntry.afterEnd; i++) {
-        const num = String(i).padStart(numWidth, " ");
+    // Trailing context after the LAST NON-NOOP rep. Use new-file line
+    // numbers (offset from the last operation's newLine) so trailing
+    // context doesn't collide with added lines.
+    let lastRealEntry: typeof repViews[number] | undefined;
+    for (const rv of repViews) {
+      if (rv.view.operations.length > 0) lastRealEntry = rv;
+    }
+    if (lastRealEntry) {
+      const lastOp = lastRealEntry.view.operations[lastRealEntry.view.operations.length - 1];
+      const lastNewLine = lastOp?.newLine ?? lastOp?.line ?? lastRealEntry.rep.oldEndLine;
+      const lastOrigLine = lastOp?.line ?? lastRealEntry.rep.oldEndLine;
+      // Start from lastOutputLine + 1 to avoid duplicating context
+      // already emitted.
+      const ctxStart = Math.max(lastOutputLine + 1, lastRealEntry.rep.oldEndLine + 1);
+      for (let i = ctxStart; i <= lastRealEntry.afterEnd; i++) {
+        const num = String(lastNewLine + (i - lastOrigLine)).padStart(numWidth, " ");
         parts.push(` ${num} ${originalLines[i - 1]}`);
       }
     }
@@ -1216,36 +1276,74 @@ function generateLocalDiff(
     parts.push(...formatChunkMetadataLines(syntheticChunk));
 
     // Output context + removed + added
+    let lastOutputLine = 0;
     for (const { rep, view, beforeStart } of repViews) {
-      // Context before this replacement (only lines close to the first change)
-      for (let i = beforeStart; i < rep.oldStartLine; i++) {
+      // Skip no-op reps (old_str === new_str): no changes to show, and
+      // emitting their context lines would mislead the reader.
+      if (view.operations.length === 0) continue;
+
+      // Context before this rep. Start from `lastOutputLine + 1` (not
+      // `beforeStart`) to avoid duplicating context lines that were
+      // already emitted by the previous rep's before-context window
+      // or operations (common when multiple reps are close together).
+      const ctxStart = Math.max(lastOutputLine + 1, beforeStart);
+      for (let i = ctxStart; i < rep.oldStartLine; i++) {
         const lineText = neededLines.get(i);
         if (lineText !== undefined) {
           parts.push(` ${String(i).padStart(numWidth, " ")} ${lineText}`);
+          lastOutputLine = i;
         }
       }
 
       for (const op of view.operations) {
-        const num = String(op.line).padStart(numWidth, " ");
-        if (op.type === "context") parts.push(` ${num} ${op.text}`);
+        // Use the new-file line number for context and added lines so
+        // they don't conflict with the original-file line numbers used by
+        // the trailing-context loop. Removed lines keep the original.
+        const newNum = op.newLine !== undefined
+          ? String(op.newLine).padStart(numWidth, " ")
+          : String(op.line).padStart(numWidth, " ");
+        const origNum = String(op.line).padStart(numWidth, " ");
+        if (op.type === "context") {
+          parts.push(` ${newNum} ${op.text}`);
+          lastOutputLine = op.line;
+        }
         // For removed lines, use the file's actual content (not the LLM's
         // old_str) so leading whitespace is preserved even if the LLM
         // stripped it from the old_str.
         else if (op.type === "removed") {
           const fileLine = neededLines.get(op.line) ?? op.text;
-          parts.push(`-${num} ${fileLine}`);
+          parts.push(`-${origNum} ${fileLine}`);
+          lastOutputLine = op.line;
         }
-        else parts.push(`+${num} ${op.text}`);
+        else {
+          parts.push(`+${newNum} ${op.text}`);
+          // Don't bump lastOutputLine for added (no original line to consume)
+        }
       }
     }
 
-    // Trailing context after the last rep (already bounded by afterEnd).
-    const lastEntry = repViews[repViews.length - 1];
-    if (lastEntry) {
-      for (let i = lastEntry.rep.oldEndLine + 1; i <= lastEntry.afterEnd; i++) {
+    // Trailing context after the LAST NON-NOOP rep (a no-op's trailing
+    // context would be based on the no-op's line range, not the real
+    // change's end, which would skip past the real change's after-context).
+    // Use new-file line numbers (offset from the last operation's newLine)
+    // so trailing context doesn't collide with added lines.
+    let lastRealEntry: typeof repViews[number] | undefined;
+    for (const rv of repViews) {
+      if (rv.view.operations.length > 0) lastRealEntry = rv;
+    }
+    if (lastRealEntry) {
+      const lastOp = lastRealEntry.view.operations[lastRealEntry.view.operations.length - 1];
+      const lastNewLine = lastOp?.newLine ?? lastOp?.line ?? lastRealEntry.rep.oldEndLine;
+      const lastOrigLine = lastOp?.line ?? lastRealEntry.rep.oldEndLine;
+      // Start from lastOutputLine + 1 to avoid duplicating context
+      // already emitted (e.g., when the rep's operations ended with a
+      // context op and then we'd otherwise re-emit the same line).
+      const ctxStart = Math.max(lastOutputLine + 1, lastRealEntry.rep.oldEndLine + 1);
+      for (let i = ctxStart; i <= lastRealEntry.afterEnd; i++) {
         const lineText = neededLines.get(i);
         if (lineText !== undefined) {
-          parts.push(` ${String(i).padStart(numWidth, " ")} ${lineText}`);
+          const newLine = lastNewLine + (i - lastOrigLine);
+          parts.push(` ${String(newLine).padStart(numWidth, " ")} ${lineText}`);
         }
       }
     }
