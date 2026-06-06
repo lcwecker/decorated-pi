@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { __mcpIndexTest } from "../extensions/mcp/index.js";
+import { __mcpIndexTest } from "../tools/mcp/index.js";
 
 describe("mcp tool result folding", () => {
   it("does not fold when output has 45 lines or fewer", () => {

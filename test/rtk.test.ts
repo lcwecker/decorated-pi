@@ -8,7 +8,7 @@ import {
   buildRtkCommand,
   executeOriginalBash,
   shellQuote,
-} from "../extensions/rtk";
+} from "../hooks/rtk";
 
 describe("RTK integration helpers", () => {
   it("quotes shell paths safely", () => {

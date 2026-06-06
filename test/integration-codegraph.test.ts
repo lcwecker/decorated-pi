@@ -4,25 +4,49 @@
  *
  * Uses `process.cwd()` so the test works regardless of where the
  * decorated-pi repo is checked out. Each test sets a deterministic
- * module state via `setModuleEnabled` and restores it in `afterEach`,
- * so the suite is independent of the user's actual `~/.pi/agent/`
- * config.
+ * module state via `setModuleEnabled` and restores it in `afterEach`.
+ *
+ * The global `mcpServers.codegraph` entry in the user's
+ * `~/.pi/agent/decorated-pi.json` would override the builtin codegraph
+ * entry with `source: "global"` and a user-controlled `enabled` flag,
+ * polluting these tests. We snapshot+strip `mcpServers` in `beforeEach`
+ * and restore it in `afterEach` so the suite is independent of the
+ * user's actual config.
  */
 import * as fs from "node:fs";
+import * as os from "node:os";
 import * as path from "node:path";
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { isModuleEnabled, setModuleEnabled, getAllModuleSettings } from "../extensions/settings.js";
-import { resolveMcpConfigs, BUILTIN_MCP_SERVERS } from "../extensions/mcp/builtin.js";
+import { isModuleEnabled, setModuleEnabled, getAllModuleSettings } from "../settings.js";
+import { resolveMcpConfigs, BUILTIN_MCP_SERVERS } from "../tools/mcp/config.js";
 
 const PROJECT_CWD = process.cwd();
+const CONFIG_FILE = path.join(os.homedir(), ".pi", "agent", "decorated-pi.json");
 
 describe.sequential("codegraph end-to-end integration", () => {
   let prevModuleState: boolean | undefined;
+  let prevConfigRaw: string | null = null;
+  let hadConfig = false;
 
   beforeEach(() => {
     prevModuleState = getAllModuleSettings().codegraph;
+    // Snapshot and strip `mcpServers` from the global config so it
+    // doesn't override the builtin codegraph entry.
+    if (fs.existsSync(CONFIG_FILE)) {
+      hadConfig = true;
+      prevConfigRaw = fs.readFileSync(CONFIG_FILE, "utf-8");
+      const parsed = JSON.parse(prevConfigRaw);
+      delete parsed.mcpServers;
+      fs.writeFileSync(CONFIG_FILE, JSON.stringify(parsed, null, 2) + "\n", "utf-8");
+    } else {
+      hadConfig = false;
+      prevConfigRaw = null;
+    }
   });
   afterEach(() => {
+    if (hadConfig && prevConfigRaw !== null) {
+      fs.writeFileSync(CONFIG_FILE, prevConfigRaw, "utf-8");
+    }
     setModuleEnabled("codegraph", prevModuleState ?? false);
   });
 
@@ -57,7 +81,7 @@ describe.sequential("codegraph end-to-end integration", () => {
 
   it("slash command is not registered", () => {
     const src = fs.readFileSync(
-      path.join(import.meta.dirname, "../extensions/slash.ts"),
+      path.join(import.meta.dirname, "../commands/dp-model.ts"),
       "utf-8",
     );
     expect(src).not.toMatch(/registerCommand\(\s*"codegraph"/);
@@ -65,11 +89,14 @@ describe.sequential("codegraph end-to-end integration", () => {
   });
 
   it("system prompt has ### CodeGraph section, injected conditionally", () => {
+    // Guidance now lives in tools/mcp/builtin/codegraph.ts and is
+    // pushed into the guidelines array in index.ts when codegraph is enabled.
     const src = fs.readFileSync(
-      path.join(import.meta.dirname, "../extensions/index.ts"),
+      path.join(import.meta.dirname, "../tools/mcp/builtin/codegraph.ts"),
       "utf-8",
     );
-    expect(src).toMatch(/###\s+CodeGraph/);
-    expect(src).toMatch(/isCodegraphActive\(\)/);
+    expect(src).toMatch(/codegraph_[\`*]?\*?[\`*]? MCP tools are enabled/);
+    expect(src).toMatch(/codegraph_explore/);
+    expect(src).toMatch(/codegraph_impact/);
   });
 });

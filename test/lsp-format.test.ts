@@ -30,7 +30,7 @@ import {
   type LspHover,
   type LspLocation,
   type LspDocumentSymbol,
-} from "../extensions/lsp/format.js";
+} from "../tools/lsp/format.js";
 
 // ═══════════════════════════════════════════════════════════════════════════
 // Helper factories

@@ -1,11 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { LspDiagnostic } from "../extensions/lsp/types.js";
+import type { LspDiagnostic } from "../tools/lsp/types.js";
 
 const state = vi.hoisted(() => ({
   protocolInstances: [] as any[],
 }));
 
-vi.mock("../extensions/lsp/protocol.js", async () => {
+vi.mock("../tools/lsp/protocol.js", async () => {
   const { EventEmitter } = await import("node:events");
   class MockProtocol extends EventEmitter {
     spawn = vi.fn(async () => {});
@@ -30,7 +30,7 @@ vi.mock("../extensions/lsp/protocol.js", async () => {
   };
 });
 
-import { LspClient } from "../extensions/lsp/client.js";
+import { LspClient } from "../tools/lsp/client.js";
 
 function lastProtocol(): any {
   return state.protocolInstances[state.protocolInstances.length - 1]!;

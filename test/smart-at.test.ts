@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { __smartAtTest } from "../extensions/smart-at.js";
+import { __smartAtTest } from "../hooks/smart-at.js";
 
 const { computePenaltyMeta, computePenalty, fuzzyScore, computeMatchScore, smartSearch, atPrefix } = __smartAtTest;
 

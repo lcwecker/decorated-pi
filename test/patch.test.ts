@@ -16,8 +16,8 @@ import {
   computePatchPreview,
   diagnoseOldStrMismatch,
   diagnoseOldStrNotUnique,
-} from "../extensions/patch.js";
-import { preparePatchArguments } from "../extensions/io.js";
+} from "../tools/patch/core.js";
+import { preparePatchArguments } from "../tools/patch/index.js";
 
 // ═══════════════════════════════════════════════════════════════════════════
 // applyPatches Tests

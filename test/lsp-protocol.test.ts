@@ -26,7 +26,7 @@ vi.mock("node:child_process", async () => {
   return { ...actual, spawn: state.spawnMock };
 });
 
-import { LspProtocol, LspProtocolError } from "../extensions/lsp/protocol.js";
+import { LspProtocol, LspProtocolError } from "../tools/lsp/protocol.js";
 
 function emitMessage(proc: FakeChildProcess, message: unknown) {
   const body = Buffer.from(JSON.stringify(message), "utf8");

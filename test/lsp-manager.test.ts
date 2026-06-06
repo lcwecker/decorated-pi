@@ -18,14 +18,14 @@ const state = vi.hoisted(() => ({
 }));
 
 vi.mock("node:fs/promises", () => ({ readFile: state.readFileMock }));
-vi.mock("../extensions/lsp/env.js", () => ({ createChildProcessEnv: state.createEnvMock }));
-vi.mock("../extensions/lsp/servers.js", () => ({
+vi.mock("../tools/lsp/env.js", () => ({ createChildProcessEnv: state.createEnvMock }));
+vi.mock("../tools/lsp/servers.js", () => ({
   detectLanguage: state.detectLanguageMock,
   findWorkspaceRoot: state.findWorkspaceRootMock,
   getServerConfig: state.getServerConfigMock,
   languageIdForFile: state.languageIdForFileMock,
 }));
-vi.mock("../extensions/lsp/client.js", () => {
+vi.mock("../tools/lsp/client.js", () => {
   class MockLspClient {
     options: any;
     start = vi.fn((timeoutMs?: number) => state.startImpl(timeoutMs));
@@ -51,7 +51,7 @@ vi.mock("../extensions/lsp/client.js", () => {
   };
 });
 
-import { LspServerManager } from "../extensions/lsp/manager.js";
+import { LspServerManager } from "../tools/lsp/manager.js";
 
 describe("LspServerManager", () => {
   beforeEach(() => {

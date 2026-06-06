@@ -17,7 +17,7 @@ import {
   readWakatimeCfgApiKey,
   resetWakatimeStateForTests,
   setupWakatimeWithApiKey,
-} from "../extensions/wakatime.js";
+} from "../hooks/wakatime.js";
 
 function countPathParts(p: string): number {
   return path.resolve(p).split(/[\\/]+/).filter(Boolean).length;

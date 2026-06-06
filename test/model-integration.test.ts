@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { __modelIntegrationTest } from "../extensions/model-integration.js";
+import { __modelIntegrationTest } from "../hooks/compaction.js";
 
 describe("model-integration compaction auto-resume", () => {
   it("marks threshold-based post-agent-end compaction as auto", () => {

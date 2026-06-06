@@ -19,14 +19,16 @@ import {
   loadProjectMcpConfigs,
   loadGlobalMcpConfigs,
   resolveMcpConfigs,
+  toggleMcpServerEnabled,
+  BUILTIN_MCP_SERVERS,
+} from "../tools/mcp/config.js";
+import {
   loadMcpCache,
   saveMcpCache,
   updateServerCache,
   cleanupStaleCache,
-  toggleMcpServerEnabled,
-  BUILTIN_MCP_SERVERS,
   type McpCache,
-} from "../extensions/mcp/builtin.js";
+} from "../tools/mcp/cache.js";
 
 // ─── Temp dir helpers ────────────────────────────────────────────────────────
 
@@ -759,5 +761,36 @@ describe("toggleMcpServerEnabled", () => {
     expect(loaded.mcpServers["myserver"].enabled).toBe(false);
     expect(loaded.mcpServers["myserver"].url).toBe("http://test");
     expect(loaded.mcpServers["myserver"].description).toBe("my server");
+  });
+
+  // Regression test for the `require("../settings.js")` ESM bug that
+  // made global toggles fail silently (UI showed "Failed to toggle").
+  it("toggles a global server (writes to ~/.pi/agent/decorated-pi.json)", () => {
+    const CONFIG_FILE = path.join(os.homedir(), ".pi/agent/decorated-pi.json");
+    const original = fs.existsSync(CONFIG_FILE)
+      ? fs.readFileSync(CONFIG_FILE, "utf-8")
+      : null;
+    try {
+      const result = toggleMcpServerEnabled("context7", false, "global");
+      expect(result).toBe(true);
+      const loaded = JSON.parse(fs.readFileSync(CONFIG_FILE, "utf-8"));
+      expect(loaded.mcpServers?.["context7"]?.enabled).toBe(false);
+    } finally {
+      if (original === null) {
+        try { fs.unlinkSync(CONFIG_FILE); } catch {}
+      } else {
+        fs.writeFileSync(CONFIG_FILE, original, "utf-8");
+      }
+    }
+  });
+});
+
+// Regression test for the `require("./builtin.js")` ESM bug in
+// tools/mcp/index.ts. Importing the module used to throw
+// ReferenceError because ESM modules don't expose `require`.
+describe("registerMcpTools (ESM module load)", () => {
+  it("loads without ReferenceError in ESM", async () => {
+    const mod = await import("../tools/mcp/index.js");
+    expect(typeof mod.registerMcpTools).toBe("function");
   });
 });

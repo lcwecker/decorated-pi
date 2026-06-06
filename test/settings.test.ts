@@ -27,7 +27,7 @@ import {
   setCompactModelKey,
   type DecoratedPiConfig,
   type ModuleSettings,
-} from "../extensions/settings.js";
+} from "../settings.js";
 
 // ─── Mock config file path ──────────────────────────────────────────────────
 // settings.ts uses a hardcoded path, so we need to test with the real module

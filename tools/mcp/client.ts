@@ -2,8 +2,8 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { SSEClientTransport } from "@modelcontextprotocol/sdk/client/sse.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
-import type { McpServerConfig } from "./builtin.js";
-import { isSseUrl } from "./builtin.js";
+import type { McpServerConfig } from "./config.js";
+import { isSseUrl } from "./config.js";
 
 export interface McpToolSpec {
   name: string;

@@ -14,7 +14,7 @@ import {
   createFileTimeMarkerData,
   restoreReadMarkersFromBranch,
   FILE_TIMES_CUSTOM_TYPE,
-} from "../extensions/file-times.js";
+} from "../hooks/track-mtime.js";
 
 describe("file-times", () => {
   let tmpDir: string;

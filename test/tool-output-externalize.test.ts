@@ -9,8 +9,9 @@ import * as path from "path";
 import {
   maybeExternalizeToolResult,
   OUTPUT_EXTERNALIZE_THRESHOLD,
-} from "../extensions/io.js";
-import { writeOutputToTemp, TOOL_OUTPUT_TEMP_DIR } from "../extensions/io-tool-output.js";
+  writeOutputToTemp,
+  TOOL_OUTPUT_TEMP_DIR,
+} from "../hooks/externalize.js";
 
 // Minimal ToolResultEvent mock — matches ToolResultEventBase shape
 function makeEvent(toolName: string, text: string, toolCallId = "call_00_test123456") {

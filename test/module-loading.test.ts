@@ -18,7 +18,7 @@ import {
   isModuleEnabled,
   setModuleEnabled,
   getAllModuleSettings,
-} from "../extensions/settings.js";
+} from "../settings.js";
 
 // ─── Config backup/restore ──────────────────────────────────────────────────
 
@@ -131,7 +131,7 @@ describe("Conditional loading — isModuleEnabled gates", () => {
 describe("Tool/command name uniqueness — no conflicts", () => {
   it("LSP tool names are unique within decorated-pi", () => {
     const src = fs.readFileSync(
-      path.join(__dirname, "../extensions/lsp/tools.ts"), "utf-8"
+      path.join(__dirname, "../tools/lsp/tools.ts"), "utf-8"
     );
     const names = [...src.matchAll(/name:\s*["'](lsp_[^"']+)["']/g)].map(m => m[1]!);
     expect(names.length).toBeGreaterThan(0);
@@ -140,7 +140,7 @@ describe("Tool/command name uniqueness — no conflicts", () => {
 
   it("slash command names are unique within decorated-pi", () => {
     const src = fs.readFileSync(
-      path.join(__dirname, "../extensions/slash.ts"), "utf-8"
+      path.join(__dirname, "../commands/dp-model.ts"), "utf-8"
     );
     const names = [...src.matchAll(/registerCommand\(["']([^"']+)["']/g)].map(m => m[1]!);
     expect(names.length).toBeGreaterThan(0);
@@ -151,7 +151,7 @@ describe("Tool/command name uniqueness — no conflicts", () => {
     // Pi has NO built-in lsp_* tools. When our LSP module is disabled,
     // the lsp_* tools simply don't exist — there is no fallback.
     const src = fs.readFileSync(
-      path.join(__dirname, "../extensions/lsp/tools.ts"), "utf-8"
+      path.join(__dirname, "../tools/lsp/tools.ts"), "utf-8"
     );
     const ourTools = [...src.matchAll(/name:\s*["'](lsp_[^"']+)["']/g)].map(m => m[1]!);
     expect(ourTools.length).toBeGreaterThan(0);
@@ -159,12 +159,16 @@ describe("Tool/command name uniqueness — no conflicts", () => {
   });
 
   it("decorated-pi command names have dp- prefix to avoid collision", () => {
-    const src = fs.readFileSync(
-      path.join(__dirname, "../extensions/slash.ts"), "utf-8"
-    );
-    const names = [...src.matchAll(/registerCommand\(["']([^"']+)["']/g)].map(m => m[1]!);
-    // dp-model, dp-settings, retry — dp- prefixed except retry
-    // retry is our custom name, unlikely to collide
+    // dp-settings and dp-model are dp- prefixed; retry is a common name
+    // unlikely to collide. Read all command files to verify.
+    const commandsDir = path.join(__dirname, "../commands");
+    const files = fs.readdirSync(commandsDir).filter(f => f.endsWith(".ts"));
+    const names: string[] = [];
+    for (const f of files) {
+      const src = fs.readFileSync(path.join(commandsDir, f), "utf-8");
+      const matches = [...src.matchAll(/registerCommand\(["']([^"']+)["']/g)].map(m => m[1]!);
+      names.push(...matches);
+    }
     expect(names).toContain("dp-model");
     expect(names).toContain("dp-settings");
   });
@@ -174,39 +178,47 @@ describe("Tool/command name uniqueness — no conflicts", () => {
 // index.ts conditional loading — source code verification
 // ═══════════════════════════════════════════════════════════════════════════
 
-describe("index.ts — conditional loading structure", () => {
+describe("index.ts — conditional loading structure (new architecture)", () => {
   const indexSrc = fs.readFileSync(
-    path.join(__dirname, "../extensions/index.ts"), "utf-8"
+    path.join(__dirname, "../index.ts"), "utf-8"
   );
 
-  it("gates safety behind isModuleEnabled", () => {
-    expect(indexSrc).toContain('if (isModuleEnabled("safety"))');
-    expect(indexSrc).toContain("setupSafety(pi)");
-  });
-
-  it("gates lsp behind isModuleEnabled", () => {
+  it("gates LSP tool behind isModuleEnabled (LSP is a tool)", () => {
     expect(indexSrc).toContain('if (isModuleEnabled("lsp"))');
-    expect(indexSrc).toContain("setupLsp(pi)");
+    expect(indexSrc).toContain("registerLspTools");
   });
 
-  it("gates smart-at behind isModuleEnabled", () => {
-    expect(indexSrc).toContain('if (isModuleEnabled("smart-at"))');
-    expect(indexSrc).toContain("setupSmartAt(pi)");
+  it("gates MCP tool registration behind isModuleEnabled", () => {
+    expect(indexSrc).toContain('if (isModuleEnabled("mcp"))');
   });
 
-  it("always loads core modules (no gating)", () => {
-    // These should NOT be behind isModuleEnabled
-    expect(indexSrc).toContain("setupSlash(pi)");
-    expect(indexSrc).toContain("setupProviders(pi)");
-    expect(indexSrc).toContain("setupModelIntegration(pi)");
-    expect(indexSrc).toContain("setupSubdirAgents(pi)");
-    expect(indexSrc).toContain("setupSessionTitle(pi)");
-    expect(indexSrc).toContain("setupGuidance(pi)");
+  it("gates patch tool behind isModuleEnabled", () => {
+    expect(indexSrc).toContain('if (isModuleEnabled("patch"))');
+    expect(indexSrc).toContain("registerPatchTool");
+  });
+
+  it("does NOT gate safety/smart-at (hooks are always-on via skeleton)", () => {
+    // In the new architecture, hooks are registered unconditionally via
+    // the skeleton. The skeleton's install() checks declared dependencies
+    // on session_start instead. There should be no `if (isModuleEnabled("safety"))`
+    // or `if (isModuleEnabled("smart-at"))` in index.ts.
+    expect(indexSrc).not.toMatch(/isModuleEnabled\(["']safety["']\)/);
+    expect(indexSrc).not.toMatch(/isModuleEnabled\(["']smart-at["']\)/);
+  });
+
+  it("always loads commands (no gating)", () => {
+    expect(indexSrc).toContain("registerDpModelCommand");
+    expect(indexSrc).toContain("registerDpSettingsCommand");
+    expect(indexSrc).toContain("registerMcpStatusCommand");
+    expect(indexSrc).toContain("registerRetryCommand");
   });
 
   it("imports isModuleEnabled from settings", () => {
-    // Allow other named imports alongside isModuleEnabled in the same
-    // destructuring (e.g. codegraph helpers added later).
-    expect(indexSrc).toMatch(/import\s*\{[^}]*\bisModuleEnabled\b[^}]*\}\s*from\s*"\.\/settings"/);
+    expect(indexSrc).toMatch(/import\s*\{[^}]*\bisModuleEnabled\b[^}]*\}\s*from\s*"\.\/settings(\.js)?"/);
+  });
+
+  it("uses the skeleton for hooks", () => {
+    expect(indexSrc).toContain("createSkeleton");
+    expect(indexSrc).toContain("sk.install(pi)");
   });
 });

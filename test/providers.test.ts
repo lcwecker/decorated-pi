@@ -44,7 +44,7 @@ function extractModelsFromFile(filePath: string): ProviderModelConfig[] {
   return new Function(`return ${cleaned}`)();
 }
 
-const EXT_DIR = path.join(__dirname, "..", "extensions", "providers");
+const EXT_DIR = path.join(__dirname, "..", "providers");
 
 const ollamaModels = extractModelsFromFile(path.join(EXT_DIR, "ollama-cloud.ts"));
 const qianfanModels = extractModelsFromFile(path.join(EXT_DIR, "qianfan-coding.ts"));

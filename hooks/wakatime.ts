@@ -1,12 +1,8 @@
 /**
- * WakaTime — coding activity heartbeats for Pi sessions
+ * wakatime — coding activity heartbeats.
  *
- * Reads API key from ~/.wakatime.cfg and sends heartbeats to WakaTime using a
- * small runtime state machine:
- *   - before_agent_start → mark app activity
- *   - tool_result        → switch active entity/category based on real work
- *   - agent_end          → stop immediate activity, keepalive handles continuity
- *   - keepalive timer    → extend continuous activity while not idle
+ * Reads API key from ~/.wakatime.cfg and sends heartbeats via wakatime-cli.
+ * Owns its own timer state and the "active" entity.
  */
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
@@ -15,11 +11,10 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
+import type { Module, Skeleton } from "./skeleton.js";
 
 const MACHINE_NAME = os.hostname();
 const PACKAGE_VERSION = readPackageVersion();
-
-// ─── Config ────────────────────────────────────────────────────────────────
 
 const WAKATIME_CFG = path.join(os.homedir(), ".wakatime.cfg");
 const WAKATIME_CLI_FALLBACK = path.join(os.homedir(), ".wakatime", "wakatime-cli");
@@ -31,7 +26,7 @@ const TIMER_TICK_MS = 15 * 1000;
 function readPackageVersion(): string {
   try {
     const here = path.dirname(fileURLToPath(import.meta.url));
-    const pkgPath = path.join(here, "..", "package.json");
+    const pkgPath = path.join(here, "package.json");
     const pkg = JSON.parse(fs.readFileSync(pkgPath, "utf-8")) as { version?: string };
     return pkg.version?.trim() || "unknown";
   } catch {
@@ -49,11 +44,7 @@ export function readWakatimeCfgApiKey(configPath = WAKATIME_CFG): string | undef
   }
 }
 
-function getApiKey(): string | undefined {
-  return readWakatimeCfgApiKey();
-}
-
-// ─── Heartbeat types ───────────────────────────────────────────────────────
+// ─── Heartbeat types ──────────────────────────────────────────────────────
 
 interface Heartbeat {
   entity: string;
@@ -81,7 +72,7 @@ let timer: ReturnType<typeof setInterval> | null = null;
 let terminalInputUnsub: (() => void) | null = null;
 let cachedWakatimeCliPath: string | null | undefined;
 
-// ─── Helpers ───────────────────────────────────────────────────────────────
+// ─── Helpers ──────────────────────────────────────────────────────────────
 
 function extToLanguage(filePath: string): string | undefined {
   const ext = path.extname(filePath).toLowerCase();
@@ -122,12 +113,8 @@ function countLines(absPath: string): number | undefined {
 export function classifyBash(command: string | undefined): Heartbeat["category"] {
   const cmd = String(command ?? "").trim();
   if (!cmd) return "ai coding";
-  if (/\b(make|cmake|ninja|npm run build|pnpm build|yarn build|cargo build|go build)\b/i.test(cmd)) {
-    return "building";
-  }
-  if (/\b(pytest|vitest|jest|npm test|pnpm test|yarn test|go test|ctest|cargo test)\b/i.test(cmd)) {
-    return "running tests";
-  }
+  if (/\b(make|cmake|ninja|npm run build|pnpm build|yarn build|cargo build|go build)\b/i.test(cmd)) return "building";
+  if (/\b(pytest|vitest|jest|npm test|pnpm test|yarn test|go test|ctest|cargo test)\b/i.test(cmd)) return "running tests";
   return "ai coding";
 }
 
@@ -156,7 +143,6 @@ export function findWakatimeCli(options: {
   fallbackPath?: string;
 } = {}): string | null {
   if (cachedWakatimeCliPath !== undefined) return cachedWakatimeCliPath;
-
   const probePath = options.probePath ?? findWakatimeCliOnPath;
   const exists = options.exists ?? fs.existsSync;
   const fromPath = probePath();
@@ -164,28 +150,17 @@ export function findWakatimeCli(options: {
     cachedWakatimeCliPath = path.resolve(fromPath);
     return cachedWakatimeCliPath;
   }
-
   const fallback = path.resolve(options.fallbackPath ?? WAKATIME_CLI_FALLBACK);
   cachedWakatimeCliPath = exists(fallback) ? fallback : null;
   return cachedWakatimeCliPath;
 }
 
-export function buildCliArgs(
-  hb: Heartbeat,
-  apiKey: string,
-  cwd?: string,
-  plugin = buildPluginString(),
-): string[] {
+export function buildCliArgs(hb: Heartbeat, apiKey: string, cwd?: string, plugin = buildPluginString()): string[] {
   const args = [
-    "--entity", hb.entity,
-    "--entity-type", hb.type,
-    "--category", hb.category,
-    "--plugin", plugin,
-    "--key", apiKey,
-    "--time", String(hb.time),
+    "--entity", hb.entity, "--entity-type", hb.type, "--category", hb.category,
+    "--plugin", plugin, "--key", apiKey, "--time", String(hb.time),
     "--hostname", MACHINE_NAME,
   ];
-
   const shouldSendProjectFolder = hb.type === "app" || !!hb.project || typeof hb.project_root_count === "number";
   if (cwd && shouldSendProjectFolder) args.push("--project-folder", cwd);
   if (hb.project) args.push("--project", hb.project);
@@ -197,55 +172,32 @@ export function buildCliArgs(
 
 function sendHeartbeatViaCli(hb: Heartbeat, apiKey: string, cliPath: string, cwd?: string): void {
   const args = buildCliArgs(hb, apiKey, cwd);
-  execFile(cliPath, args, {
-    timeout: 10_000,
-    windowsHide: true,
-  }, () => {
-    // Silent: activity tracking must never interrupt the agent.
-  });
+  execFile(cliPath, args, { timeout: 10_000, windowsHide: true }, () => {});
 }
 
 export function heartbeatChanged(a: Omit<Heartbeat, "time">, b: Omit<Heartbeat, "time">): boolean {
-  return (
-    a.entity !== b.entity ||
-    a.type !== b.type ||
-    a.category !== b.category ||
-    a.project !== b.project ||
-    a.project_root_count !== b.project_root_count ||
-    a.language !== b.language
-  );
+  return a.entity !== b.entity || a.type !== b.type || a.category !== b.category
+    || a.project !== b.project || a.project_root_count !== b.project_root_count
+    || a.language !== b.language;
 }
 
-function switchActive(
-  next: Omit<Heartbeat, "time">,
-  sendHeartbeat: HeartbeatSender,
-  options: { immediate?: boolean; isWrite?: boolean; cwd?: string } = {},
-): void {
+function switchActive(next: Omit<Heartbeat, "time">, sendHeartbeat: HeartbeatSender, options: { immediate?: boolean; isWrite?: boolean; cwd?: string } = {}) {
   const now = Date.now();
   const changed = !active || heartbeatChanged(active.heartbeat, next);
-
-  active = {
-    heartbeat: next,
-    cwd: options.cwd,
-    lastActivityAt: now,
-    lastHeartbeatAt: active?.lastHeartbeatAt ?? 0,
-  };
-
+  active = { heartbeat: next, cwd: options.cwd, lastActivityAt: now, lastHeartbeatAt: active?.lastHeartbeatAt ?? 0 };
   if (changed || options.immediate || options.isWrite) {
     sendHeartbeat({ ...next, time: now / 1000, is_write: options.isWrite }, options.cwd);
     active.lastHeartbeatAt = now;
   }
 }
 
-function sendOneShot(hb: Omit<Heartbeat, "time">, sendHeartbeat: HeartbeatSender, isWrite?: boolean, cwd?: string): void {
+function sendOneShot(hb: Omit<Heartbeat, "time">, sendHeartbeat: HeartbeatSender, isWrite?: boolean, cwd?: string) {
   sendHeartbeat({ ...hb, time: Date.now() / 1000, is_write: isWrite }, cwd);
 }
 
-function touchActivity(): void {
-  if (active) active.lastActivityAt = Date.now();
-}
+function touchActivity() { if (active) active.lastActivityAt = Date.now(); }
 
-function ensureTimer(sendHeartbeat: HeartbeatSender): void {
+function ensureTimer(sendHeartbeat: HeartbeatSender) {
   if (timer) return;
   timer = setInterval(() => {
     if (!active) return;
@@ -257,44 +209,97 @@ function ensureTimer(sendHeartbeat: HeartbeatSender): void {
   }, TIMER_TICK_MS);
 }
 
-function clearTimer(): void {
+function clearTimer() {
   if (timer) clearInterval(timer);
   timer = null;
 }
 
 export function buildAppHeartbeat(cwd: string, category: Heartbeat["category"] = "ai coding"): Omit<Heartbeat, "time"> {
   const root = path.resolve(cwd);
-  return {
-    entity: "pi",
-    type: "app",
-    category,
-    project: path.basename(root) || undefined,
-    project_root_count: countPathParts(root),
-  };
+  return { entity: "pi", type: "app", category, project: path.basename(root) || undefined, project_root_count: countPathParts(root) };
 }
 
 export function buildFileHeartbeat(absPath: string, cwd: string, category: Heartbeat["category"] = "ai coding"): Omit<Heartbeat, "time"> {
   const meta = buildProjectMeta(absPath, cwd);
-  return {
-    entity: absPath,
-    type: "file",
-    category,
-    project: meta.project,
-    project_root_count: meta.project_root_count,
-    language: extToLanguage(absPath),
-    lines: countLines(absPath),
-  };
+  return { entity: absPath, type: "file", category, project: meta.project, project_root_count: meta.project_root_count, language: extToLanguage(absPath), lines: countLines(absPath) };
 }
 
-// ─── Setup ──────────────────────────────────────────────────────────────────
-
-export function resetWakatimeStateForTests(): void {
+export function resetWakatimeStateForTests() {
   active = null;
   clearTimer();
   if (terminalInputUnsub) terminalInputUnsub();
   terminalInputUnsub = null;
   cachedWakatimeCliPath = undefined;
 }
+
+// ─── Module + setup ──────────────────────────────────────────────────────
+
+export const wakatimeModule: Module = {
+  name: "wakatime",
+  hooks: {
+    session_start: [
+      (_event, ctx) => {
+        active = null;
+        // Timer is set up in setupWakatime (needs API key + CLI).
+      },
+    ],
+    session_shutdown: [
+      () => {
+        active = null;
+        clearTimer();
+        if (terminalInputUnsub) terminalInputUnsub();
+        terminalInputUnsub = null;
+      },
+    ],
+    before_agent_start: [
+      (_event, ctx) => {
+        const cwd = ctx.cwd ?? process.cwd();
+        // Caller (setupWakatime) provides the actual sender; this module's
+        // before_agent_start is a no-op when not configured.
+        if (active && (Date.now() - active.lastActivityAt) <= IDLE_TIMEOUT_MS) {
+          active.heartbeat = buildAppHeartbeat(cwd, active.heartbeat.category);
+          active.lastActivityAt = Date.now();
+        }
+      },
+    ],
+    tool_result: [
+      (event, ctx) => {
+        const cwd = ctx.cwd ?? process.cwd();
+        const input = (event as any).input;
+        if (event.toolName === "read") {
+          const filePath = input?.path ?? input?.file ?? input?.file_path;
+          if (typeof filePath !== "string" || !filePath.trim()) return;
+          const absPath = path.isAbsolute(filePath) ? filePath : path.resolve(cwd, filePath);
+          touchActivity();
+          return;
+        }
+        if (event.toolName === "patch") {
+          const filePath = input?.path;
+          if (typeof filePath !== "string" || !filePath.trim()) return;
+          const absPath = path.isAbsolute(filePath) ? filePath : path.resolve(cwd, filePath);
+          touchActivity();
+          return;
+        }
+        if (event.toolName === "lsp_document_symbols") {
+          const filePath = input?.path;
+          if (typeof filePath !== "string" || !filePath.trim()) return;
+          touchActivity();
+          return;
+        }
+        if (event.toolName === "lsp_diagnostics") { touchActivity(); return; }
+        if (event.toolName === "bash") {
+          if (active) active.heartbeat = { ...active.heartbeat, category: classifyBash(input?.command) };
+          touchActivity();
+          return;
+        }
+        touchActivity();
+      },
+    ],
+    agent_end: [
+      () => { touchActivity(); },
+    ],
+  },
+};
 
 export function setupWakatimeWithApiKey(
   pi: ExtensionAPI,
@@ -312,7 +317,6 @@ export function setupWakatimeWithApiKey(
     if (terminalInputUnsub) terminalInputUnsub();
     terminalInputUnsub = null;
     if (!ctx.hasUI) return;
-
     terminalInputUnsub = ctx.ui.onTerminalInput(() => {
       const cwd = ctx.cwd ?? process.cwd();
       const recent = active && (Date.now() - active.lastActivityAt) <= IDLE_TIMEOUT_MS;
@@ -335,69 +339,110 @@ export function setupWakatimeWithApiKey(
 
   pi.on("before_agent_start", (_event, ctx) => {
     const cwd = ctx.cwd ?? process.cwd();
-
-    // Keep the long-lived active heartbeat on the app entity (`pi`) so
-    // keepalive time accrues to the Pi editor itself. File heartbeats are sent
-    // separately as one-shots below; if we replaced `active` with a file entity,
-    // the dashboard would attribute nearly all time to the last touched file and
-    // Pi editor time would collapse toward zero.
     switchActive(buildAppHeartbeat(cwd), sendHeartbeat, { immediate: true, cwd });
   });
 
+  // File-level heartbeats as one-shots in tool_result (don't replace the active keepalive).
   pi.on("tool_result", (event, ctx) => {
     const cwd = ctx.cwd ?? process.cwd();
     const input = (event as any).input;
-
-    // File-level operations send one-shot heartbeats but never replace the
-    // keepalive entity — the app heartbeat stays active for accurate editor
-    // time attribution on the WakaTime dashboard.
     if (event.toolName === "read") {
       const filePath = input?.path ?? input?.file ?? input?.file_path;
       if (typeof filePath !== "string" || !filePath.trim()) return;
       const absPath = path.isAbsolute(filePath) ? filePath : path.resolve(cwd, filePath);
       sendOneShot(buildFileHeartbeat(absPath, cwd), sendHeartbeat, undefined, cwd);
       touchActivity();
-      return;
-    }
-
-    if (event.toolName === "patch") {
+    } else if (event.toolName === "patch") {
       const filePath = input?.path;
       if (typeof filePath !== "string" || !filePath.trim()) return;
       const absPath = path.isAbsolute(filePath) ? filePath : path.resolve(cwd, filePath);
       sendOneShot(buildFileHeartbeat(absPath, cwd), sendHeartbeat, true, cwd);
       touchActivity();
-      return;
-    }
-
-    if (event.toolName === "lsp_document_symbols") {
+    } else if (event.toolName === "lsp_document_symbols") {
       const filePath = input?.path;
       if (typeof filePath !== "string" || !filePath.trim()) return;
       const absPath = path.isAbsolute(filePath) ? filePath : path.resolve(cwd, filePath);
       sendOneShot(buildFileHeartbeat(absPath, cwd), sendHeartbeat, undefined, cwd);
       touchActivity();
-      return;
-    }
-
-    if (event.toolName === "lsp_diagnostics") {
+    } else if (event.toolName === "lsp_diagnostics") {
       touchActivity();
-      return;
-    }
-
-    if (event.toolName === "bash") {
+    } else if (event.toolName === "bash") {
       const category = classifyBash(input?.command);
       switchActive(buildAppHeartbeat(cwd, category), sendHeartbeat, { cwd });
-      return;
+      touchActivity();
+    } else {
+      touchActivity();
     }
-
-    touchActivity();
   });
 
-  pi.on("agent_end", (_event, _ctx) => {
-    // Do not clear immediately; keepalive continues briefly until idle timeout.
-    touchActivity();
-  });
+  pi.on("agent_end", (_event, _ctx) => { touchActivity(); });
 }
 
-export function setupWakatime(pi: ExtensionAPI) {
-  setupWakatimeWithApiKey(pi, getApiKey(), findWakatimeCli());
+export function setupWakatime(sk: Skeleton, pi: ExtensionAPI): void {
+  const apiKey = readWakatimeCfgApiKey();
+  const cliPath = findWakatimeCli();
+  sk.declareDependency({
+    label: "wakatime-cli",
+    check: () => findWakatimeCli() !== null,
+    hint: "Install wakatime-cli to track coding activity.",
+  });
+  if (!apiKey || !cliPath) return;
+
+  const sendHeartbeat: HeartbeatSender = (hb, cwd) => sendHeartbeatViaCli(hb, apiKey, cliPath, cwd);
+
+  // Hook into session_start to set up timer + terminal input.
+  pi.on("session_start", (_event, ctx) => {
+    active = null;
+    ensureTimer(sendHeartbeat);
+    if (terminalInputUnsub) terminalInputUnsub();
+    terminalInputUnsub = null;
+    if (!ctx.hasUI) return;
+    terminalInputUnsub = ctx.ui.onTerminalInput(() => {
+      const cwd = ctx.cwd ?? process.cwd();
+      const recent = active && (Date.now() - active.lastActivityAt) <= IDLE_TIMEOUT_MS;
+      const isAppHeartbeat = active?.heartbeat.type === "app" && active.heartbeat.entity === "pi";
+      if (!recent || !isAppHeartbeat) {
+        switchActive(buildAppHeartbeat(cwd), sendHeartbeat, { immediate: true, cwd });
+      } else {
+        touchActivity();
+      }
+      return undefined;
+    });
+  });
+
+  // File-level heartbeats as one-shots in tool_result (don't replace the active keepalive).
+  pi.on("tool_result", (event, ctx) => {
+    const cwd = ctx.cwd ?? process.cwd();
+    const input = (event as any).input;
+    if (event.toolName === "read") {
+      const filePath = input?.path ?? input?.file ?? input?.file_path;
+      if (typeof filePath !== "string" || !filePath.trim()) return;
+      const absPath = path.isAbsolute(filePath) ? filePath : path.resolve(cwd, filePath);
+      sendOneShot(buildFileHeartbeat(absPath, cwd), sendHeartbeat, undefined, cwd);
+      touchActivity();
+    } else if (event.toolName === "patch") {
+      const filePath = input?.path;
+      if (typeof filePath !== "string" || !filePath.trim()) return;
+      const absPath = path.isAbsolute(filePath) ? filePath : path.resolve(cwd, filePath);
+      sendOneShot(buildFileHeartbeat(absPath, cwd), sendHeartbeat, true, cwd);
+      touchActivity();
+    } else if (event.toolName === "lsp_document_symbols") {
+      const filePath = input?.path;
+      if (typeof filePath !== "string" || !filePath.trim()) return;
+      const absPath = path.isAbsolute(filePath) ? filePath : path.resolve(cwd, filePath);
+      sendOneShot(buildFileHeartbeat(absPath, cwd), sendHeartbeat, undefined, cwd);
+      touchActivity();
+    }
+  });
+
+  // bash → switch active app heartbeat's category (file keepalive stays).
+  pi.on("tool_result", (event, ctx) => {
+    if (event.toolName !== "bash") return;
+    const input = (event as any).input;
+    const category = classifyBash(input?.command);
+    if (active) active.heartbeat = { ...active.heartbeat, category };
+    touchActivity();
+  });
+
+  sk.register(wakatimeModule);
 }

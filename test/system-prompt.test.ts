@@ -3,7 +3,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { sortSystemPromptOptions } from "../extensions/index.js";
+import { sortSystemPromptOptions } from "../hooks/skeleton.js";
 
 describe("sortSystemPromptOptions", () => {
   it("sorts toolSnippets keys alphabetically", () => {
@@ -106,39 +106,64 @@ describe("sortSystemPromptOptions", () => {
   });
 });
 
-// ─── Decorated Pi Guidance: sub-headings + codegraph conditional ──────────
+// ─── Decorated Pi Guidance: main block in hooks/skeleton.ts + codegraph conditional ──────────
 
-import { isCodegraphActive } from "../extensions/index.js";
-import { getAllModuleSettings, setModuleEnabled } from "../extensions/settings.js";
+import { isCodegraphModuleEnabled, getAllModuleSettings, setModuleEnabled } from "../settings.js";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
 
 describe("Decorated Pi Guidance structure", () => {
-  it("groups existing rules under ### sub-headings", () => {
-    // Read the source of the guidance builder to make sure the rules are
-    // organised under sub-headings (cache-friendly + easier for the LLM
-    // to skim). The order in this expectation also pins the file layout.
-    const extSrc = fs.readFileSync(
-      path.join(import.meta.dirname, "../extensions/index.ts"),
+  it("BASE_GUIDANCE is hard-coded in index.ts (workflow + filesystem safety)", () => {
+    const src = fs.readFileSync(
+      path.join(import.meta.dirname, "../index.ts"),
       "utf-8",
     );
-    expect(extSrc).toMatch(/###\s+Workflow/);
-    expect(extSrc).toMatch(/###\s+Context Loading/);
-    expect(extSrc).toMatch(/###\s+Filesystem Safety/);
-    expect(extSrc).toMatch(/###\s+Secret Masking/);
-    expect(extSrc).toMatch(/###\s+CodeGraph/);
+    expect(src).toMatch(/BASE_GUIDANCE/);
+    expect(src).toMatch(/Before acting on a prompt/);
+    expect(src).toMatch(/Exercise caution/);
+    expect(src).toMatch(/CAUTION: Do not perform write operations/);
+  });
+
+  it("REDACT_GUIDANCE is exported from hooks/redact.ts", () => {
+    const src = fs.readFileSync(
+      path.join(import.meta.dirname, "../hooks/redact.ts"),
+      "utf-8",
+    );
+    expect(src).toMatch(/REDACT_GUIDANCE/);
+    expect(src).toMatch(/Secret Masking/);
+    expect(src).toMatch(/masked secret values/);
+  });
+
+  it("INJECT_AGENTS_MD_GUIDANCE is exported from hooks/inject-agents-md.ts", () => {
+    const src = fs.readFileSync(
+      path.join(import.meta.dirname, "../hooks/inject-agents-md.ts"),
+      "utf-8",
+    );
+    expect(src).toMatch(/INJECT_AGENTS_MD_GUIDANCE/);
+    expect(src).toMatch(/Context Loading/);
+    expect(src).toMatch(/AGENTS\.md/);
+  });
+
+  it("index.ts imports and pushes all module guidelines via buildGuidelines()", () => {
+    const src = fs.readFileSync(
+      path.join(import.meta.dirname, "../index.ts"),
+      "utf-8",
+    );
+    expect(src).toMatch(/REDACT_GUIDANCE/);
+    expect(src).toMatch(/INJECT_AGENTS_MD_GUIDANCE/);
+    expect(src).toMatch(/CODEGRAPH_GUIDANCE/);
+    expect(src).toMatch(/buildGuidelines/);
   });
 });
 
-describe.sequential("isCodegraphActive", () => {
+describe.sequential("isCodegraphModuleEnabled", () => {
   let tmpDir: string;
   let prevModuleState: boolean;
 
   beforeEach(() => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "codegraph-active-"));
     prevModuleState = getAllModuleSettings().codegraph;
-    // Ensure module is OFF for tests that rely on default state
     setModuleEnabled("codegraph", false);
   });
   afterEach(() => {
@@ -147,19 +172,11 @@ describe.sequential("isCodegraphActive", () => {
   });
 
   it("returns false on a fresh project (module off by default)", () => {
-    // modules.codegraph defaults to false — opt-in via /dp-settings.
-    // isCodegraphActive is a pure dp-settings check; tmpDir is unused.
-    expect(isCodegraphActive()).toBe(false);
+    expect(isCodegraphModuleEnabled()).toBe(false);
   });
 
   it("returns true when module is on (no .codegraph/ probe needed)", () => {
-    // Once the user enables codegraph in /dp-settings, the server is
-    // registered and guidance is injected, regardless of whether the
-    // project has been initialised. If the project hasn't run
-    // `codegraph init` yet, the tools will error at call time, but
-    // the agent still needs to know they exist. The function is a
-    // pure dp-settings check — no filesystem probe.
     setModuleEnabled("codegraph", true);
-    expect(isCodegraphActive()).toBe(true);
+    expect(isCodegraphModuleEnabled()).toBe(true);
   });
 });

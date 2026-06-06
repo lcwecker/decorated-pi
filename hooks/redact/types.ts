@@ -1,8 +1,6 @@
 /**
- * Safety Detection — shared types and constants
+ * Redact — shared types and constants
  */
-
-// ─── Match types ──────────────────────────────────────────────────────────
 
 export type SecretMatchSource = "pattern" | "regex" | "entropy";
 
@@ -19,15 +17,12 @@ export interface SecretPattern {
   pattern: RegExp;
   minLength: number;
   allowsSpaces: boolean;
-  /** If true, skip safe-pattern exclusion (unambiguous prefix) */
   highConfidence: boolean;
 }
 
 export interface DetectSecretsOptions {
   filePath?: string;
 }
-
-// ─── Internal types ──────────────────────────────────────────────────────
 
 export interface ConfigStringEntry {
   key: string;
@@ -36,8 +31,6 @@ export interface ConfigStringEntry {
   start: number;
   end: number;
 }
-
-// ─── Constants ────────────────────────────────────────────────────────────
 
 export const MIN_SCAN_LENGTH = 10;
 export const CONFIG_VALUE_MIN_LENGTH = 32;

@@ -32,16 +32,16 @@ import {
   findHighEntropyTokens,
   ENTROPY_THRESHOLD,
   MIN_ENTROPY_TOKEN_LENGTH,
-} from "../extensions/safety/entropy.js";
+} from "../hooks/redact/entropy.js";
 import {
   isSafeContent,
   SECRET_PATTERNS,
   SAFE_PATTERNS,
-} from "../extensions/safety/patterns.js";
+} from "../hooks/redact/patterns.js";
 import {
   detectSecrets,
   maskSecret,
-} from "../extensions/safety/detect.js";
+} from "../hooks/redact/detect.js";
 
 // ═══════════════════════════════════════════════════════════════════════════
 // charClass

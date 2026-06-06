@@ -1,15 +1,17 @@
 /**
- * File mtime tracking for stale-read protection.
+ * track-mtime — file mtime tracking for stale-read protection.
  *
  * - `read` tool records mtime when the LLM reads a file
  * - `patch` tool checks mtime before editing — rejects if file changed since last read
  * - `patch` tool updates mtime after a successful write
- * - Markers are persisted to session custom entries and restored from the
- *   current branch after the last compaction boundary.
+ *
+ * Markers are persisted via pi.appendEntry and restored from the current branch
+ * after the last compaction boundary.
  */
 
 import * as fs from "node:fs";
 import * as path from "node:path";
+import type { Module, Skeleton } from "./skeleton.js";
 
 export const FILE_TIMES_CUSTOM_TYPE = "decorated-pi.file-times";
 
@@ -24,48 +26,27 @@ interface SessionLikeEntry {
   data?: unknown;
 }
 
-/** Last-known mtime for each absolute file path (ms since epoch). */
 const readMarkers = new Map<string, number>();
 
-/** Get current file mtime in ms. Throws if file doesn't exist. */
 function getFileMtime(absPath: string): number {
-  const stat = fs.statSync(absPath);
-  return stat.mtimeMs;
+  return fs.statSync(absPath).mtimeMs;
 }
 
-/** Record that the LLM has seen the current version of a file.
- *  Called after `read` tool completes and after `patch` writes. */
 export function recordReadTime(absPath: string): void {
   if (!fs.existsSync(absPath)) return;
   readMarkers.set(absPath, getFileMtime(absPath));
 }
 
-/** Check if file has been modified since last read.
- *  Returns an error message if stale, or undefined if ok to edit. */
 export function checkStaleFile(absPath: string, displayPath: string): string | undefined {
-  // If file doesn't exist on disk, always allow — creating a new file
-  // doesn't require reading it first, and recreating a deleted file is safe.
-  if (!fs.existsSync(absPath)) {
-    return undefined;
-  }
-
+  if (!fs.existsSync(absPath)) return undefined;
   const lastRead = readMarkers.get(absPath);
   if (lastRead === undefined) {
-    // File exists but never read — must read first to avoid blind edits
-    return (
-      `Please read the file with the read tool before editing. ` +
-      `File not read yet: ${displayPath}.`
-    );
+    return `Please read the file with the read tool before editing. File not read yet: ${displayPath}.`;
   }
-
   const currentMtime = getFileMtime(absPath);
   if (currentMtime > lastRead) {
-    return (
-      `Please re-read the file with the read tool before editing. ` +
-      `File modified since last read: ${displayPath}.`
-    );
+    return `Please re-read the file with the read tool before editing. File modified since last read: ${displayPath}.`;
   }
-
   return undefined;
 }
 
@@ -85,22 +66,16 @@ function lastCompactionIndex(entries: SessionLikeEntry[]): number {
 }
 
 function isFileTimeMarkerData(value: unknown): value is FileTimeMarkerData {
-  return !!value
-    && typeof value === "object"
+  return !!value && typeof value === "object"
     && typeof (value as any).path === "string"
     && typeof (value as any).mtimeMs === "number";
 }
 
-/** Build a session-persisted marker payload for the current file version. */
 export function createFileTimeMarkerData(cwd: string, absPath: string): FileTimeMarkerData | undefined {
   if (!fs.existsSync(absPath)) return undefined;
-  return {
-    path: toStoredPath(cwd, absPath),
-    mtimeMs: getFileMtime(absPath),
-  };
+  return { path: toStoredPath(cwd, absPath), mtimeMs: getFileMtime(absPath) };
 }
 
-/** Restore markers from the current branch, ignoring anything before the last compaction. */
 export function restoreReadMarkersFromBranch(entries: SessionLikeEntry[], cwd: string): void {
   clearReadMarkers();
   const start = lastCompactionIndex(entries) + 1;
@@ -112,13 +87,40 @@ export function restoreReadMarkersFromBranch(entries: SessionLikeEntry[], cwd: s
   }
 }
 
-/** Clear all tracked file times (e.g., on session start or compaction). */
 export function clearReadMarkers(): void {
   readMarkers.clear();
 }
 
-/** Resolve a relative path to absolute (for consistent map keys). */
 export function resolveAbsolutePath(cwd: string, filePath: string): string {
   if (path.isAbsolute(filePath)) return path.normalize(filePath);
   return path.normalize(path.resolve(cwd, filePath));
+}
+
+const READ_WRITE_EDIT_PATCH = new Set(["read", "write", "edit", "patch"]);
+
+export const trackMtimeModule: Module = {
+  name: "track-mtime",
+  hooks: {
+    session_compact: [
+      () => clearReadMarkers(),
+    ],
+    tool_result: [
+      (event, ctx, pi) => {
+        if (!READ_WRITE_EDIT_PATCH.has(event.toolName)) return;
+        const filePath = (event.input as any)?.path;
+        if (typeof filePath !== "string" || !filePath.trim()) return;
+        // For read: always record. For write/edit/patch: only on success.
+        if (event.toolName !== "read" && event.isError) return;
+        const cwd: string = ctx.cwd ?? process.cwd();
+        const absPath = resolveAbsolutePath(cwd, filePath);
+        recordReadTime(absPath);
+        const marker = createFileTimeMarkerData(cwd, absPath);
+        if (marker) pi.appendEntry(FILE_TIMES_CUSTOM_TYPE, marker);
+      },
+    ],
+  },
+};
+
+export function setupTrackMtime(sk: Skeleton): void {
+  sk.register(trackMtimeModule);
 }

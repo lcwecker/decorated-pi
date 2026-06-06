@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { __lspToolsTest } from "../extensions/lsp/tools.js";
+import { __lspToolsTest } from "../tools/lsp/tools.js";
 
 describe("lsp tool result folding", () => {
   it("does not fold when output has 45 lines or fewer", () => {

@@ -1,12 +1,22 @@
 /**
- * MCP server configuration — builtin + global + project-level.
+ * MCP server configuration — type, discovery, resolution, toggle.
+ *
+ * Sources (in priority order): builtin → global → project. The first
+ * hit sets defaults; later sources can override specific fields.
+ *
+ * Persistence locations:
+ *   - global: `~/.pi/agent/decorated-pi.json` (under `mcpServers`)
+ *   - project: `<cwd>/.pi/agent/mcp.json` (under `mcpServers`)
  */
 import * as fs from "node:fs";
-import * as path from "node:path";
 import * as os from "node:os";
+import * as path from "node:path";
 import { spawnSync } from "node:child_process";
-import { loadConfig, isCodegraphModuleEnabled } from "../settings.js";
-import type { DependencyStatus } from "../rtk";
+import { loadConfig } from "../../settings.js";
+import type { DependencyStatus } from "../../hooks/rtk.js";
+import { BUILTIN_MCP_SERVERS, codegraphEnabled } from "./builtin/index.js";
+
+export { BUILTIN_MCP_SERVERS } from "./builtin/index.js";
 
 export interface McpServerConfig {
   name: string;
@@ -18,37 +28,6 @@ export interface McpServerConfig {
   enabled: boolean;
   source: "builtin" | "global" | "project";
 }
-
-/** Builtin servers — zero-config, always available unless overridden.
- *  The cross-source priority is `builtin < global < project`; the order
- *  WITHIN this array doesn't matter for resolution because each entry
- *  has a unique `name`. */
-export const BUILTIN_MCP_SERVERS: Omit<McpServerConfig, "source">[] = [
-  {
-    name: "context7",
-    url: "https://mcp.context7.com/mcp",
-    enabled: true,
-  },
-  {
-    name: "exa",
-    url: "https://mcp.exa.ai/mcp",
-    enabled: true,
-  },
-  {
-    // Local code knowledge graph (colbymchenry/codegraph). Opt-in via
-    // the decorated-pi module toggle (`modules.codegraph` / /dp-settings).
-    // The `enabled: false` here is a placeholder — resolveMcpConfigs
-    // overrides it with `isCodegraphModuleEnabled()` at resolve time,
-    // so this literal value is never what ends up in the resolved list.
-    name: "codegraph",
-    command: "codegraph",
-    args: ["serve", "--mcp"],
-    enabled: false,
-    description: "Local code knowledge graph (colbymchenry/codegraph). Enable via /dp-settings.",
-  },
-];
-
-// ── Project-level config discovery ─────────────────────────────────────────
 
 function readMcpJson(filePath: string): Record<string, { url?: string; command?: string; args?: string[]; env?: Record<string, string>; enabled?: boolean; description?: string }> | null {
   try {
@@ -120,13 +99,10 @@ export function resolveMcpConfigs(cwd: string): McpServerConfig[] {
   const byName = new Map<string, McpServerConfig>();
 
   // Builtin (lowest priority). The codegraph entry's `enabled` flag is
-  // computed at resolve time from the dp-settings module toggle — see
-  // `isCodegraphModuleEnabled`. We don't probe `.codegraph/codegraph.db`
-  // here; if the project hasn't been initialised yet, the tools will
-  // error at call time, which the system-prompt guidance handles.
+  // computed at resolve time from the dp-settings module toggle.
   for (const s of BUILTIN_MCP_SERVERS) {
     if (s.name === "codegraph") {
-      byName.set(s.name, { ...s, enabled: isCodegraphModuleEnabled(), source: "builtin" });
+      byName.set(s.name, { ...s, enabled: codegraphEnabled(), source: "builtin" });
     } else {
       byName.set(s.name, { ...s, source: "builtin" });
     }
@@ -210,89 +186,6 @@ export function saveProjectMcpDescription(cwd: string, name: string, description
   fs.writeFileSync(filePath, JSON.stringify({ mcpServers: servers }, null, 2) + "\n", "utf-8");
 }
 
-// ── Metadata cache (tool descriptions + schemas) ──────────────────────────
-
-export interface McpToolCache {
-  name: string;
-  description?: string;
-  inputSchema: Record<string, unknown>;
-}
-
-export interface McpServerCache {
-  description?: string;
-  tools: McpToolCache[];
-  cachedAt: number;
-}
-
-export interface McpCache {
-  servers: Record<string, McpServerCache>;
-}
-
-function globalCachePath(): string {
-  return path.join(os.homedir(), ".pi/agent/mcp-cache.json");
-}
-
-function projectCachePath(cwd: string): string {
-  return path.join(cwd, ".pi/agent/mcp-cache.json");
-}
-
-function readCacheFile(p: string): McpCache | null {
-  try {
-    if (!fs.existsSync(p)) return null;
-    return JSON.parse(fs.readFileSync(p, "utf-8")) as McpCache;
-  } catch {
-    return null;
-  }
-}
-
-function writeCacheFile(p: string, cache: McpCache): void {
-  const dir = path.dirname(p);
-  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-  const tmp = `${p}.tmp`;
-  fs.writeFileSync(tmp, JSON.stringify(cache, null, 2), "utf-8");
-  fs.renameSync(tmp, p);
-}
-
-/** Load merged cache: global + project. */
-export function loadMcpCache(cwd?: string): McpCache | null {
-  const merged: McpCache = { servers: {} };
-
-  const globalCache = readCacheFile(globalCachePath());
-  if (globalCache) {
-    merged.servers = { ...merged.servers, ...globalCache.servers };
-  }
-
-  if (cwd) {
-    const projectCache = readCacheFile(projectCachePath(cwd));
-    if (projectCache) {
-      merged.servers = { ...merged.servers, ...projectCache.servers };
-    }
-  }
-
-  return merged;
-}
-
-/** Save cache to global or project scope. */
-export function saveMcpCache(cache: McpCache, scope: "global" | "project", cwd?: string): void {
-  const p = scope === "project" && cwd ? projectCachePath(cwd) : globalCachePath();
-  writeCacheFile(p, cache);
-}
-
-/** Update a single server's entry in the appropriate cache. */
-export function updateServerCache(
-  serverName: string,
-  entry: McpServerCache,
-  scope: "global" | "project",
-  cwd?: string,
-): void {
-  const p = scope === "project" && cwd ? projectCachePath(cwd) : globalCachePath();
-  const existing = readCacheFile(p) || { servers: {} };
-  existing.servers[serverName] = entry;
-  writeCacheFile(p, existing);
-}
-
-// ── Enable / Disable helpers ────────────────────────────────────────────
-
 function readMcpJsonSafe(filePath: string): Record<string, any> | null {
   try {
     return JSON.parse(fs.readFileSync(filePath, "utf-8"));
@@ -319,7 +212,6 @@ export function toggleMcpServerEnabled(
       if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
       fs.writeFileSync(filePath, JSON.stringify(raw, null, 2) + "\n", "utf-8");
     } else {
-      const { loadConfig } = require("../settings.js");
       const config = loadConfig();
       config.mcpServers = config.mcpServers || {};
       config.mcpServers[serverName] = { ...(config.mcpServers[serverName] || {}), enabled };
@@ -332,68 +224,4 @@ export function toggleMcpServerEnabled(
   } catch {
     return false;
   }
-}
-
-function cleanupOneCache(p: string, names: Set<string>): void {
-  const cache = readCacheFile(p);
-  if (!cache) return;
-  let changed = false;
-  for (const name of Object.keys(cache.servers)) {
-    if (!names.has(name)) {
-      delete cache.servers[name];
-      changed = true;
-    }
-  }
-  if (changed) writeCacheFile(p, cache);
-}
-
-export function cleanupStaleCache(configs: McpServerConfig[], cwd?: string): void {
-  const names = new Set(configs.map(c => c.name));
-  cleanupOneCache(globalCachePath(), names);
-  if (cwd) {
-    const projectCache = projectCachePath(cwd);
-    const projectMcpJson = path.join(cwd, ".pi/agent/mcp.json");
-    // If project mcp.json doesn't exist, remove project cache entirely
-    if (!fs.existsSync(projectMcpJson)) {
-      if (fs.existsSync(projectCache)) {
-        fs.unlinkSync(projectCache);
-      }
-    } else {
-      cleanupOneCache(projectCache, names);
-    }
-  }
-}
-
-// ── Large result externalization ────────────────────────────────────────
-
-export const EXTERNALIZE_THRESHOLD = 50_000; // 50KB
-export const EXTERNALIZE_PREVIEW_SIZE = 2_000; // 2KB preview
-import { writeOutputToTemp } from "../io-tool-output.js";
-
-/**
- * If content exceeds threshold, save to temp file and return preview + path.
- * Otherwise return original content unchanged.
- * Falls back to returning full text if file write fails.
- */
-export function maybeExternalizeMcpResult(
-  text: string,
-  toolName: string,
-  toolCallId: string,
-): { content: Array<{ type: "text"; text: string }>; details: Record<string, unknown> } {
-  if (text.length <= EXTERNALIZE_THRESHOLD) {
-    return { content: [{ type: "text", text }], details: {} };
-  }
-
-  const filePath = writeOutputToTemp(toolName, toolCallId, text);
-  if (!filePath) {
-    return { content: [{ type: "text", text }], details: {} };
-  }
-  const preview = text.slice(0, EXTERNALIZE_PREVIEW_SIZE);
-  return {
-    content: [{ type: "text", text: `${preview}\n\n[Truncated: ${text.length.toLocaleString()} chars total. Full output saved to: ${filePath}]` }],
-    details: {
-      fullOutputPath: filePath,
-      truncation: { truncated: true, outputChars: EXTERNALIZE_PREVIEW_SIZE, totalChars: text.length, maxBytes: EXTERNALIZE_THRESHOLD },
-    },
-  };
 }

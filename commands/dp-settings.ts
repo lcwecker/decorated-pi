@@ -1,0 +1,23 @@
+/**
+ * /dp-settings — toggle module on/off.
+ */
+
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { ModuleSettingsComponent } from "../ui/module-settings.js";
+
+export function registerDpSettingsCommand(pi: ExtensionAPI): void {
+  pi.registerCommand("dp-settings", {
+    description: "Toggle decorated-pi modules on/off",
+    handler: async (_args, ctx) => {
+      if (ctx.hasUI) {
+        await ctx.ui.custom<void>(
+          (tui, theme, _kb, done) =>
+            new ModuleSettingsComponent(tui, theme, () => done(undefined))
+        );
+        ctx.ui.notify("Module settings updated. /reload to apply.", "warning");
+        return;
+      }
+      ctx.ui.notify("dp-settings requires interactive mode.", "warning");
+    },
+  });
+}

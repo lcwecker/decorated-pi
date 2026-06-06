@@ -6,7 +6,7 @@ import { describe, it, expect } from "vitest";
 import {
   extractFirstMessage,
   MAX_SESSION_TITLE_LENGTH,
-} from "../extensions/session-title.js";
+} from "../hooks/session-title.js";
 
 describe("extractFirstMessage", () => {
   it("returns single-line user text as-is", () => {
