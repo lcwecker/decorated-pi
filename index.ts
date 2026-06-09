@@ -22,7 +22,6 @@ import { createSkeleton } from "./hooks/skeleton.js";
 
 import { setupRedact, REDACT_GUIDANCE } from "./hooks/redact.js";
 import { externalizeModule } from "./hooks/externalize.js";
-import { normalizeCodeblocksModule } from "./hooks/normalize-codeblocks.js";
 import { trackMtimeModule } from "./hooks/track-mtime.js";
 import { injectAgentsMdModule, INJECT_AGENTS_MD_GUIDANCE } from "./hooks/inject-agents-md.js";
 import { imageVisionModule } from "./hooks/image-vision.js";
@@ -104,10 +103,9 @@ export default function (pi: ExtensionAPI) {
   const sk = createSkeleton();
 
   // Order matters for tool_result compose chain:
-  //   1. redact → normalize-codeblocks → externalize → track-mtime → inject-agents-md → image-vision → wakatime
+  //   1. redact → externalize → track-mtime → inject-agents-md → image-vision → wakatime
   // The first module registered for a given event runs first (compose chain).
   setupRedact(sk);
-  sk.register(normalizeCodeblocksModule);
   sk.register(externalizeModule);
   sk.register(trackMtimeModule);
   sk.register(injectAgentsMdModule);
