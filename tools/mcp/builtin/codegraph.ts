@@ -8,26 +8,38 @@ import type { McpServerConfig } from "../config.js";
 import { isCodegraphModuleEnabled } from "../../../settings.js";
 
 export const CODEGRAPH_BUILTIN: Omit<McpServerConfig, "source"> = {
-  name: "codegraph",
-  command: "codegraph",
-  args: ["serve", "--mcp"],
-  enabled: false, // overridden by isCodegraphModuleEnabled() at resolve time
-  description: "Local code knowledge graph (colbymchenry/codegraph). Enable via /dp-settings.",
+    name: "codegraph",
+    command: "codegraph",
+    args: ["serve", "--mcp"],
+    enabled: false, // overridden by isCodegraphModuleEnabled() at resolve time
+    description:
+        "Local code knowledge graph (colbymchenry/codegraph). Enable via /dp-settings.",
 };
 
 /** Predicate for `resolveMcpConfigs` to gate the codegraph server. */
 export function codegraphEnabled(): boolean {
-  return isCodegraphModuleEnabled();
+    return isCodegraphModuleEnabled();
 }
 
 export const CODEGRAPH_GUIDANCE = [
-  "### CodeGraph, code source map (pre-built, prefer over grep)",
-  "- This project's `codegraph_*` MCP tools are enabled (via /dp-settings). Prefer them over grep/glob/Read for code structure questions:",
-  "  - `codegraph_explore` — first call for \"how does X work\" / architecture / survey questions",
-  "  - `codegraph_impact` — before refactoring or deleting code",
-  "  - `codegraph_callers` / `codegraph_callees` — trace call flow up/down",
-  "  - `codegraph_search` — find symbols by name (FTS5 full-text)",
-  "  - `codegraph_node` — get a single symbol's full source",
-  "- Treat returned source as already read; do not re-open shown files. The graph is pre-built — grep is just repeating work it already did.",
-  "- If a tool reports the project isn't initialized, ask the user to run `codegraph init -i` in their terminal; the tools will work once the index is built.",
+    "### CodeGraph, code source map (USE FIRST, not \"prefer\")",
+    "- This project's `codegraph_*` MCP tools are enabled. The graph is a pre-built index; grep/glob/Read of source code is repeating work the index already did.",
+    "",
+    "#### When to reach for it (FIRST tool call, not last resort)",
+    "- Starting any task that touches code → `codegraph_explore(\"how does X work\")` or `codegraph_files`",
+    "- Looking for where a symbol is defined → `codegraph_search <name>`",
+    "- Reading a function's body → `codegraph_node <name>` (or `codegraph_explore`)",
+    "- Tracing call flow → `codegraph_callers` / `codegraph_callees`",
+    "- Assessing refactor risk → `codegraph_impact <name>`",
+    "",
+    "#### Do NOT do this",
+    "- `ls`, `find`, `grep -rn`, `rg` to discover symbols → use `codegraph_search`",
+    "- `read` of an entire file to find a function → use `codegraph_explore` first",
+    "- Reading 3+ files to understand a module → use `codegraph_explore(\"how does X work\")`",
+    "- `bash` with `cat`, `head`, `sed` to view source → use `codegraph_node` or `read` (single file only)",
+    "",
+    "#### If it errors",
+    "- \"Project not initialized\" → ask the user to run `codegraph init -i` in their terminal",
+    "- Empty results → fall back to grep/Read (the index is best-effort, not authoritative)",
+    "- Tool timeout → `codegraph_status` to check; if indexer is dead, fall back",
 ].join("\n");
