@@ -60,7 +60,7 @@ describe("mcpModule session_start", () => {
       ];
     });
     const handler = mcpModule.hooks.session_start![0]!;
-    await handler({} as any, { cwd: "/tmp" } as any);
+    await handler({} as any, { cwd: "/tmp" } as any, {} as any);
 
     // Wait a tick for the fire-and-forget connectAll to update state.
     await new Promise((r) => setTimeout(r, 50));
@@ -74,7 +74,7 @@ describe("mcpModule session_start", () => {
     mockConnect.mockReset();
     mockConnect.mockRejectedValue(new Error("connection refused"));
     const handler = mcpModule.hooks.session_start![0]!;
-    await handler({} as any, { cwd: "/tmp" } as any);
+    await handler({} as any, { cwd: "/tmp" } as any, {} as any);
     await new Promise((r) => setTimeout(r, 50));
 
     const status = getMcpStatus();
@@ -93,7 +93,7 @@ describe("mcpModule session_start", () => {
     mockConnect.mockReturnValue(new Promise(() => {}));
 
     const handler = mcpModule.hooks.session_start![0]!;
-    await handler({} as any, { cwd: "/tmp" } as any);
+    await handler({} as any, { cwd: "/tmp" } as any, {} as any);
 
     // Capture the status the UI sees right now — should be "connecting".
     const beforeReload = getMcpStatus();
@@ -109,9 +109,9 @@ describe("mcpModule session_start", () => {
     // Manually invoke teardown (it's the session_shutdown handler) to mimic
     // the session_shutdown that /reload emits before the new session_start.
     const shutdown = mcpModule.hooks.session_shutdown![0]!;
-    await shutdown({} as any, {} as any);
+    await shutdown({} as any, {} as any, {} as any);
 
-    await handler({} as any, { cwd: "/tmp" } as any);
+    await handler({} as any, { cwd: "/tmp" } as any, {} as any);
     await new Promise((r) => setTimeout(r, 50));
 
     // The UI now sees the NEW state from the new connectAll.
@@ -135,7 +135,7 @@ describe("mcpModule session_start", () => {
     vi.useFakeTimers();
     try {
       const handler = mcpModule.hooks.session_start![0]!;
-      await handler({} as any, { cwd: "/tmp" } as any);
+      await handler({} as any, { cwd: "/tmp" } as any, {} as any);
 
       // Right after session_start, state should still be "connecting".
       expect(getMcpStatus().find((s) => s.name === "test1")!.state).toBe("connecting");
@@ -176,7 +176,7 @@ describe("updateConfigEnabled (close-time cleanup)", () => {
 
     // First, do a session_start so test1 gets a live connection.
     const start = mcpModule.hooks.session_start![0]!;
-    await start({} as any, { cwd: "/tmp" } as any);
+    await start({} as any, { cwd: "/tmp" } as any, {} as any);
     await new Promise((r) => setTimeout(r, 50));
 
     // Sanity: test1 is connected, and has an active connection.
@@ -218,7 +218,7 @@ describe("connectAll vs refreshServerCache (concurrency)", () => {
     mockConnect.mockReturnValue(new Promise(() => {}));
 
     const start = mcpModule.hooks.session_start![0]!;
-    await start({} as any, { cwd: "/tmp" } as any);
+    await start({} as any, { cwd: "/tmp" } as any, {} as any);
 
     // After connectAll's fan-out, all servers are "connecting".
     await new Promise((r) => setTimeout(r, 50));

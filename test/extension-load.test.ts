@@ -16,7 +16,7 @@
 import { describe, it, expect } from "vitest";
 
 /** Minimal mock pi: just enough surface for setupXxx() to run. */
-function makeMockPi() {
+function makeMockPi(): any {
   const log = {
     events: [] as string[],
     tools: [] as string[],

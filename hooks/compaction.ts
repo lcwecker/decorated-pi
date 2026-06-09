@@ -137,7 +137,6 @@ export const compactionModule: Module = {
           postAgentEndCandidate?.messages ?? [],
           postAgentEndCandidate?.usage,
           compactionSettings,
-          isContextOverflow,
         );
         // For simplicity, treat session_before_compact as auto if recent agent_end was likely-overflow
         // and no custom instructions given.
@@ -169,7 +168,11 @@ export const compactionModule: Module = {
           } else {
             summary = await generateSummary(messagesToSummarize, model, settings.reserveTokens, auth.apiKey ?? "", auth.headers, signal, customInstructions, previousSummary);
           }
-          return { compaction: { summary, firstKeptEntryId, tokensBefore } };
+          // session_before_compact is a parallel event — handlers may not
+          // return a value (skeleton discards compose returns for
+          // non-compose events). The summary is intentionally lost; the
+          // session_compact handler below only reads the
+          // currentCompactionIsAuto flag and does not consume the summary.
         } catch (err) {
           if (signal.aborted) return;
           if (ctx.hasUI) ctx.ui.notify(`Compact failed: ${err instanceof Error ? err.message : err}`, "error");

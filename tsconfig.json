@@ -11,6 +11,15 @@
     "rootDir": ".",
     "noEmit": true
   },
-  "include": ["extensions/**/*.ts", "test/**/*.ts"],
+  "include": [
+    "index.ts",
+    "settings.ts",
+    "tools/**/*.ts",
+    "hooks/**/*.ts",
+    "commands/**/*.ts",
+    "providers/**/*.ts",
+    "ui/**/*.ts",
+    "test/**/*.ts"
+  ],
   "exclude": ["node_modules", "dist"]
 }

@@ -4,7 +4,7 @@
 import { existsSync, readdirSync, type Dirent } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { dirname, extname, isAbsolute, join, resolve } from "node:path";
-import type { DependencyStatus } from "../rtk";
+import type { DependencyStatus } from "../../hooks/skeleton.js";
 
 // ─── File extension → language mapping ────────────────────────────────────
 

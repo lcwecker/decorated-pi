@@ -2,7 +2,7 @@
  * Builtin MCP servers — aggregate. Each server has its own file; this
  * module re-exports them and the all-server list.
  */
-import type { McpServerConfig } from "../builtin.js";
+import type { McpServerConfig } from "../config.js";
 import { CONTEXT7_BUILTIN } from "./context7.js";
 import { EXA_BUILTIN } from "./exa.js";
 import { CODEGRAPH_BUILTIN, CODEGRAPH_GUIDANCE } from "./codegraph.js";

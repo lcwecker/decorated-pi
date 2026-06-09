@@ -76,6 +76,7 @@ async function connectAll(
   // to concurrent DNS / connection-pool state). refreshServerCache
   // (single, sequential) works fine — and pressing 'r' on a hung
   // server in the UI also recovers it, which is what pointed us here.
+  let hasNewServer = false;
   for (const server of configs) {
     if (watchdogFired) break; // remaining servers are already failed
 
@@ -85,7 +86,7 @@ async function connectAll(
       await conn.connect(30_000);
       if (watchdogFired) {
         try { await conn.disconnect(); } catch { /* ignore */ }
-        return;
+        return { schemaChanges, hasNewServer };
       }
       activeConnections.push(conn);
       const actualTools = conn.tools.map((t) => ({ name: t.name, description: t.description, inputSchema: t.inputSchema }));
@@ -113,7 +114,7 @@ async function connectAll(
       const tools: McpToolCache[] = conn.tools.map(t => ({ name: t.name, description: t.description, inputSchema: t.inputSchema }));
       updateServerCache(server.name, { tools, cachedAt: Date.now() }, cacheScopeForSource(server.source), cachedCwd || undefined);
     } catch (err) {
-      if (watchdogFired) return;
+      if (watchdogFired) return { schemaChanges, hasNewServer };
       const msg = err instanceof Error ? err.message : String(err);
       allServers.set(server.name, {
         name: server.name, url: server.url ?? server.command ?? "(unknown)", source: server.source,
@@ -128,7 +129,6 @@ async function connectAll(
   // case the inner timeout ever stops firing again.
   void watchdog;
 
-  let hasNewServer = false;
   for (const server of configs) {
     const cachedEntry = cache?.servers[server.name];
     if (!cachedEntry || cachedEntry.tools.length === 0) { hasNewServer = true; break; }

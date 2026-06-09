@@ -13,7 +13,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { spawnSync } from "node:child_process";
 import { loadConfig } from "../../settings.js";
-import type { DependencyStatus } from "../../hooks/rtk.js";
+import type { DependencyStatus } from "../../hooks/skeleton.js";
 import { BUILTIN_MCP_SERVERS, codegraphEnabled } from "./builtin/index.js";
 
 export { BUILTIN_MCP_SERVERS } from "./builtin/index.js";

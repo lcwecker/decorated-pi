@@ -768,8 +768,8 @@ function formatChunkMetadataLines(chunk: ReplacementChunk): string[] {
 }
 
 type RenderOp =
-  | { type: "context"; line: number; text: string }
-  | { type: "removed"; line: number; text: string }
+  | { type: "context"; line: number; text: string; /** New-file line number (differs from `line` when there are added/removed lines before it). Optional for backward compat. */ newLine?: number }
+  | { type: "removed"; line: number; text: string; /** Optional for type compatibility — removed lines always keep their original `line` and never receive a `newLine` assignment. */ newLine?: number }
   | { type: "added"; line: number; text: string; /** New-file line number (differs from `line` when there are added/removed lines before it). Optional for backward compat. */ newLine?: number };
 
 interface RenderableReplacement {

@@ -66,6 +66,18 @@ export interface Dependency {
   hint?: string;
 }
 
+/** Collected result shape for a module's declared dependency. Modules
+ *  expose a function that returns a list of these so the UI can show
+ *  "what's currently broken" for the user. The skeleton's own
+ *  `session_start` handler also walks declared dependencies, but it
+ *  uses `Dependency.check` directly rather than collecting statuses. */
+export interface DependencyStatus {
+  module: string;
+  label: string;
+  state: "ok" | "missing";
+  detail: string;
+}
+
 // ─── Skeleton ──────────────────────────────────────────────────────────────
 
 const COMPOSE_EVENTS = new Set<HookEvent>([

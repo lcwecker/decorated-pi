@@ -45,6 +45,7 @@
     "scripts": {
         "prepack": "depcheck --fail-on-missing",
         "test": "vitest run",
-        "prepublishOnly": "npm install --no-audit --no-fund && npm test && depcheck --fail-on-missing && publint"
+        "typecheck": "tsc --noEmit",
+        "prepublishOnly": "npm install --no-audit --no-fund && npm test && npm run typecheck && depcheck --fail-on-missing && publint"
     }
 }

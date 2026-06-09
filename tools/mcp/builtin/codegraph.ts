@@ -4,7 +4,7 @@
  * Injected by `index.ts` → `buildGuidelines()` when the codegraph
  * module is enabled (see `isModuleEnabled("codegraph")` in settings).
  */
-import type { McpServerConfig } from "../builtin.js";
+import type { McpServerConfig } from "../config.js";
 import { isCodegraphModuleEnabled } from "../../../settings.js";
 
 export const CODEGRAPH_BUILTIN: Omit<McpServerConfig, "source"> = {
