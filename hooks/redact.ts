@@ -39,7 +39,12 @@ export const redactModule: Module = {
   hooks: {
     tool_result: [
       (event, ctx) => {
-        if (event.toolName !== "read" && event.toolName !== "bash") return;
+        // Patch failures emit error text that may include surrounding
+        // file content as a "did you mean" diagnostic. That path leaks
+        // secrets if the file is a config / .env / source with API keys.
+        // The success path returns the constant "Success" (no secrets)
+        // but we let it through anyway so the filter is uniform.
+        if (event.toolName !== "read" && event.toolName !== "bash" && event.toolName !== "patch") return;
         if (!event.content || !Array.isArray(event.content)) return;
 
         const textParts: Array<{ index: number; item: TextContent; text: string }> = [];

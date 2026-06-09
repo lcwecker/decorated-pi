@@ -11,7 +11,6 @@ import { Box, Container, Spacer, Text, truncateToWidth } from "@earendil-works/p
 import { Type } from "typebox";
 import {
   applyPatch,
-  formatPatchResult,
   generatePatchDiff,
   type PatchPreview,
 } from "./core.js";
@@ -228,9 +227,12 @@ export function registerPatchTool(pi: ExtensionAPI): void {
       // Stale-read check is in hooks/track-mtime.ts (tool_call phase).
       // Just apply the patch here.
       const result = await applyPatch(input as any, cwd);
-      const summary = formatPatchResult(result);
       const diff = generatePatchDiff(result);
-      return { content: [{ type: "text", text: summary }], details: { diff } };
+      // Return "Success" on the LLM-facing channel — the model already knows
+      // what it asked to change (it sent the edits). The full diff stays in
+      // `details` for the TUI renderer. This keeps the prompt-cache segment
+      // stable: success always costs 1 token regardless of N hunks edited.
+      return { content: [{ type: "text", text: "Success" }], details: { diff } };
     },
     renderCall(args: any, theme: any, context: any) {
       const state = context.state;

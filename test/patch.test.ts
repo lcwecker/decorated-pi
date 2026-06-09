@@ -11,7 +11,6 @@ import {
   applyPatch,
   ParseError,
   ApplyError,
-  formatPatchResult,
   generatePatchDiff,
   computePatchPreview,
   diagnoseOldStrMismatch,
@@ -370,32 +369,10 @@ describe("applyPatches", () => {
     ).rejects.toThrow(ApplyError);
   });
 
-  // ── formatPatchResult ──────────────────────────────────────────────────
-
-  it("formatPatchResult shows created and modified", () => {
-    const r = formatPatchResult({
-      created: ["a.txt"],
-      modified: ["b.txt"],
-      warnings: [],
-      replacements: new Map(),
-      originalLines: new Map(),
-      diff: "",
-    });
-    expect(r).toContain("A a.txt");
-    expect(r).toContain("M b.txt");
-  });
-
-  it("formatPatchResult handles empty result", () => {
-    const r = formatPatchResult({
-      created: [],
-      modified: [],
-      warnings: [],
-      replacements: new Map(),
-      originalLines: new Map(),
-      diff: "",
-    });
-    expect(r).toContain("No files were modified");
-  });
+  // ── formatPatchResult (removed) ─────────────────────────────────────────
+  // The LLM-facing execute() now returns the constant "Success" on success.
+  // The file list (`result.modified` / `result.created`) is still populated
+  // and the diff stays in `details.diff` for the TUI renderer.
 
   // ── generatePatchDiff ──────────────────────────────────────────────────
 

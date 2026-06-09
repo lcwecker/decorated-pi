@@ -1033,18 +1033,12 @@ function generateReplacementDiff(filePath: string, reps: ReplacementInfo[], orig
 // Formatting
 // ═══════════════════════════════════════════════════════════════════════════
 
-export function formatPatchResult(result: PatchResult): string {
-  const lines: string[] = [];
-  for (const p of result.created) lines.push(`A ${p}`);
-  for (const p of result.modified) lines.push(`M ${p}`);
-  let output = lines.length > 0
-    ? "Updated the following files:\n" + lines.join("\n")
-    : "No files were modified.";
-  if (result.warnings.length > 0) {
-    output += "\n\n" + result.warnings.join("\n");
-  }
-  return output;
-}
+// Note: a previous `formatPatchResult` helper lived here. It was removed
+// when the tool's execute() was simplified to return a constant "Success"
+// string (the LLM already knows what it asked to change, so the summary
+// was redundant and cost prompt-cache stability). If callers need to
+// surface the file list to a non-LLM UI, they can format `result.modified`
+// and `result.created` themselves — they are plain `string[]`.
 
 // ═══════════════════════════════════════════════════════════════════════════
 // Helpers

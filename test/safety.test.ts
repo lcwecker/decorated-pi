@@ -42,6 +42,7 @@ import {
   detectSecrets,
   maskSecret,
 } from "../hooks/redact/detect.js";
+import { redactModule } from "../hooks/redact.js";
 
 // ═══════════════════════════════════════════════════════════════════════════
 // charClass
@@ -650,3 +651,78 @@ describe("Integration — local project scan (no entropy FP)", () => {
     expect(fps, fps.join("\n")).toHaveLength(0);
   });
 });
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Redact hook — patch tool coverage
+// ═══════════════════════════════════════════════════════════════════════════
+//
+// Patch failures surface "did you mean" diagnostics that quote surrounding
+// file content verbatim. If the file is a config / .env / source with API
+// keys, those secrets would leak into the LLM context unless the redact
+// hook covers the patch tool. The success path returns the constant
+// "Success" so the filter is a no-op there, but it must still pass through.
+
+describe("redactModule — patch tool coverage", () => {
+  const handler = redactModule.hooks.tool_result![0]!;
+  const silentCtx = { hasUI: false, cwd: "/tmp", ui: { notify: () => {} } } as any;
+  const noopPi = {} as any;
+
+  function makeEvent(toolName: string, text: string, input: Record<string, unknown> = {}): any {
+    return {
+      toolName,
+      toolCallId: "call_test",
+      input,
+      content: [{ type: "text", text }],
+    };
+  }
+
+  it("redacts secrets in patch failure diagnostics (pattern match)", () => {
+    // `sk-proj-` OpenAI-style key — pattern requires 40+ chars after
+    // the prefix. Fabricated value, not a real key.
+    const fakeOpenAIKey = "sk-proj-AbCdEfGhIjKlMnOpQrStUvWxYz0123456789aBcDeFgHiJkLmN";
+    const event = makeEvent(
+      "patch",
+      'old_str not found in src/config.ts: "old-key=placeholder".\n' +
+      'Did you mean:\n' +
+      `  api_key = "${fakeOpenAIKey}"`,
+      { path: "src/config.ts" },
+    );
+    const out = handler(event, silentCtx, noopPi) as any;
+    expect(out).toBeDefined();
+    expect(out.content[0].text).not.toContain(fakeOpenAIKey);
+    expect(out.content[0].text).toMatch(/\*+/);
+  });
+
+  it("redacts GitHub PAT in patch failure diagnostics (pattern match)", () => {
+    // GitHub Personal Access Token: `ghp_` prefix + 36 alphanumerics.
+    // Fabricated value, not a real token.
+    const fakeGhPat = "ghp_AbCdEfGhIjKlMnOpQrStUvWxYz0123456789";
+    const event = makeEvent(
+      "patch",
+      'old_str not found in src/auth.ts.\n' +
+      'Did you mean:\n' +
+      `  GITHUB_TOKEN = "${fakeGhPat}"`,
+      { path: "src/auth.ts" },
+    );
+    const out = handler(event, silentCtx, noopPi) as any;
+    expect(out).toBeDefined();
+    expect(out.content[0].text).not.toContain(fakeGhPat);
+    expect(out.content[0].text).toMatch(/\*+/);
+  });
+
+  it("passes patch success (\"Success\") through unchanged", () => {
+    // Success path text is a constant — no secrets, filter must be a no-op.
+    const event = makeEvent("patch", "Success", { path: "src/foo.ts" });
+    const out = handler(event, silentCtx, noopPi);
+    expect(out).toBeUndefined(); // no redactions → handler returns undefined (no-op)
+  });
+
+  it("ignores tools outside the allowlist (e.g. unknown tool)", () => {
+    // Pattern-matches a real secret format, but the tool name isn't in
+    // the allowlist — handler must early-return without redacting.
+    const event = makeEvent("grep", "sk-proj-AbCdEfGhIjKlMnOpQrStUvWxYz0123456789aBcDeFgHiJkLmN", { path: "src/x.ts" });
+    const out = handler(event, silentCtx, noopPi);
+    expect(out).toBeUndefined(); // allowlist filters grep out
+  });
+});
+
