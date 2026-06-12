@@ -262,33 +262,6 @@ export const wakatimeModule: Module = {
         }
       },
     ],
-    tool_result: [
-      (event, ctx) => {
-        const cwd = ctx.cwd ?? process.cwd();
-        const input = (event as any).input;
-        if (event.toolName === "read") {
-          const filePath = input?.path ?? input?.file ?? input?.file_path;
-          if (typeof filePath !== "string" || !filePath.trim()) return;
-          const absPath = path.isAbsolute(filePath) ? filePath : path.resolve(cwd, filePath);
-          touchActivity();
-          return;
-        }
-        if (event.toolName === "patch") {
-          const filePath = input?.path;
-          if (typeof filePath !== "string" || !filePath.trim()) return;
-          const absPath = path.isAbsolute(filePath) ? filePath : path.resolve(cwd, filePath);
-          touchActivity();
-          return;
-        }
-        if (event.toolName === "lsp_diagnostics") { touchActivity(); return; }
-        if (event.toolName === "bash") {
-          if (active) active.heartbeat = { ...active.heartbeat, category: classifyBash(input?.command) };
-          touchActivity();
-          return;
-        }
-        touchActivity();
-      },
-    ],
     agent_end: [
       () => { touchActivity(); },
     ],
@@ -398,31 +371,29 @@ export function setupWakatime(sk: Skeleton, pi: ExtensionAPI): void {
     });
   });
 
-  // File-level heartbeats as one-shots in tool_result (don't replace the active keepalive).
+  // Tool result: auto-detect file operations, classify bash, touch activity
   pi.on("tool_result", (event, ctx) => {
     const cwd = ctx.cwd ?? process.cwd();
     const input = (event as any).input;
-    if (event.toolName === "read") {
-      const filePath = input?.path ?? input?.file ?? input?.file_path;
-      if (typeof filePath !== "string" || !filePath.trim()) return;
+
+    // Auto-detect file operations from input shape
+    const filePath = input?.path ?? input?.file ?? input?.file_path;
+    if (typeof filePath === "string" && filePath.trim()) {
       const absPath = path.isAbsolute(filePath) ? filePath : path.resolve(cwd, filePath);
       sendOneShot(buildFileHeartbeat(absPath, cwd), sendHeartbeat, undefined, cwd);
       touchActivity();
-    } else if (event.toolName === "patch") {
-      const filePath = input?.path;
-      if (typeof filePath !== "string" || !filePath.trim()) return;
-      const absPath = path.isAbsolute(filePath) ? filePath : path.resolve(cwd, filePath);
-      sendOneShot(buildFileHeartbeat(absPath, cwd), sendHeartbeat, true, cwd);
-      touchActivity();
+      return;
     }
-  });
 
-  // bash → switch active app heartbeat's category (file keepalive stays).
-  pi.on("tool_result", (event, ctx) => {
-    if (event.toolName !== "bash") return;
-    const input = (event as any).input;
-    const category = classifyBash(input?.command);
-    if (active) active.heartbeat = { ...active.heartbeat, category };
+    // Bash needs special classification
+    if (event.toolName === "bash") {
+      const category = classifyBash(input?.command);
+      if (active) active.heartbeat = { ...active.heartbeat, category };
+      touchActivity();
+      return;
+    }
+
+    // Everything else: just touch activity
     touchActivity();
   });
 
