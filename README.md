@@ -14,7 +14,7 @@ pi install /path/to/decorated-pi
 
 ### 1. Token Efficiency
 
-Multiple layers of token savings that compound across every session.
+Multiple layers of token savings that compound across every session. **All integrated CLI tools only require installing their respective CLIs — zero config**.
 
 **RTK** — integrates [RTK](https://github.com/rtk-ai/rtk) to compress bash output into structured summaries, so the LLM never sees raw noise.
 
@@ -118,8 +118,8 @@ Example redaction on a `read` / `bash` output:
 ### 5. Other
 
 - `/usage` — token stats with cache‑hit rate, per‑model breakdown (Session / Today / This Week / This Month / All Time)
-- Progressive context — supports subdirectory `AGENTS.md` / `CLAUDE.md` discovery and injection
 - `/retry` — continue after interruption
+- Progressive context — supports subdirectory `AGENTS.md` / `CLAUDE.md` discovery and injection
 - **WakaTime** — coding activity tracking via [WakaTime](https://wakatime.com)
 
 ## Configuration
