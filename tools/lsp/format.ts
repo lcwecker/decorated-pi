@@ -5,10 +5,10 @@
  * Runtime tools.ts has its own inline copies.
  */
 import { fileURLToPath } from "node:url";
-import type { LspDiagnostic, LspHover, LspLocation, LspDocumentSymbol } from "./types.js";
+import type { LspDiagnostic, LspHover, LspLocation } from "./types.js";
 import { LspClientStartError } from "./client.js";
 
-export type { LspDiagnostic, LspHover, LspLocation, LspDocumentSymbol } from "./types.js";
+export type { LspDiagnostic, LspHover, LspLocation } from "./types.js";
 export { LspClientStartError } from "./client.js";
 
 // ─── Error formatting ────────────────────────────────────────────────────
@@ -110,103 +110,6 @@ export function format_locations(locations: LspLocation[], emptyMessage: string)
 
 function fileUrlToPath(uri: string): string {
   try { return uri.startsWith("file:") ? fileURLToPath(uri) : uri; } catch { return uri; }
-}
-
-// ─── Symbols ──────────────────────────────────────────────────────────────
-
-const SYMBOL_KIND_LABELS: Record<number, string> = {
-  2: "module", 3: "namespace", 5: "class", 6: "method", 7: "property",
-  8: "field", 9: "constructor", 11: "interface", 12: "function",
-  13: "variable", 14: "constant", 23: "struct", 24: "event",
-};
-
-export function symbol_kind_label(kind: number): string {
-  return SYMBOL_KIND_LABELS[kind] ?? "symbol";
-}
-
-export function format_document_symbols(file: string, symbols: LspDocumentSymbol[]): string {
-  if (symbols.length === 0) return `${file}: no symbols`;
-  const lines = [`${file}: ${symbols.length} top-level symbol(s)`];
-  appendSymbols(lines, symbols, 1);
-  return lines.join("\n");
-}
-
-function appendSymbols(lines: string[], symbols: LspDocumentSymbol[], depth: number) {
-  for (const s of symbols) {
-    const indent = "  ".repeat(depth);
-    const detail = s.detail ? ` — ${s.detail}` : "";
-    const range = `${s.range.start.line + 1}:${s.range.start.character + 1}`;
-    lines.push(`${indent}${symbol_kind_label(s.kind)} ${s.name}${detail} @ ${range}`);
-    if (s.children?.length) appendSymbols(lines, s.children, depth + 1);
-  }
-}
-
-interface SymbolMatchOptions {
-  max_results: number;
-  top_level_only: boolean;
-  exact_match: boolean;
-  kinds: Set<string>;
-  language: string;
-}
-
-export interface SymbolMatch { symbol: LspDocumentSymbol; depth: number }
-
-export function find_symbol_matches(
-  symbols: LspDocumentSymbol[],
-  query: string,
-  options: SymbolMatchOptions,
-): SymbolMatch[] {
-  const normalized = query.trim().toLowerCase();
-  if (!normalized) return [];
-  const matches: SymbolMatch[] = [];
-  const expandName = (name: string): string[] => {
-    const trimmed = name.trim().toLowerCase();
-    if (!trimmed) return [];
-    const expanded = new Set([trimmed]);
-    if (options.language === "cpp" && trimmed.includes("::")) {
-      const parts = trimmed.split("::").map(p => p.trim()).filter(Boolean);
-      if (parts.length > 0) expanded.add(parts[parts.length - 1]!);
-    }
-    return [...expanded];
-  };
-
-  const matchesQuery = (s: LspDocumentSymbol): boolean => {
-    const name = s.name.trim().toLowerCase();
-    const detail = (s.detail ?? "").trim().toLowerCase();
-    if (options.exact_match) {
-      const exactValues = [...expandName(s.name), ...(detail ? [detail] : [])];
-      return exactValues.some(v => v === normalized);
-    }
-    return name.includes(normalized) || detail.includes(normalized);
-  };
-  const matchesKind = (s: LspDocumentSymbol): boolean =>
-    options.kinds.size === 0 || options.kinds.has(symbol_kind_label(s.kind));
-  const visit = (entries: LspDocumentSymbol[], depth: number) => {
-    for (const symbol of entries) {
-      if (matchesKind(symbol) && matchesQuery(symbol)) {
-        matches.push({ symbol, depth });
-        if (matches.length >= options.max_results) return;
-      }
-      if (!options.top_level_only && symbol.children?.length) {
-        visit(symbol.children, depth + 1);
-        if (matches.length >= options.max_results) return;
-      }
-    }
-  };
-  visit(symbols, 1);
-  return matches;
-}
-
-export function format_symbol_matches(file: string, query: string, matches: SymbolMatch[]): string {
-  if (matches.length === 0) return `${file}: no symbols matching "${query}"`;
-  const lines = [`${file}: ${matches.length} symbol match(es) for "${query}"`];
-  for (const { symbol, depth } of matches) {
-    const indent = "  ".repeat(depth);
-    const detail = symbol.detail ? ` — ${symbol.detail}` : "";
-    const range = `${symbol.range.start.line + 1}:${symbol.range.start.character + 1}`;
-    lines.push(`${indent}${symbol_kind_label(symbol.kind)} ${symbol.name}${detail} @ ${range}`);
-  }
-  return lines.join("\n");
 }
 
 // ─── Collapse (for tools test) ────────────────────────────────────────────

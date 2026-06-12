@@ -21,13 +21,11 @@ function makeMockPi(): any {
     events: [] as string[],
     tools: [] as string[],
     commands: [] as string[],
-    providers: [] as string[],
   };
   const pi: any = {
     on: (event: string) => log.events.push(event),
     registerTool: (tool: any) => log.tools.push(tool.name),
     registerCommand: (name: string) => log.commands.push(name),
-    registerProvider: (id: string) => log.providers.push(id),
     getActiveTools: () => ["read", "bash", "write", "edit", "grep", "find", "ls"],
     setActiveTools: () => {},
     sendMessage: () => {},
@@ -54,15 +52,6 @@ describe("extension load smoke test", () => {
     const mod = await import("../index.js");
     const mockPi = makeMockPi();
     expect(() => mod.default(mockPi)).not.toThrow();
-  });
-
-  it("registers the three LLM providers", async () => {
-    const mod = await import("../index.js");
-    const mockPi = makeMockPi();
-    mod.default(mockPi);
-    expect(mockPi.log.providers).toEqual(
-      expect.arrayContaining(["ark-coding", "ollama-cloud", "qianfan-coding"]),
-    );
   });
 
   it("registers the four slash commands", async () => {

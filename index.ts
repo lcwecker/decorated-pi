@@ -17,7 +17,6 @@
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
-import { setupProviders } from "./providers/index.js";
 import { createSkeleton } from "./hooks/skeleton.js";
 
 import { setupRedact, REDACT_GUIDANCE } from "./hooks/redact.js";
@@ -97,9 +96,6 @@ function installGuidelines(pi: ExtensionAPI): void {
 }
 
 export default async function (pi: ExtensionAPI) {
-  // ── Providers (always on) ──────────────────────────────────────────────
-  setupProviders(pi);
-
   // ── Skeleton (hooks) ───────────────────────────────────────────────────
   const sk = createSkeleton();
 

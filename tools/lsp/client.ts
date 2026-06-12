@@ -8,7 +8,6 @@ import {
 } from "./protocol.js";
 import type {
   LspDiagnostic,
-  LspDocumentSymbol,
   LspHover,
   LspLocation,
   LspPosition,
@@ -199,14 +198,6 @@ export class LspClient {
     );
   }
 
-  async documentSymbols(uri: string, timeoutMs?: number): Promise<LspDocumentSymbol[]> {
-    return normalizeDocumentSymbols(
-      await this.#request("textDocument/documentSymbol", {
-        textDocument: { uri },
-      }, timeoutMs),
-    );
-  }
-
   async rename(
     uri: string,
     position: LspPosition,
@@ -258,22 +249,6 @@ function normalizeLocations(result: unknown): LspLocation[] {
       range: entry.targetSelectionRange ?? entry.targetRange,
     } as LspLocation;
   });
-}
-
-function normalizeDocumentSymbols(result: unknown): LspDocumentSymbol[] {
-  if (!result || !Array.isArray(result) || result.length === 0) return [];
-  const first = result[0];
-  if ("range" in first && "selectionRange" in first) {
-    return result as LspDocumentSymbol[];
-  }
-  return result.map((entry: any) => ({
-    name: entry.name,
-    kind: entry.kind,
-    range: entry.location.range,
-    selectionRange: entry.location.range,
-    containerName: entry.containerName,
-    uri: entry.location.uri,
-  }));
 }
 
 function uriToPath(uri: string): string {

@@ -62,25 +62,6 @@ describe("LspClient", () => {
     expect(protocol.notify).toHaveBeenCalledWith("initialized", {});
   });
 
-  it("forwards per-call timeout to documentSymbols", async () => {
-    const client = new LspClient({
-      command: "tsserver",
-      args: ["--stdio"],
-      root_uri: "file:///ws",
-      language_id_for_uri: () => "typescript",
-    });
-    const protocol = lastProtocol();
-    protocol.request.mockResolvedValueOnce([]);
-
-    await client.documentSymbols("file:///a.ts", 2222);
-
-    expect(protocol.request).toHaveBeenCalledWith(
-      "textDocument/documentSymbol",
-      { textDocument: { uri: "file:///a.ts" } },
-      2222,
-    );
-  });
-
   it("waitForDiagnostics resolves when matching diagnostics event arrives", async () => {
     const client = new LspClient({
       command: "tsserver",

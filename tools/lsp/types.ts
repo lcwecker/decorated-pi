@@ -29,14 +29,3 @@ export interface LspHover {
   contents: unknown;
   range?: LspRange;
 }
-
-export interface LspDocumentSymbol {
-  name: string;
-  kind: number;
-  range: LspRange;
-  selectionRange?: LspRange;
-  containerName?: string;
-  detail?: string;
-  children?: LspDocumentSymbol[];
-  uri?: string;
-}

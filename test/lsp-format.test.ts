@@ -5,9 +5,6 @@
  * - format_diagnostics / filter_diagnostics
  * - format_hover
  * - format_locations
- * - format_document_symbols
- * - find_symbol_matches / format_symbol_matches
- * - symbol_kind_label
  * - to_lsp_tool_error / format_tool_error
  * - format_status_lines (basic)
  */
@@ -18,10 +15,6 @@ import {
   filter_diagnostics,
   format_hover,
   format_locations,
-  format_document_symbols,
-  find_symbol_matches,
-  format_symbol_matches,
-  symbol_kind_label,
   to_lsp_tool_error,
   format_tool_error,
   LspToolError,
@@ -29,7 +22,6 @@ import {
   type LspDiagnostic,
   type LspHover,
   type LspLocation,
-  type LspDocumentSymbol,
 } from "../tools/lsp/format.js";
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -44,18 +36,6 @@ function makeDiagnostic(overrides: Partial<LspDiagnostic> = {}): LspDiagnostic {
     },
     severity: 1,
     message: "test error",
-    ...overrides,
-  };
-}
-
-function makeSymbol(overrides: Partial<LspDocumentSymbol> = {}): LspDocumentSymbol {
-  return {
-    name: "testSymbol",
-    kind: 12, // function
-    range: {
-      start: { line: 10, character: 5 },
-      end: { line: 20, character: 1 },
-    },
     ...overrides,
   };
 }
@@ -242,189 +222,6 @@ describe("format_locations", () => {
 });
 
 // ═══════════════════════════════════════════════════════════════════════════
-// format_document_symbols
-// ═══════════════════════════════════════════════════════════════════════════
-
-describe("format_document_symbols", () => {
-  it("formats no symbols", () => {
-    expect(format_document_symbols("test.ts", [])).toBe("test.ts: no symbols");
-  });
-
-  it("formats top-level symbols", () => {
-    const symbols = [
-      makeSymbol({ name: "foo", kind: 12, range: { start: { line: 9, character: 0 }, end: { line: 19, character: 1 } } }),
-      makeSymbol({ name: "bar", kind: 6, range: { start: { line: 29, character: 0 }, end: { line: 39, character: 1 } } }),
-    ];
-    const result = format_document_symbols("test.ts", symbols);
-    expect(result).toContain("2 top-level symbol(s)");
-    expect(result).toContain("function foo");
-    expect(result).toContain("method bar");
-  });
-
-  it("formats nested symbols with indentation", () => {
-    const symbols: LspDocumentSymbol[] = [
-      makeSymbol({
-        name: "MyClass",
-        kind: 5, // class
-        range: { start: { line: 0, character: 0 }, end: { line: 10, character: 1 } },
-        children: [
-          makeSymbol({
-            name: "myMethod",
-            kind: 6, // method
-            range: { start: { line: 2, character: 4 }, end: { line: 5, character: 5 } },
-          }),
-        ],
-      }),
-    ];
-    const result = format_document_symbols("test.ts", symbols);
-    expect(result).toContain("class MyClass");
-    expect(result).toContain("  method myMethod");
-  });
-
-  it("formats symbol with detail", () => {
-    const symbols = [
-      makeSymbol({ name: "x", kind: 13, detail: ": string", range: { start: { line: 0, character: 0 }, end: { line: 0, character: 1 } } }),
-    ];
-    const result = format_document_symbols("test.ts", symbols);
-    expect(result).toContain("— : string");
-  });
-});
-
-// ═══════════════════════════════════════════════════════════════════════════
-// find_symbol_matches
-// ═══════════════════════════════════════════════════════════════════════════
-
-describe("find_symbol_matches", () => {
-  const symbols: LspDocumentSymbol[] = [
-    makeSymbol({ name: "setupSafety", kind: 12, range: { start: { line: 0, character: 0 }, end: { line: 10, character: 1 } } }),
-    makeSymbol({ name: "setupLsp", kind: 12, range: { start: { line: 20, character: 0 }, end: { line: 30, character: 1 } } }),
-    makeSymbol({ name: "MyClass", kind: 5, range: { start: { line: 40, character: 0 }, end: { line: 50, character: 1 } },
-      children: [
-        makeSymbol({ name: "myMethod", kind: 6, range: { start: { line: 42, character: 4 }, end: { line: 45, character: 5 } } }),
-      ],
-    }),
-  ];
-
-  const baseOptions = {
-    max_results: 20,
-    top_level_only: false,
-    exact_match: false,
-    kinds: new Set<string>(),
-    language: "typescript",
-  };
-
-  it("finds by substring", () => {
-    const matches = find_symbol_matches(symbols, "setup", baseOptions);
-    expect(matches.length).toBe(2);
-    expect(matches.every(m => m.symbol.name.includes("setup"))).toBe(true);
-  });
-
-  it("finds by exact match", () => {
-    const matches = find_symbol_matches(symbols, "setupSafety", { ...baseOptions, exact_match: true });
-    expect(matches).toHaveLength(1);
-    expect(matches[0]!.symbol.name).toBe("setupSafety");
-  });
-
-  it("finds nested symbols", () => {
-    const matches = find_symbol_matches(symbols, "myMethod", baseOptions);
-    expect(matches).toHaveLength(1);
-    expect(matches[0]!.depth).toBe(2);
-  });
-
-  it("excludes nested when top_level_only", () => {
-    const matches = find_symbol_matches(symbols, "myMethod", { ...baseOptions, top_level_only: true });
-    expect(matches).toHaveLength(0);
-  });
-
-  it("filters by kind", () => {
-    const matches = find_symbol_matches(symbols, "setup", { ...baseOptions, kinds: new Set(["function"]) });
-    expect(matches).toHaveLength(2);
-  });
-
-  it("filters by kind — class only", () => {
-    const matches = find_symbol_matches(symbols, "My", { ...baseOptions, kinds: new Set(["class"]) });
-    expect(matches).toHaveLength(1);
-    expect(matches[0]!.symbol.name).toBe("MyClass");
-  });
-
-  it("respects max_results", () => {
-    const matches = find_symbol_matches(symbols, "setup", { ...baseOptions, max_results: 1 });
-    expect(matches).toHaveLength(1);
-  });
-
-  it("returns empty for empty query", () => {
-    const matches = find_symbol_matches(symbols, "", baseOptions);
-    expect(matches).toHaveLength(0);
-  });
-
-  it("returns empty for no match", () => {
-    const matches = find_symbol_matches(symbols, "nonexistent", baseOptions);
-    expect(matches).toHaveLength(0);
-  });
-
-  it("matches by detail", () => {
-    const symbolsWithDetail: LspDocumentSymbol[] = [
-      makeSymbol({ name: "x", kind: 13, detail: "ProviderModelConfig", range: { start: { line: 0, character: 0 }, end: { line: 0, character: 1 } } }),
-    ];
-    const matches = find_symbol_matches(symbolsWithDetail, "ProviderModel", baseOptions);
-    expect(matches).toHaveLength(1);
-  });
-
-  it("handles C++ namespace expansion", () => {
-    const cppSymbols: LspDocumentSymbol[] = [
-      makeSymbol({ name: "std::vector", kind: 5, range: { start: { line: 0, character: 0 }, end: { line: 0, character: 1 } } }),
-    ];
-    // Exact match on "vector" should match "std::vector" in C++
-    const matches = find_symbol_matches(cppSymbols, "vector", { ...baseOptions, exact_match: true, language: "cpp" });
-    expect(matches).toHaveLength(1);
-  });
-});
-
-// ═══════════════════════════════════════════════════════════════════════════
-// format_symbol_matches
-// ═══════════════════════════════════════════════════════════════════════════
-
-describe("format_symbol_matches", () => {
-  it("formats no matches", () => {
-    expect(format_symbol_matches("test.ts", "foo", [])).toContain("no symbols matching");
-  });
-
-  it("formats matches with query", () => {
-    const matches = [
-      { symbol: makeSymbol({ name: "foo", kind: 12 }), depth: 1 },
-    ];
-    const result = format_symbol_matches("test.ts", "foo", matches);
-    expect(result).toContain("1 symbol match(es)");
-    expect(result).toContain("function foo");
-  });
-});
-
-// ═══════════════════════════════════════════════════════════════════════════
-// symbol_kind_label
-// ═══════════════════════════════════════════════════════════════════════════
-
-describe("symbol_kind_label", () => {
-  const knownKinds: [number, string][] = [
-    [2, "module"],
-    [5, "class"],
-    [6, "method"],
-    [12, "function"],
-    [13, "variable"],
-    [14, "constant"],
-    [23, "struct"],
-  ];
-
-  for (const [kind, label] of knownKinds) {
-    it(`${kind} → ${label}`, () => {
-      expect(symbol_kind_label(kind)).toBe(label);
-    });
-  }
-
-  it("returns 'symbol' for unknown kind", () => {
-    expect(symbol_kind_label(999)).toBe("symbol");
-  });
-});
-
 // ═══════════════════════════════════════════════════════════════════════════
 // to_lsp_tool_error / format_tool_error
 // ═══════════════════════════════════════════════════════════════════════════

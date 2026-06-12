@@ -1,6 +1,6 @@
 # decorated-pi
 
-`decorated-pi` is a practical enhancement pack for [Pi](https://github.com/earendil-works/pi) — smarter tools that are token efficient and cache friendly.
+`decorated-pi` is a practical enhancement pack for [Pi](https://github.com/earendil-works/pi) — token-efficient workflow, cache-friendly design, and smarter tools.
 
 ## Install
 
@@ -12,21 +12,41 @@ pi install /path/to/decorated-pi
 
 ## Features
 
-### 1. Patch Tool
+### 1. Token Efficiency
 
-Replaces Pi's built-in `edit` with a stronger `patch` tool that adds unique safety and usability improvements on top of the native tools.
+Multiple layers of token savings that compound across every session.
+
+**RTK** — integrates [RTK](https://github.com/rtk-ai/rtk) to compress bash output into structured summaries, so the LLM never sees raw noise.
+
+**codegraph** — integrates [codegraph](https://github.com/colbymchenry/codegraph) to offer a code map of your project, so the LLM can navigate symbols and call graphs without chaining `ls` → `grep` → `read`.
+
+**Auxiliary Models** — offloads heavy-but-dumb tasks to cheaper models so your primary model only pays for the hard work:
+
+- **Image read fallback** — detects image type via magic bytes, calls a configured vision-capable model, and injects the analysis text, so your main model never touches image tokens
+- **Compact model** — handles context compaction with a smaller model instead of burning main-model capacity
+
+Configured via `/dp-model`.
+
+**Cache‑friendly design** — stable system prompt prefix:
+
+- tool definitions, guidelines, and skills are sorted alphabetically so the system prompt is identical across sessions
+- volatile elements like `Current date: …` are stripped before prompt assembly
+- MCP tool schemas are persisted to a local cache, so the tool list stays stable regardless of network conditions or server availability
+
+### 2. Smarter Tools
+
+Drop‑in replacements for Pi's built‑in tools, with better UX and fewer wasted turns.
+
+#### Patch Tool
 
 | Capability | Pi native `edit` | `patch` |
 | ------ | :---: | :---: |
-| Syntax‑highlighted overwrite | ✅ streaming | ✅ incremental |
 | **Anchor‑based search** | ❌ extending `oldText` for uniqueness | ✅ `anchor` bounds scope for precise matching |
 | **Fuzzy whitespace match** | ❌ only reports "not found" | ✅ auto‑corrects tab↔space / trailing whitespace mismatches |
 | **Edit fault diagnostics** | ❌ only reports "not found" | ✅ pinpoint faults for LLM comprehension |
 | **Stale‑read protection** | ❌ Blind to external changes | ✅ `read` captures mtime, `patch` rejects stale targets |
 
-### 2. Smarter `@` File Search
-
-Replaces Pi's built-in `@` file completion with smarter matching and noise filtering:
+#### Smarter `@` File Search
 
 | Aspect | Pi native `@` | `decorated-pi` |
 | ------ | :---: | :---: |
@@ -35,48 +55,15 @@ Replaces Pi's built-in `@` file completion with smarter matching and noise filte
 | **Default suggestions** | ❌ all files visible on empty query | ✅ only visible project files |
 | **Match precision** | ❌ case‑insensitive simple scoring | ✅ multi‑level case‑sensitive scoring |
 
-### 3. Secret redaction
+#### LSP support
 
-Three-layer detection: high-confidence known-format patterns (AWS, GitHub, OpenAI, etc.), config-key regex matching, and adjusted Shannon entropy heuristics for unknown secret-like values.
-
-Example redaction on a `read` / `bash` output:
-
-```json
-{
-  "aws_access_key_id": "AKI**************PLE",
-  "github_token": "ghp***************def",
-  "database_password": "Sup#######t99",
-  "api_key": "sk_**************f5a",
-  "random_secret": "a1b??????5f5"
-}
-```
-
-> `*` = known pattern, `#` = config key regex, `?` = entropy heuristic.
-
-### 4. Auxiliary Models
-
-Offloads auxiliary ops to cheaper models, reducing cost on every session. Configured via `/dp-model`:
-
-- **Image read fallback** — when the model reads an image file, detects type via magic bytes, calls a configured vision-capable model, and replaces the read result with image analysis text (jpeg, png, gif, webp)
-- **Compact model** — uses a configured model for context compaction (instead of the main model).
-
-### 5. Progressive Context from `AGENTS.md` / `CLAUDE.md`
-
-Extension capability: context is disclosed progressively as the agent works across different parts of the project.
-
-- When reading or editing a file, discovers `AGENTS.md` / `CLAUDE.md` in that file's directory and ancestor directories
-- Newly discovered guidance is injected into tool results, scoped to the current context
-
-### 6. LSP Tool Suite
-
-A cleaned-up, minimal LSP toolset. The extension keeps only the two LSP tools that cover the most practical coding workflows: checking diagnostics after edits and inspecting file structure before focused changes.
+Covers what codegraph can't: real-time compiler and lint errors.
 
 - **`lsp_diagnostics`** — file diagnostics with severity filtering
-- **`lsp_document_symbols`** — file symbol outline
 
 Supported languages: c/cpp, go, java, lua, json, python, ruby, rust, svelte, typescript
 
-### 7. Built-in MCP Client
+### 3. MCP Ecosystem
 
 Zero-config MCP client with built-in servers:
 
@@ -84,9 +71,9 @@ Zero-config MCP client with built-in servers:
 | --- | --- | --- |
 | Context7 | `context7_*` | `https://mcp.context7.com/mcp` |
 | Exa | `exa_*` | `https://mcp.exa.ai/mcp` |
+| codegraph | `codegraph_*` | bundled binary |
 
-**Custom servers** in `.pi/agent/mcp.json` (project) or `~/.pi/agent/decorated-pi.json` (global). Project overrides global.
-Tool prompts and schemas are cached locally so MCP tools are available immediately on startup, even before servers connect.
+**Custom servers** in `.pi/agent/mcp.json` (project) or `~/.pi/agent/decorated-pi.json` (global). Project overrides global. Tool prompts and schemas are cached locally so MCP tools are available immediately on startup — no manual `/reload` required even on first install.
 
 ```json
 {
@@ -108,34 +95,36 @@ Tool prompts and schemas are cached locally so MCP tools are available immediate
 }
 ```
 
-Use `/mcp` to view connection status and registered tools.
+Use `/mcp` to view connection status and toggle servers.
 
-### 8. Extend Providers
+### 4. Secret Redaction
 
-Extend providers are registered via `/login` → "Use a subscription":
+Three-layer detection: high-confidence known-format patterns (AWS, GitHub, OpenAI, etc.), config-key regex matching, and adjusted Shannon entropy heuristics for unknown secret-like values.
 
-| Provider | Base URL |
-| ---------- | ----------- |
-| Ollama Cloud | `ollama.com/v1` |
-| Baidu Qianfan | `qianfan.baidubce.com/v2/coding` |
-| ARK Coding | `ark.cn-beijing.volces.com/api/coding/v3` |
+Example redaction on a `read` / `bash` output:
 
-### 9. Other
+```json
+{
+  "aws_access_key_id": "AKI**************PLE",
+  "github_token": "ghp***************def",
+  "database_password": "Sup#######t99",
+  "api_key": "sk_**************f5a",
+  "random_secret": "a1b??????5f5"
+}
+```
 
-- **RTK** — integrates [RTK](https://github.com/rtk-ai/rtk) for token-efficient command output.
-- **WakaTime** — tracks coding activity via [WakaTime](https://wakatime.com).
+> `*` = known pattern, `#` = config key regex, `?` = entropy heuristic.
+
+### 5. Other
+
+- `/usage` — token stats with cache‑hit rate, per‑model breakdown (Session / Today / This Week / This Month / All Time)
+- Progressive context — supports subdirectory `AGENTS.md` / `CLAUDE.md` discovery and injection
+- `/retry` — continue after interruption
+- **WakaTime** — coding activity tracking via [WakaTime](https://wakatime.com)
 
 ## Configuration
 
-Runtime settings are stored in:
-
-```text
-~/.pi/agent/decorated-pi.json
-```
-
-### Module Loading
-
-Modules can be toggled on/off by `/dp-settings`. Changes take effect after `/reload`.
+Runtime settings in `~/.pi/agent/decorated-pi.json`. Modules can be toggled via `/dp-settings` (changes take effect after `/reload`).
 
 ```json
 {

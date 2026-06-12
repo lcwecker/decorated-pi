@@ -1,7 +1,7 @@
 /**
  * LSP Extension — language server integration for Pi.
  *
- * Provides: lsp_diagnostics, lsp_document_symbols.
+ * Provides: lsp_diagnostics.
  */
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { LspServerManager } from "./manager.js";

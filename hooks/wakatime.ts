@@ -280,12 +280,6 @@ export const wakatimeModule: Module = {
           touchActivity();
           return;
         }
-        if (event.toolName === "lsp_document_symbols") {
-          const filePath = input?.path;
-          if (typeof filePath !== "string" || !filePath.trim()) return;
-          touchActivity();
-          return;
-        }
         if (event.toolName === "lsp_diagnostics") { touchActivity(); return; }
         if (event.toolName === "bash") {
           if (active) active.heartbeat = { ...active.heartbeat, category: classifyBash(input?.command) };
@@ -358,12 +352,6 @@ export function setupWakatimeWithApiKey(
       const absPath = path.isAbsolute(filePath) ? filePath : path.resolve(cwd, filePath);
       sendOneShot(buildFileHeartbeat(absPath, cwd), sendHeartbeat, true, cwd);
       touchActivity();
-    } else if (event.toolName === "lsp_document_symbols") {
-      const filePath = input?.path;
-      if (typeof filePath !== "string" || !filePath.trim()) return;
-      const absPath = path.isAbsolute(filePath) ? filePath : path.resolve(cwd, filePath);
-      sendOneShot(buildFileHeartbeat(absPath, cwd), sendHeartbeat, undefined, cwd);
-      touchActivity();
     } else if (event.toolName === "lsp_diagnostics") {
       touchActivity();
     } else if (event.toolName === "bash") {
@@ -425,12 +413,6 @@ export function setupWakatime(sk: Skeleton, pi: ExtensionAPI): void {
       if (typeof filePath !== "string" || !filePath.trim()) return;
       const absPath = path.isAbsolute(filePath) ? filePath : path.resolve(cwd, filePath);
       sendOneShot(buildFileHeartbeat(absPath, cwd), sendHeartbeat, true, cwd);
-      touchActivity();
-    } else if (event.toolName === "lsp_document_symbols") {
-      const filePath = input?.path;
-      if (typeof filePath !== "string" || !filePath.trim()) return;
-      const absPath = path.isAbsolute(filePath) ? filePath : path.resolve(cwd, filePath);
-      sendOneShot(buildFileHeartbeat(absPath, cwd), sendHeartbeat, undefined, cwd);
       touchActivity();
     }
   });
