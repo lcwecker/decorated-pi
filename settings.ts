@@ -45,12 +45,19 @@ export interface ModuleSettings {
   codegraph?: boolean;
 }
 
+export interface UsageIndexEntry {
+  inode: number;
+  size: number;
+  mtime: number;
+}
+
 export interface DecoratedPiConfig {
   imageModelKey?: string | null;
   compactModelKey?: string | null;
   providers?: Record<string, ProviderCache>;
   modules?: ModuleSettings;
   mcpServers?: Record<string, McpServerEntry>;
+  usageIndex?: Record<string, UsageIndexEntry>;
 }
 
 export function loadConfig(): DecoratedPiConfig {
@@ -181,4 +188,15 @@ export function getAllModuleSettings(): Required<ModuleSettings> {
  */
 export function isCodegraphModuleEnabled(): boolean {
   return isModuleEnabled("codegraph");
+}
+
+// ─── Usage index (增量同步元数据) ─────────────────────────────────────────────
+
+/** 缓存的上次同步状态: { 文件路径 → { inode, size, mtime } } */
+export function loadUsageIndex(): Record<string, UsageIndexEntry> {
+  return loadConfig().usageIndex ?? {};
+}
+
+export function saveUsageIndex(index: Record<string, UsageIndexEntry>) {
+  saveConfig({ usageIndex: index });
 }

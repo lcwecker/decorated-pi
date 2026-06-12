@@ -46,6 +46,7 @@ import { registerDpModelCommand } from "./commands/dp-model.js";
 import { registerDpSettingsCommand } from "./commands/dp-settings.js";
 import { registerMcpStatusCommand } from "./commands/mcp-status.js";
 import { registerRetryCommand } from "./commands/retry.js";
+import { registerUsageCommand } from "./commands/usage.js";
 
 import { isModuleEnabled } from "./settings.js";
 
@@ -148,6 +149,7 @@ export default function (pi: ExtensionAPI) {
   registerDpSettingsCommand(pi);
   registerMcpStatusCommand(pi);
   registerRetryCommand(pi);
+  registerUsageCommand(pi);
 
   // ── Install skeleton (last) ────────────────────────────────────────────
   sk.install(pi);
