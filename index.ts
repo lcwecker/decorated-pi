@@ -37,9 +37,8 @@ import { setupRtk } from "./hooks/rtk.js";
 import { registerPatchTool } from "./tools/patch/index.js";
 import { registerLspTools } from "./tools/lsp/tools.js";
 import { LspServerManager } from "./tools/lsp/manager.js";
-import { registerMcpToolsFromCache } from "./tools/mcp/index.js";
 import { resolveMcpConfigs } from "./tools/mcp/config.js";
-import { loadMcpCache } from "./tools/mcp/cache.js";
+import { ensureMcpServerReady } from "./hooks/mcp.js";
 import { CODEGRAPH_GUIDANCE } from "./tools/mcp/builtin/codegraph.js";
 
 import { registerDpModelCommand } from "./commands/dp-model.js";
@@ -97,7 +96,7 @@ function installGuidelines(pi: ExtensionAPI): void {
   });
 }
 
-export default function (pi: ExtensionAPI) {
+export default async function (pi: ExtensionAPI) {
   // ── Providers (always on) ──────────────────────────────────────────────
   setupProviders(pi);
 
@@ -137,8 +136,12 @@ export default function (pi: ExtensionAPI) {
   if (isModuleEnabled("mcp")) {
     sk.register(mcpModule);
     const configs = resolveMcpConfigs(process.cwd()).filter(s => s.enabled);
-    const cache = loadMcpCache(process.cwd());
-    if (cache) registerMcpToolsFromCache(pi, cache, configs);
+    // Per-server readiness: cache hit → register from cache (fast).
+    // Cache miss → connect synchronously, write cache, then register
+    // live tools. This blocks startup only for cache-miss servers.
+    for (const config of configs) {
+      await ensureMcpServerReady(pi, config, process.cwd());
+    }
   }
 
   // ── System-prompt guidelines (single handler, array order = prompt order) ──

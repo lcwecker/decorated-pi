@@ -37,12 +37,21 @@ vi.mock("../tools/mcp/config.js", () => ({
 }));
 vi.mock("../tools/mcp/cache.js", () => ({
   loadMcpCache: vi.fn(() => null),
+  loadScopedMcpCache: vi.fn(() => null),
   saveMcpCache: vi.fn(),
   updateServerCache: vi.fn(),
   cleanupStaleCache: vi.fn(),
 }));
 
-import { mcpModule, getMcpStatus, refreshServerCache } from "../hooks/mcp.js";
+import {
+  mcpModule,
+  getMcpStatus,
+  refreshServerCache,
+  ensureMcpServerReady,
+  updateConfigEnabled,
+  getActiveMcpConnections,
+} from "../hooks/mcp.js";
+import { loadScopedMcpCache, updateServerCache } from "../tools/mcp/cache.js";
 
 describe("mcpModule session_start", () => {
   it("registers session_start and session_shutdown handlers", () => {
@@ -154,7 +163,46 @@ describe("mcpModule session_start", () => {
   }, 10_000);
 });
 
-import { updateConfigEnabled, getActiveMcpConnections } from "../hooks/mcp.js";
+const loadScopedMcpCacheMock = loadScopedMcpCache as unknown as ReturnType<typeof vi.fn>;
+const updateServerCacheMock = updateServerCache as unknown as ReturnType<typeof vi.fn>;
+
+describe("ensureMcpServerReady cache scope", () => {
+  it("uses project cache directly on cache hit", async () => {
+    loadScopedMcpCacheMock.mockReset();
+    loadScopedMcpCacheMock.mockReturnValue({
+      servers: {
+        proj: { tools: [{ name: "explore", description: "Explore", inputSchema: { type: "object" } }], cachedAt: Date.now() },
+      },
+    });
+    mockConnect.mockReset();
+    const pi = { registerTool: vi.fn() };
+
+    await ensureMcpServerReady(pi as any, { name: "proj", command: "proj-mcp", enabled: true, source: "project" } as any, "/worktree");
+
+    expect(loadScopedMcpCacheMock).toHaveBeenCalledWith("project", "/worktree");
+    expect(mockConnect).not.toHaveBeenCalled();
+    expect(pi.registerTool).toHaveBeenCalledWith(expect.objectContaining({ name: "proj_explore" }));
+  });
+
+  it("writes back to the matching project cache on cache miss", async () => {
+    loadScopedMcpCacheMock.mockReset();
+    loadScopedMcpCacheMock.mockReturnValue(null);
+    updateServerCacheMock.mockReset();
+    mockConnect.mockReset();
+    mockConnect.mockImplementation(async function (this: any) {
+      this.tools = [{ name: "explore", description: "Explore", inputSchema: { type: "object" } }];
+    });
+
+    await ensureMcpServerReady({ registerTool: vi.fn() } as any, { name: "proj", command: "proj-mcp", enabled: true, source: "project" } as any, "/worktree");
+
+    expect(updateServerCacheMock).toHaveBeenCalledWith(
+      "proj",
+      expect.objectContaining({ tools: [expect.objectContaining({ name: "explore" })] }),
+      "project",
+      "/worktree",
+    );
+  });
+});
 
 describe("updateConfigEnabled (close-time cleanup)", () => {
   // Regression: previously, disabling a server only flipped the UI state

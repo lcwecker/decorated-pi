@@ -68,7 +68,7 @@ describe("extension load smoke test", () => {
   it("registers the four slash commands", async () => {
     const mod = await import("../index.js");
     const mockPi = makeMockPi();
-    mod.default(mockPi);
+    await mod.default(mockPi);
     expect(mockPi.log.commands).toEqual(
       expect.arrayContaining(["dp-model", "dp-settings", "mcp", "retry"]),
     );
@@ -77,7 +77,7 @@ describe("extension load smoke test", () => {
   it("registers skeleton event handlers (session_start, before_agent_start, tool_result)", async () => {
     const mod = await import("../index.js");
     const mockPi = makeMockPi();
-    mod.default(mockPi);
+    await mod.default(mockPi);
     // The skeleton installs one pi.on per event that has registered handlers.
     expect(mockPi.log.events).toEqual(
       expect.arrayContaining(["session_start", "before_agent_start"]),

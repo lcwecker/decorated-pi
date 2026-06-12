@@ -31,6 +31,10 @@ function projectCachePath(cwd: string): string {
   return path.join(cwd, ".pi/agent/mcp-cache.json");
 }
 
+function scopedCachePath(scope: "global" | "project", cwd?: string): string {
+  return scope === "project" && cwd ? projectCachePath(cwd) : globalCachePath();
+}
+
 function readCacheFile(p: string): McpCache | null {
   try {
     if (!fs.existsSync(p)) return null;
@@ -67,10 +71,13 @@ export function loadMcpCache(cwd?: string): McpCache | null {
   return merged;
 }
 
+export function loadScopedMcpCache(scope: "global" | "project", cwd?: string): McpCache | null {
+  return readCacheFile(scopedCachePath(scope, cwd));
+}
+
 /** Save cache to global or project scope. */
 export function saveMcpCache(cache: McpCache, scope: "global" | "project", cwd?: string): void {
-  const p = scope === "project" && cwd ? projectCachePath(cwd) : globalCachePath();
-  writeCacheFile(p, cache);
+  writeCacheFile(scopedCachePath(scope, cwd), cache);
 }
 
 /** Update a single server's entry in the appropriate cache. */
@@ -80,7 +87,7 @@ export function updateServerCache(
   scope: "global" | "project",
   cwd?: string,
 ): void {
-  const p = scope === "project" && cwd ? projectCachePath(cwd) : globalCachePath();
+  const p = scopedCachePath(scope, cwd);
   const existing = readCacheFile(p) || { servers: {} };
   existing.servers[serverName] = entry;
   writeCacheFile(p, existing);

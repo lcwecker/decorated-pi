@@ -8,7 +8,8 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { McpConnection } from "../tools/mcp/client.js";
 import { resolveMcpConfigs, type McpServerConfig } from "../tools/mcp/config.js";
-import { loadMcpCache, updateServerCache, cleanupStaleCache, type McpToolCache } from "../tools/mcp/cache.js";
+import { loadMcpCache, loadScopedMcpCache, updateServerCache, cleanupStaleCache, type McpToolCache } from "../tools/mcp/cache.js";
+import { buildMcpTool } from "../tools/mcp/tool-definition.js";
 import type { Module, Skeleton } from "./skeleton.js";
 
 let activeConnections: McpConnection[] = [];
@@ -227,6 +228,66 @@ export function getCachedMcpConfigs(): McpServerConfig[] {
   return cachedConfigs;
 }
 
+/**
+ * Ensure one MCP server is ready and its tools are registered with pi.
+ *
+ * Behavior:
+ *   - Cache hit  → register tools from cache immediately (fast path).
+ *   - Cache miss → connect synchronously, write the cache, then
+ *     register the live tools.
+ *   - Connection failure + no cache → no tools registered (per design).
+ *
+ * Side effect: pushes a McpConnection into `activeConnections` so
+ * later `execute` calls (via buildMcpTool's findConnection callback)
+ * can find it.
+ */
+export async function ensureMcpServerReady(pi: ExtensionAPI, config: McpServerConfig, cwd?: string): Promise<void> {
+  const scope = cacheScopeForSource(config.source);
+  const cache = loadScopedMcpCache(scope, cwd);
+  const entry = cache?.servers[config.name];
+  const findConnection = (name: string) => activeConnections.find(c => c.serverName === name);
+
+  if (entry && entry.tools.length > 0) {
+    for (const t of entry.tools) {
+      try {
+        pi.registerTool(buildMcpTool(config, t, findConnection) as any);
+      } catch { /* duplicate name; previous registration still in effect */ }
+    }
+    return;
+  }
+
+  if (activeConnections.find(c => c.serverName === config.name)) return;
+
+  const conn = new McpConnection(config.name, config);
+  conn.source = config.source;
+  try {
+    await conn.connect(30_000);
+    activeConnections.push(conn);
+    const tools: McpToolCache[] = conn.tools.map(t => ({
+      name: t.name,
+      description: t.description,
+      inputSchema: t.inputSchema,
+    }));
+    updateServerCache(config.name, { tools, cachedAt: Date.now() }, scope, cwd);
+    for (const t of tools) {
+      try {
+        pi.registerTool(buildMcpTool(config, t, findConnection) as any);
+      } catch { /* duplicate name */ }
+    }
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    allServers.set(config.name, {
+      name: config.name,
+      url: config.url ?? config.command ?? "(unknown)",
+      source: config.source,
+      state: "failed",
+      toolCount: 0,
+      tools: [],
+      error: `No cache and initial connect failed: ${msg}`,
+    });
+  }
+}
+
 export const mcpModule: Module = {
   name: "mcp",
   hooks: {
@@ -239,12 +300,20 @@ export const mcpModule: Module = {
         if (configs.length === 0) return;
         cleanupStaleCache(configs, cachedCwd);
         const enabledConfigs = configs.filter(s => s.enabled);
-        void connectAll(enabledConfigs, ctx.modelRegistry, ctx).then(({ schemaChanges, hasNewServer }) => {
-          if (hasNewServer || schemaChanges.length > 0) {
-            // Tools re-registration is handled in tools/mcp/ via the cache reload mechanism.
-          }
+
+        // connectAll only needs to handle servers that weren't already
+        // connected by index.ts's ensureMcpServerReady. We don't
+        // teardown first: the initial-sync connections are still
+        // healthy and we don't want to disconnect + reconnect on
+        // every session_start.
+        const toConnect = enabledConfigs.filter(s => !activeConnections.find(c => c.serverName === s.name));
+        if (toConnect.length === 0) return;
+
+        // connectAll runs in the background so the watchdog tests
+        // that mock hung connections don't block session_start.
+        void connectAll(toConnect, ctx.modelRegistry, ctx).then(({ schemaChanges }) => {
           if (schemaChanges.length > 0 && ctx.hasUI) {
-            ctx.ui.notify(`MCP schema updated: ${schemaChanges.join('; ')}.`, "info");
+            ctx.ui.notify(`mcp schema changed! please '/reload'`, "warning");
           }
         });
       },

@@ -175,17 +175,6 @@ function commandExists(command: string): boolean {
   return result.status === 0;
 }
 
-/** Write auto-generated description back to project mcp.json. */
-export function saveProjectMcpDescription(cwd: string, name: string, description: string): void {
-  const filePath = path.join(cwd, ".pi/agent/mcp.json");
-  const servers = readMcpJson(filePath);
-  if (!servers || !servers[name]) return;
-  servers[name] = { ...servers[name], description };
-  const dir = path.dirname(filePath);
-  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-  fs.writeFileSync(filePath, JSON.stringify({ mcpServers: servers }, null, 2) + "\n", "utf-8");
-}
-
 function readMcpJsonSafe(filePath: string): Record<string, any> | null {
   try {
     return JSON.parse(fs.readFileSync(filePath, "utf-8"));
