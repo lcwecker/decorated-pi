@@ -40,13 +40,37 @@ export function extractFirstMessage(entries: SessionEntryLike[]): string | undef
   return undefined;
 }
 
+function normalizeTitle(text: string): string | undefined {
+  const nl = text.indexOf("\n");
+  const oneLine = (nl === -1 ? text : text.slice(0, nl)).trim();
+  if (!oneLine) return undefined;
+  if (oneLine.length <= MAX_SESSION_TITLE_LENGTH) return oneLine;
+  return oneLine.slice(0, MAX_SESSION_TITLE_LENGTH - 1) + "…";
+}
+
+function trySetSessionName(ctx: any, pi: ExtensionAPI): void {
+  if (ctx.sessionManager.getSessionName()) return;
+  const title = extractFirstMessage(ctx.sessionManager.getBranch());
+  if (title) (pi as any).setSessionName(title);
+}
+
 export const sessionTitleModule: Module = {
   name: "session-title",
   hooks: {
     session_start: [
       (_event, ctx, pi) => {
+        trySetSessionName(ctx, pi);
+      },
+    ],
+    input: [
+      (event, ctx, pi) => {
+        // Skip if already named, not a fresh interactive message,
+        // or stream steering/follow-up messages.
         if (ctx.sessionManager.getSessionName()) return;
-        const title = extractFirstMessage(ctx.sessionManager.getBranch());
+        if (event.source === "extension") return;
+        if (event.streamingBehavior) return;
+        const text = typeof event.text === "string" ? event.text.trim() : "";
+        const title = normalizeTitle(text);
         if (title) (pi as any).setSessionName(title);
       },
     ],
