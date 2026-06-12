@@ -1,7 +1,7 @@
 {
     "name": "decorated-pi",
-    "version": "0.5.5",
-    "description": "decorated-pi is a practical enhancement pack for pi — smarter tools that are token efficient and cache friendly.",
+    "version": "0.6.0",
+    "description": "decorated-pi is a practical enhancement pack for pi coding agent — token-efficient workflow, cache-friendly design, and smarter tools.",
     "keywords": [
         "pi",
         "pi-package",
