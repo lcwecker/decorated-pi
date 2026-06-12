@@ -43,6 +43,8 @@ export interface ModuleSettings {
   wakatime?: boolean;
   "rtk"?: boolean;
   codegraph?: boolean;
+  ask?: boolean;
+  todo?: boolean;
 }
 
 export interface UsageIndexEntry {
@@ -160,6 +162,8 @@ const DEFAULT_MODULES: Required<ModuleSettings> = {
   wakatime: true,
   "rtk": true,
   codegraph: false,  // opt-in: heavy binary, not everyone wants it
+  ask: false,        // opt-in: blocks agent loop waiting for user input
+  todo: false,       // opt-in: session management tool
 };
 
 export function isModuleEnabled(name: keyof ModuleSettings): boolean {

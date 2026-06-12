@@ -16,6 +16,8 @@ const MODULE_LABELS: Record<keyof ModuleSettings, string> = {
   wakatime: "WakaTime",
   "rtk": "RTK",
   "codegraph": "Codegraph",
+  ask: "Ask",
+  todo: "Todo",
 };
 
 const MODULE_DESCS: Record<keyof ModuleSettings, string> = {
@@ -27,6 +29,8 @@ const MODULE_DESCS: Record<keyof ModuleSettings, string> = {
   wakatime: "Send coding activity heartbeats to WakaTime",
   "rtk": "Rewrite bash through system RTK when available",
   "codegraph": "Codegraph MCP server for code structure queries",
+  ask: "Interactive ask tool for user clarification (blocks loop until answered)",
+  todo: "Session todo list management tool",
 };
 
 class DynamicBorder implements Component {

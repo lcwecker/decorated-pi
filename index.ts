@@ -36,6 +36,7 @@ import { setupRtk } from "./hooks/rtk.js";
 import { registerPatchTool } from "./tools/patch/index.js";
 import { registerLspTools } from "./tools/lsp/tools.js";
 import { LspServerManager } from "./tools/lsp/manager.js";
+import { registerAskTool } from "./tools/ask/index.js";
 import { resolveMcpConfigs } from "./tools/mcp/config.js";
 import { ensureMcpServerReady } from "./hooks/mcp.js";
 import { CODEGRAPH_GUIDANCE } from "./tools/mcp/builtin/codegraph.js";
@@ -125,6 +126,7 @@ export default async function (pi: ExtensionAPI) {
   // ── Tools (conditional on module switches) ────────────────────────────
   if (isModuleEnabled("patch")) registerPatchTool(pi);
   if (isModuleEnabled("lsp")) registerLspTools(pi, new LspServerManager());
+  if (isModuleEnabled("ask")) registerAskTool(pi);
 
   // MCP: hook AND tool are gated together. Disabling the module
   // means no session_start handler runs, no tools register, and no
