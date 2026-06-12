@@ -153,7 +153,7 @@ export class UsageReportComponent extends Container {
       return;
     }
 
-    if (kb.matches(data, "tui.select.confirm") || kb.matches(data, "right")) {
+    if (kb.matches(data, "tui.select.confirm") || kb.matches(data, "right" as any)) {
       const m = this.report.byModel[this.selectedIndex];
       if (m) {
         if (this.expanded.has(m.model)) {
@@ -166,7 +166,7 @@ export class UsageReportComponent extends Container {
       return;
     }
 
-    if (kb.matches(data, "left")) {
+    if (kb.matches(data, "left" as any)) {
       const m = this.report.byModel[this.selectedIndex];
       if (m && this.expanded.has(m.model)) {
         this.expanded.delete(m.model);
@@ -303,7 +303,7 @@ export class UsageReportComponent extends Container {
       );
     } else {
       lines.push("");
-      lines.push(t.fg("dim", "  ↑Prompt = all input tokens (user input + context)  ·  CacheR = cached hits  ·  CacheW = newly cached"));
+      lines.push(t.fg("dim", "  ↑Prompt = all input tokens (user input + context)  ·  CacheR = cached hits  ·  CacheW = created cache"));
       lines.push(t.fg("dim", "  ↓Out = model output tokens  ·  CacheHit = CacheR / ↑Prompt"));
 
       this.linesComponent.setText(lines.join("\n"));

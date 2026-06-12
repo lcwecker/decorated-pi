@@ -86,9 +86,10 @@ describe("formatHitRate", () => {
     expect(formatHitRate(77, 0)).toBe("—");
   });
 
-  it("returns percentage string when turns > 0", () => {
-    expect(formatHitRate(77, 10)).toBe("77%");
-    expect(formatHitRate(0, 1)).toBe("0%");
+  it("returns percentage string with 1 decimal when turns > 0", () => {
+    expect(formatHitRate(77, 10)).toBe("77.0%");
+    expect(formatHitRate(77.34, 10)).toBe("77.3%");
+    expect(formatHitRate(0, 1)).toBe("0.0%");
   });
 });
 
@@ -130,7 +131,7 @@ describe("formatCell", () => {
     cacheWrite: 0,
     cost: 0.07,
     turns: 1,
-    hitRate: 77,
+    hitRate: 77.4,
   };
 
   it("formats input as total prompt (input + cacheRead + cacheWrite)", () => {
@@ -155,7 +156,7 @@ describe("formatCell", () => {
   });
 
   it("formats hitRate", () => {
-    expect(formatCell("hitRate", agg)).toBe("77%");
+    expect(formatCell("hitRate", agg)).toBe("77.4%");
   });
 
   it("formats cost", () => {
@@ -201,7 +202,14 @@ describe("formatRow", () => {
     hitRate: 28,
   };
   const cols: ColumnId[] = ["input", "output", "hitRate", "cost"];
-  const colWidths: Record<ColumnId, number> = { input: 6, output: 5, hitRate: 5, cost: 6 };
+  const colWidths: Record<ColumnId, number> = {
+    input: 6,
+    output: 5,
+    cacheRead: 0,
+    cacheWrite: 0,
+    hitRate: 5,
+    cost: 6,
+  };
 
   it("pads label and aligns columns", () => {
     const row = formatRow("Today", 10, agg, cols, colWidths);
@@ -237,7 +245,7 @@ describe("aggregate", () => {
     const report = aggregate([mk({ input: 100, output: 50, cacheRead: 200, cacheWrite: 10, cost: 0.01 })]);
     expect(report.allTime.turns).toBe(1);
     expect(report.today.turns).toBe(1);
-    expect(report.allTime.hitRate).toBe(65);
+    expect(report.allTime.hitRate).toBeCloseTo(64.5, 1);
     expect(report.byModel).toHaveLength(1);
     expect(report.byModel[0]!.model).toBe("test/m");
   });

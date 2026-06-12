@@ -306,7 +306,7 @@ function accum(a: Aggregate, e: UsageEntry): void {
 
 function computeHitRate(a: Aggregate): void {
   const total = a.input + a.cacheRead + a.cacheWrite;
-  a.hitRate = total > 0 ? Math.round((100 * a.cacheRead) / total) : 0;
+  a.hitRate = total > 0 ? (100 * a.cacheRead) / total : 0;
 }
 
 export function aggregate(entries: UsageEntry[], currentSessionFile?: string): UsageReport {
@@ -401,7 +401,7 @@ export function formatCost(c: number): string {
 
 export function formatHitRate(hitRate: number, turns: number): string {
   if (turns === 0) return "—";
-  return `${hitRate}%`;
+  return `${hitRate.toFixed(1)}%`;
 }
 
 export type ColumnId = "input" | "output" | "cacheRead" | "cacheWrite" | "hitRate" | "cost";
