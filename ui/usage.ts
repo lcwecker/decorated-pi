@@ -35,8 +35,8 @@ const SLICE_LABELS: Array<{ key: keyof UsageReport & string; label: string }> = 
 ];
 
 const COL_HEADERS: Record<ColumnId, string> = {
-  input: "↑Prompt",
-  output: "↓Out",
+  input: "Input",
+  output: "Output",
   cacheRead: "CacheR",
   cacheWrite: "CacheW",
   hitRate: "CacheHit",
@@ -303,8 +303,8 @@ export class UsageReportComponent extends Container {
       );
     } else {
       lines.push("");
-      lines.push(t.fg("dim", "  ↑Prompt = all input tokens (user input + context)  ·  CacheR = cached hits  ·  CacheW = created cache"));
-      lines.push(t.fg("dim", "  ↓Out = model output tokens  ·  CacheHit = CacheR / ↑Prompt"));
+      lines.push(t.fg("dim", "  Input = all input tokens (user input + context)  ·  Output = model output tokens"));
+      lines.push(t.fg("dim", "  CacheR = cached hits  ·  CacheW = created cache  ·  CacheHit = CacheR / Input"));
 
       this.linesComponent.setText(lines.join("\n"));
     }
