@@ -139,26 +139,32 @@ describe("Module Settings", () => {
 
   it("defaults all modules to enabled", () => {
     const settings = getAllModuleSettings();
-    expect(settings.safety).toBe(true);
-    expect(settings.lsp).toBe(true);
-    expect(settings["smart-at"]).toBe(true);
+    expect(settings.tools.patchOverrideEdit).toBe(true);
+    expect(settings.tools.ask).toBe(true);
+    expect(settings.tools.lsp).toBe(true);
+    expect(settings.commands.atOverride).toBe(true);
+    expect(settings.commands.retry).toBe(true);
+    expect(settings.commands.usage).toBe(true);
   });
 
   it("does not expose codegraph as a module switch", () => {
     // codegraph is now just an MCP server, not a top-level module toggle.
     const settings = getAllModuleSettings();
-    expect("codegraph" in settings).toBe(false);
+    expect("codegraph" in settings.tools).toBe(false);
+    expect("codegraph" in settings.hooks).toBe(false);
+    expect("codegraph" in settings.commands).toBe(false);
+    expect("smart-at" in settings.commands).toBe(false);
   });
 
   it("isModuleEnabled returns true by default", () => {
-    expect(isModuleEnabled("safety")).toBe(true);
+    expect(isModuleEnabled("secretRedaction")).toBe(true);
     expect(isModuleEnabled("lsp")).toBe(true);
-    expect(isModuleEnabled("smart-at")).toBe(true);
+    expect(isModuleEnabled("atOverride")).toBe(true);
   });
 
   it("setModuleEnabled persists to config file", () => {
-    setModuleEnabled("safety", false);
-    expect(isModuleEnabled("safety")).toBe(false);
+    setModuleEnabled("secretRedaction", false);
+    expect(isModuleEnabled("secretRedaction")).toBe(false);
     expect(isModuleEnabled("lsp")).toBe(true); // others unchanged
   });
 
@@ -170,29 +176,88 @@ describe("Module Settings", () => {
   });
 
   it("getAllModuleSettings reflects changes", () => {
-    setModuleEnabled("safety", false);
-    setModuleEnabled("smart-at", false);
+    setModuleEnabled("secretRedaction", false);
+    setModuleEnabled("atOverride", false);
     const settings = getAllModuleSettings();
-    expect(settings.safety).toBe(false);
-    expect(settings.lsp).toBe(true);
-    expect(settings["smart-at"]).toBe(false);
+    expect(settings.hooks.secretRedaction).toBe(false);
+    expect(settings.tools.lsp).toBe(true);
+    expect(settings.commands.atOverride).toBe(false);
   });
 
   it("config file is valid JSON after setModuleEnabled", () => {
     setModuleEnabled("lsp", false);
     const raw = fs.readFileSync(CONFIG_FILE, "utf-8");
     const parsed = JSON.parse(raw);
-    expect(parsed.modules.lsp).toBe(false);
+    expect(parsed.modules.tools.lsp).toBe(false);
+  });
+
+  it("migrates legacy flat 'smart-at' key to nested commands.atOverride", () => {
+    saveConfig({ modules: { "smart-at": false } as any });
+    const config = loadConfig();
+    expect(config.modules?.commands?.atOverride).toBe(false);
+    expect((config.modules?.commands as any)?.["smart-at"]).toBeUndefined();
+  });
+
+  it("migrates legacy nested 'smart-at' inner name to atOverride", () => {
+    saveConfig({ modules: { commands: { "smart-at": false } } as any });
+    const config = loadConfig();
+    expect(config.modules?.commands?.atOverride).toBe(false);
+    expect((config.modules?.commands as any)?.["smart-at"]).toBeUndefined();
+  });
+
+  it("migrates legacy flat 'patch' key to nested tools.patchOverrideEdit", () => {
+    saveConfig({ modules: { patch: false } as any });
+    const config = loadConfig();
+    expect(config.modules?.tools?.patchOverrideEdit).toBe(false);
+    expect((config.modules as any)?.patch).toBeUndefined();
+  });
+
+  it("migrates legacy flat 'safety' key to nested hooks.secretRedaction", () => {
+    saveConfig({ modules: { safety: false } as any });
+    const config = loadConfig();
+    expect(config.modules?.hooks?.secretRedaction).toBe(false);
+    expect((config.modules as any)?.safety).toBeUndefined();
+  });
+
+  it("migrates legacy inner names inside already-nested config", () => {
+    saveConfig({ modules: { tools: { patch: false }, hooks: { safety: true } } as any });
+    const config = loadConfig();
+    expect(config.modules?.tools?.patchOverrideEdit).toBe(false);
+    expect((config.modules?.tools as any)?.patch).toBeUndefined();
+    expect(config.modules?.hooks?.secretRedaction).toBe(true);
+    expect((config.modules?.hooks as any)?.safety).toBeUndefined();
+  });
+
+  it("does not overwrite new key when both legacy and new keys exist", () => {
+    saveConfig({ modules: { patch: false, tools: { patchOverrideEdit: true } } as any });
+    const config = loadConfig();
+    expect(config.modules?.tools?.patchOverrideEdit).toBe(true);
+    expect((config.modules as any)?.patch).toBeUndefined();
+  });
+
+  it("preserves already-correct nested config", () => {
+    saveConfig({
+      modules: {
+        tools: { patchOverrideEdit: false, lsp: true },
+        hooks: { secretRedaction: true },
+        commands: { atOverride: false },
+      },
+    });
+    const config = loadConfig();
+    expect(config.modules?.tools?.patchOverrideEdit).toBe(false);
+    expect(config.modules?.tools?.lsp).toBe(true);
+    expect(config.modules?.hooks?.secretRedaction).toBe(true);
+    expect(config.modules?.commands?.atOverride).toBe(false);
   });
 
   it("multiple module toggles persist independently", () => {
-    setModuleEnabled("safety", false);
+    setModuleEnabled("secretRedaction", false);
     setModuleEnabled("lsp", false);
-    setModuleEnabled("smart-at", true);
+    setModuleEnabled("atOverride", true);
 
-    expect(isModuleEnabled("safety")).toBe(false);
+    expect(isModuleEnabled("secretRedaction")).toBe(false);
     expect(isModuleEnabled("lsp")).toBe(false);
-    expect(isModuleEnabled("smart-at")).toBe(true);
+    expect(isModuleEnabled("atOverride")).toBe(true);
   });
 });
 

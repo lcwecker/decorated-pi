@@ -17,6 +17,7 @@ import {
   resolveMcpConfigs,
   BUILTIN_MCP_SERVERS,
 } from "../tools/mcp/config.js";
+import { isCodegraphGuidanceActive } from "../tools/mcp/builtin/codegraph.js";
 import { setModuleEnabled } from "../settings.js";
 
 const PROJECT_CWD = process.cwd();
@@ -54,13 +55,14 @@ describe.sequential("codegraph end-to-end integration", () => {
     if (fs.existsSync(LEGACY_CONFIG_FILE)) {
       hadLegacyConfig = true;
       prevLegacyRaw = fs.readFileSync(LEGACY_CONFIG_FILE, "utf-8");
-      const parsed = JSON.parse(prevLegacyRaw);
-      delete parsed.mcpServers;
-      fs.writeFileSync(LEGACY_CONFIG_FILE, JSON.stringify(parsed, null, 2) + "\n", "utf-8");
     } else {
       hadLegacyConfig = false;
       prevLegacyRaw = null;
     }
+    // Ensure a clean module state for these tests. mcp must be on for
+    // resolveMcpConfigs to return servers.
+    const clean = { modules: { tools: { mcp: true }, hooks: {}, commands: {} } };
+    fs.writeFileSync(LEGACY_CONFIG_FILE, JSON.stringify(clean, null, 2) + "\n", "utf-8");
   });
 
   afterEach(() => {
@@ -124,5 +126,73 @@ describe.sequential("codegraph end-to-end integration", () => {
     expect(src).toMatch(/codegraph_[\`*]?\*?[\`*]? MCP tools are enabled/);
     expect(src).toMatch(/codegraph_explore/);
     expect(src).toMatch(/codegraph_impact/);
+  });
+});
+
+// ─── .codegraph project artefact gating ────────────────────────────────────
+//
+// codegraph is a project-sensitive server: it only makes sense in a
+// project that has been initialised (`codegraph init`), i.e. has a
+// `.codegraph/` directory. The gating must apply to:
+//   - resolveMcpConfigs: codegraph config still surfaces, but
+//     canUseInProject reflects the artefact
+//   - buildGuidelines (in index.ts): no CodeGraph guidance when missing
+//
+// These tests use a temp project dir and chdir into it, so they must
+// run sequentially and not parallelise with other chdir tests.
+describe.sequential("codegraph project artefact gating", () => {
+  const TMP_ROOT = path.join(os.tmpdir(), "decorated-pi-codegraph-gating");
+  let tmpDir: string;
+  let prevCwd: string;
+  let hadTmpRoot = false;
+
+  beforeEach(() => {
+    if (!fs.existsSync(TMP_ROOT)) {
+      fs.mkdirSync(TMP_ROOT, { recursive: true });
+      hadTmpRoot = true;
+    }
+    tmpDir = fs.mkdtempSync(path.join(TMP_ROOT, "proj-"));
+    prevCwd = process.cwd();
+    process.chdir(tmpDir);
+  });
+
+  afterEach(() => {
+    process.chdir(prevCwd);
+    if (fs.existsSync(tmpDir)) fs.rmSync(tmpDir, { recursive: true, force: true });
+    if (hadTmpRoot && fs.existsSync(TMP_ROOT)) fs.rmSync(TMP_ROOT, { recursive: true, force: true });
+  });
+
+  it("codegraph config carries canUseInProject returning false when no .codegraph/ exists", () => {
+    writeCodegraphEnabled(true);
+    const codegraph = resolveMcpConfigs(tmpDir).find((s) => s.name === "codegraph");
+    expect(codegraph).toBeDefined();
+    expect(codegraph?.enabled).toBe(true);
+    expect(codegraph?.canUseInProject).toBeTypeOf("function");
+    expect(codegraph?.canUseInProject?.(tmpDir)).toBe(false);
+  });
+
+  it("canUseInProject returns true when .codegraph/ exists", () => {
+    writeCodegraphEnabled(true);
+    fs.mkdirSync(path.join(tmpDir, ".codegraph"));
+    const codegraph = resolveMcpConfigs(tmpDir).find((s) => s.name === "codegraph");
+    expect(codegraph?.canUseInProject?.(tmpDir)).toBe(true);
+  });
+
+  it("buildGuidelines does not push CodeGraph guidance when .codegraph/ is missing", () => {
+    writeCodegraphEnabled(true);
+    // Gating lives in tools/mcp/builtin/codegraph.ts (isCodegraphGuidanceActive).
+    const codegraphSrc = fs.readFileSync(
+      path.join(import.meta.dirname, "../tools/mcp/builtin/codegraph.ts"),
+      "utf-8",
+    );
+    expect(codegraphSrc).toMatch(/isCodegraphGuidanceActive/);
+    // The predicate must return false when no .codegraph/ exists.
+    expect(isCodegraphGuidanceActive(tmpDir)).toBe(false);
+  });
+
+  it("buildGuidelines pushes CodeGraph guidance when .codegraph/ exists", () => {
+    writeCodegraphEnabled(true);
+    fs.mkdirSync(path.join(tmpDir, ".codegraph"));
+    expect(isCodegraphGuidanceActive(tmpDir)).toBe(true);
   });
 });

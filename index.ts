@@ -39,7 +39,7 @@ import { LspServerManager } from "./tools/lsp/manager.js";
 import { registerAskTool } from "./tools/ask/index.js";
 import { resolveMcpConfigs, migrateLegacyGlobalMcpConfig } from "./tools/mcp/config.js";
 import { ensureMcpServerReady } from "./hooks/mcp.js";
-import { CODEGRAPH_GUIDANCE } from "./tools/mcp/builtin/codegraph.js";
+import { CODEGRAPH_GUIDANCE, isCodegraphGuidanceActive } from "./tools/mcp/builtin/codegraph.js";
 
 import { registerDpModelCommand } from "./commands/dp-model.js";
 import { registerDpSettingsCommand } from "./commands/dp-settings.js";
@@ -67,19 +67,18 @@ const BASE_GUIDANCE = [
 ].join("\n");
 
 /** Build the list of guideline strings to inject, in prompt order.
- *  Always-on rules first, then per-module guidelines. CodeGraph guidance
- *  follows the MCP server switch chain: mcp module on → codegraph server
- *  on → guidance injected. The mcp module check lives in
- *  `resolveMcpConfigs`, so this code only needs to look at the server's
- *  own `enabled` flag. */
+ *  Always-on rules first, then per-module guidelines. REDACT_GUIDANCE is
+ *  gated by the secretRedaction module; CodeGraph guidance follows the MCP
+ *  server switch chain (mcp module on → codegraph server on → guidance
+ *  injected). The mcp module check lives in `resolveMcpConfigs`, so this
+ *  code only needs to look at the server's own `enabled` flag. */
 function buildGuidelines(): string[] {
   const out: string[] = [
     BASE_GUIDANCE,
-    REDACT_GUIDANCE,             // from hooks/redact.ts — always on (safety module)
-    INJECT_AGENTS_MD_GUIDANCE,   // from hooks/inject-agents-md.ts — always on (smart-at module)
+    INJECT_AGENTS_MD_GUIDANCE,   // from hooks/inject-agents-md.ts — always on
   ];
-  const codegraph = resolveMcpConfigs(process.cwd()).find((c) => c.name === "codegraph");
-  if (codegraph?.enabled) out.push(CODEGRAPH_GUIDANCE);
+  if (isModuleEnabled("secretRedaction")) out.push(REDACT_GUIDANCE);
+  if (isCodegraphGuidanceActive(process.cwd())) out.push(CODEGRAPH_GUIDANCE);
   return out;
 }
 
@@ -106,7 +105,7 @@ export default async function (pi: ExtensionAPI) {
   // Order matters for tool_result compose chain:
   //   1. redact → normalize-codeblocks → externalize → track-mtime → inject-agents-md → image-vision → wakatime
   // The first module registered for a given event runs first (compose chain).
-  setupRedact(sk);
+  if (isModuleEnabled("secretRedaction")) setupRedact(sk);
   sk.register(normalizeCodeblocksModule);
   sk.register(externalizeModule);
   sk.register(trackMtimeModule);
@@ -118,16 +117,16 @@ export default async function (pi: ExtensionAPI) {
   // anything else inspects the tool list.
   sk.register(piToolFilterModule);
   sk.register(sessionTitleModule);
-  sk.register(smartAtModule);
-  sk.register(wakatimeModule);
+  if (isModuleEnabled("atOverride")) sk.register(smartAtModule);
+  if (isModuleEnabled("wakatime")) sk.register(wakatimeModule);
 
   // Compaction + RTK (these also install their own pi.on via setup<>()).
   setupCompaction(sk);
-  setupRtk(sk, pi);
-  setupWakatime(sk, pi);
+  if (isModuleEnabled("rtk")) setupRtk(sk, pi);
+  if (isModuleEnabled("wakatime")) setupWakatime(sk, pi);
 
   // ── Tools (conditional on module switches) ────────────────────────────
-  if (isModuleEnabled("patch")) registerPatchTool(pi);
+  if (isModuleEnabled("patchOverrideEdit")) registerPatchTool(pi);
   if (isModuleEnabled("lsp")) registerLspTools(pi, new LspServerManager());
   if (isModuleEnabled("ask")) registerAskTool(pi);
 
@@ -156,8 +155,8 @@ export default async function (pi: ExtensionAPI) {
   // ── Commands ──────────────────────────────────────────────────────────
   registerDpModelCommand(pi);
   registerDpSettingsCommand(pi);
-  registerRetryCommand(pi);
-  registerUsageCommand(pi);
+  if (isModuleEnabled("retry")) registerRetryCommand(pi);
+  if (isModuleEnabled("usage")) registerUsageCommand(pi);
 
   // ── Install skeleton (last) ────────────────────────────────────────────
   sk.install(pi);

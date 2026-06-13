@@ -35,14 +35,32 @@ export interface McpServerEntry {
 }
 
 export interface ModuleSettings {
-  safety?: boolean;
-  lsp?: boolean;
-  "smart-at"?: boolean;
-  patch?: boolean;
-  mcp?: boolean;
-  wakatime?: boolean;
-  "rtk"?: boolean;
-  ask?: boolean;
+  tools?: {
+    /** Replace Pi native edit/write with the patch tool. */
+    patchOverrideEdit?: boolean;
+    /** Interactive ask tool for user clarification (blocks loop until answered). */
+    ask?: boolean;
+    /** Language server diagnostics, hover, definition, references, symbols, rename. */
+    lsp?: boolean;
+    /** MCP client with builtin servers (context7, exa, codegraph). */
+    mcp?: boolean;
+  };
+  hooks?: {
+    /** Redact secrets from read/bash output before model context. */
+    secretRedaction?: boolean;
+    /** Rewrite bash through system RTK when available. */
+    "rtk"?: boolean;
+    /** Send coding activity heartbeats to WakaTime. */
+    wakatime?: boolean;
+  };
+  commands?: {
+    /** Project-aware file search replacing default autocomplete. */
+    atOverride?: boolean;
+    /** /retry command to continue after interruption. */
+    retry?: boolean;
+    /** /usage command for token stats. */
+    usage?: boolean;
+  };
 }
 
 export interface UsageIndexEntry {
@@ -62,7 +80,13 @@ export interface DecoratedPiConfig {
 
 export function loadConfig(): DecoratedPiConfig {
   try {
-    if (fs.existsSync(CONFIG_FILE)) return JSON.parse(fs.readFileSync(CONFIG_FILE, "utf-8"));
+    if (fs.existsSync(CONFIG_FILE)) {
+      const config = JSON.parse(fs.readFileSync(CONFIG_FILE, "utf-8")) as DecoratedPiConfig;
+      if (migrateModuleSettings(config)) {
+        saveConfig(config);
+      }
+      return config;
+    }
   } catch {}
   return {};
 }
@@ -152,30 +176,140 @@ export function setCompactModelKey(key: string | null) {
 // ─── Module Switches ──────────────────────────────────────────────────────────
 
 const DEFAULT_MODULES: Required<ModuleSettings> = {
-  safety: true,
-  lsp: true,
-  "smart-at": true,
-  patch: true,
-  mcp: true,
-  wakatime: true,
-  "rtk": true,
-  ask: false,        // opt-in: blocks agent loop waiting for user input
+  tools: {
+    patchOverrideEdit: true,
+    ask: true,
+    lsp: true,
+    mcp: true,
+  },
+  hooks: {
+    secretRedaction: true,
+    "rtk": true,
+    wakatime: true,
+  },
+  commands: {
+    atOverride: true,
+    retry: true,
+    usage: true,
+  },
 };
 
-export function isModuleEnabled(name: keyof ModuleSettings): boolean {
-  const modules = loadConfig().modules ?? {};
-  return modules[name] ?? DEFAULT_MODULES[name] ?? true;
+/** Maps every module name to its category. Used by isModuleEnabled/setModuleEnabled. */
+const MODULE_TO_CATEGORY: Record<string, keyof ModuleSettings> = {
+  patchOverrideEdit: "tools",
+  ask: "tools",
+  lsp: "tools",
+  mcp: "tools",
+  secretRedaction: "hooks",
+  "rtk": "hooks",
+  wakatime: "hooks",
+  atOverride: "commands",
+  retry: "commands",
+  usage: "commands",
+};
+
+/** Legacy flat module keys that were renamed. Applied before flat→nested migration. */
+const LEGACY_MODULE_KEYS: Record<string, string> = {
+  patch: "patchOverrideEdit",
+  safety: "secretRedaction",
+};
+
+/**
+ * Migrate module settings to the nested tools/hooks/commands layout.
+ * Handles three legacy shapes:
+ *   1. Flat config with current names (patchOverrideEdit, secretRedaction, ...)
+ *   2. Flat config with old names (patch, safety)
+ *   3. Nested config with old inner names (tools.patch, hooks.safety)
+ * Already-correct nested configs are left untouched.
+ */
+function migrateModuleSettings(config: DecoratedPiConfig): boolean {
+  if (!config.modules) return false;
+
+  let migrated = false;
+  const result: ModuleSettings = {};
+
+  // Start from any already-nested values.
+  if (config.modules.tools) result.tools = { ...config.modules.tools };
+  if (config.modules.hooks) result.hooks = { ...config.modules.hooks };
+  if (config.modules.commands) result.commands = { ...config.modules.commands };
+
+  // Rename legacy keys inside already-nested categories.
+  function renameInCategory(
+    category: keyof ModuleSettings,
+    oldKey: string,
+    newKey: string,
+  ) {
+    const cat = result[category] as Record<string, boolean> | undefined;
+    if (cat && oldKey in cat && !(newKey in cat)) {
+      cat[newKey] = cat[oldKey];
+      delete cat[oldKey];
+      migrated = true;
+    }
+  }
+  renameInCategory("tools", "patch", "patchOverrideEdit");
+  renameInCategory("hooks", "safety", "secretRedaction");
+  renameInCategory("commands", "smart-at", "atOverride");
+
+  // Migrate flat keys into nested categories.
+  const flatMapping: Record<string, [keyof ModuleSettings, string]> = {
+    patchOverrideEdit: ["tools", "patchOverrideEdit"],
+    ask: ["tools", "ask"],
+    lsp: ["tools", "lsp"],
+    mcp: ["tools", "mcp"],
+    secretRedaction: ["hooks", "secretRedaction"],
+    "rtk": ["hooks", "rtk"],
+    wakatime: ["hooks", "wakatime"],
+    atOverride: ["commands", "atOverride"],
+    retry: ["commands", "retry"],
+    usage: ["commands", "usage"],
+    patch: ["tools", "patchOverrideEdit"],
+    safety: ["hooks", "secretRedaction"],
+    "smart-at": ["commands", "atOverride"],
+  };
+
+  for (const [key, value] of Object.entries(config.modules)) {
+    if (key === "tools" || key === "hooks" || key === "commands") continue;
+    const mapping = flatMapping[key];
+    if (!mapping) continue;
+    const [category, newKey] = mapping;
+    if (!result[category]) result[category] = {} as any;
+    const cat = result[category] as Record<string, boolean>;
+    if (!(newKey in cat)) {
+      cat[newKey] = value as boolean;
+    }
+    migrated = true;
+  }
+
+  if (!migrated) return false;
+  config.modules = result;
+  return true;
 }
 
-export function setModuleEnabled(name: keyof ModuleSettings, enabled: boolean) {
-  const modules = { ...loadConfig().modules };
-  modules[name] = enabled;
+export function isModuleEnabled(name: string): boolean {
+  const category = MODULE_TO_CATEGORY[name];
+  if (!category) return true;
+  const modules = loadConfig().modules ?? {};
+  const cat = modules[category] as Record<string, boolean> | undefined;
+  const defaults = DEFAULT_MODULES[category] as Record<string, boolean>;
+  if (cat && name in cat) return cat[name];
+  return defaults[name] ?? true;
+}
+
+export function setModuleEnabled(name: string, enabled: boolean) {
+  const category = MODULE_TO_CATEGORY[name];
+  if (!category) return;
+  const modules: ModuleSettings = { ...loadConfig().modules };
+  modules[category] = { ...(modules[category] ?? {}), [name]: enabled } as any;
   saveConfig({ modules });
 }
 
 export function getAllModuleSettings(): Required<ModuleSettings> {
   const modules = loadConfig().modules ?? {};
-  return { ...DEFAULT_MODULES, ...modules };
+  return {
+    tools: { ...DEFAULT_MODULES.tools, ...modules.tools },
+    hooks: { ...DEFAULT_MODULES.hooks, ...modules.hooks },
+    commands: { ...DEFAULT_MODULES.commands, ...modules.commands },
+  };
 }
 
 // ─── Usage index (增量同步元数据) ─────────────────────────────────────────────

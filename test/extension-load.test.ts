@@ -13,7 +13,35 @@
  * Run alongside the unit tests; fast (~50ms).
  */
 
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
+
+const CONFIG_DIR = path.join(os.homedir(), ".pi", "agent");
+const CONFIG_FILE = path.join(CONFIG_DIR, "decorated-pi.json");
+let originalConfig: string | null = null;
+
+function backupConfig() {
+  try {
+    if (fs.existsSync(CONFIG_FILE)) {
+      originalConfig = fs.readFileSync(CONFIG_FILE, "utf-8");
+    } else {
+      originalConfig = null;
+    }
+  } catch { originalConfig = null; }
+}
+
+function restoreConfig() {
+  try {
+    if (originalConfig === null) {
+      if (fs.existsSync(CONFIG_FILE)) fs.unlinkSync(CONFIG_FILE);
+    } else {
+      if (!fs.existsSync(CONFIG_DIR)) fs.mkdirSync(CONFIG_DIR, { recursive: true });
+      fs.writeFileSync(CONFIG_FILE, originalConfig, "utf-8");
+    }
+  } catch { /* best effort */ }
+}
 
 /** Minimal mock pi: just enough surface for setupXxx() to run. */
 function makeMockPi(): any {
@@ -37,6 +65,25 @@ function makeMockPi(): any {
 }
 
 describe("extension load smoke test", () => {
+  beforeEach(() => {
+    backupConfig();
+    // Use a deterministic config so command/tool registration is stable
+    // regardless of the user's real ~/.pi/agent/decorated-pi.json.
+    const clean = {
+      modules: {
+        tools: { patchOverrideEdit: true, ask: true, lsp: true, mcp: true },
+        hooks: { secretRedaction: true, rtk: true, wakatime: true },
+        commands: { atOverride: true, retry: true, usage: true },
+      },
+    };
+    if (!fs.existsSync(CONFIG_DIR)) fs.mkdirSync(CONFIG_DIR, { recursive: true });
+    fs.writeFileSync(CONFIG_FILE, JSON.stringify(clean, null, 2) + "\n", "utf-8");
+  });
+
+  afterEach(() => {
+    restoreConfig();
+  });
+
   it("imports index.ts without throwing", async () => {
     // Catches issues that fail at module load time, e.g. a symbol used
     // but not imported.

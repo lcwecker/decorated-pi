@@ -63,56 +63,58 @@ describe("Conditional loading — isModuleEnabled gates", () => {
     restoreConfig();
   });
 
-  it("all three modules are enabled by default", () => {
-    expect(isModuleEnabled("safety")).toBe(true);
+  it("core modules are enabled by default", () => {
+    expect(isModuleEnabled("secretRedaction")).toBe(true);
     expect(isModuleEnabled("lsp")).toBe(true);
-    expect(isModuleEnabled("smart-at")).toBe(true);
+    expect(isModuleEnabled("atOverride")).toBe(true);
+    expect(isModuleEnabled("retry")).toBe(true);
+    expect(isModuleEnabled("usage")).toBe(true);
   });
 
-  it("disabling safety does not affect other modules", () => {
-    setModuleEnabled("safety", false);
-    expect(isModuleEnabled("safety")).toBe(false);
+  it("disabling secretRedaction does not affect other modules", () => {
+    setModuleEnabled("secretRedaction", false);
+    expect(isModuleEnabled("secretRedaction")).toBe(false);
     expect(isModuleEnabled("lsp")).toBe(true);
-    expect(isModuleEnabled("smart-at")).toBe(true);
+    expect(isModuleEnabled("atOverride")).toBe(true);
   });
 
   it("disabling lsp does not affect other modules", () => {
     setModuleEnabled("lsp", false);
-    expect(isModuleEnabled("safety")).toBe(true);
+    expect(isModuleEnabled("secretRedaction")).toBe(true);
     expect(isModuleEnabled("lsp")).toBe(false);
-    expect(isModuleEnabled("smart-at")).toBe(true);
+    expect(isModuleEnabled("atOverride")).toBe(true);
   });
 
-  it("disabling smart-at does not affect other modules", () => {
-    setModuleEnabled("smart-at", false);
-    expect(isModuleEnabled("safety")).toBe(true);
+  it("disabling atOverride does not affect other modules", () => {
+    setModuleEnabled("atOverride", false);
+    expect(isModuleEnabled("secretRedaction")).toBe(true);
     expect(isModuleEnabled("lsp")).toBe(true);
-    expect(isModuleEnabled("smart-at")).toBe(false);
+    expect(isModuleEnabled("atOverride")).toBe(false);
   });
 
-  it("all three can be disabled simultaneously", () => {
-    setModuleEnabled("safety", false);
+  it("core modules can be disabled simultaneously", () => {
+    setModuleEnabled("secretRedaction", false);
     setModuleEnabled("lsp", false);
-    setModuleEnabled("smart-at", false);
+    setModuleEnabled("atOverride", false);
     const settings = getAllModuleSettings();
-    expect(settings.safety).toBe(false);
-    expect(settings.lsp).toBe(false);
-    expect(settings["smart-at"]).toBe(false);
+    expect(settings.hooks.secretRedaction).toBe(false);
+    expect(settings.tools.lsp).toBe(false);
+    expect(settings.commands.atOverride).toBe(false);
   });
 
-  it("all three can be re-enabled after disabling", () => {
-    setModuleEnabled("safety", false);
+  it("core modules can be re-enabled after disabling", () => {
+    setModuleEnabled("secretRedaction", false);
     setModuleEnabled("lsp", false);
-    setModuleEnabled("smart-at", false);
+    setModuleEnabled("atOverride", false);
 
-    setModuleEnabled("safety", true);
+    setModuleEnabled("secretRedaction", true);
     setModuleEnabled("lsp", true);
-    setModuleEnabled("smart-at", true);
+    setModuleEnabled("atOverride", true);
 
     const settings = getAllModuleSettings();
-    expect(settings.safety).toBe(true);
-    expect(settings.lsp).toBe(true);
-    expect(settings["smart-at"]).toBe(true);
+    expect(settings.hooks.secretRedaction).toBe(true);
+    expect(settings.tools.lsp).toBe(true);
+    expect(settings.commands.atOverride).toBe(true);
   });
 
   it("config persists across reloads (simulated)", () => {
@@ -193,23 +195,37 @@ describe("index.ts — conditional loading structure (new architecture)", () => 
   });
 
   it("gates patch tool behind isModuleEnabled", () => {
-    expect(indexSrc).toContain('if (isModuleEnabled("patch"))');
+    expect(indexSrc).toContain('if (isModuleEnabled("patchOverrideEdit"))');
     expect(indexSrc).toContain("registerPatchTool");
   });
 
-  it("does NOT gate safety/smart-at (hooks are always-on via skeleton)", () => {
-    // In the new architecture, hooks are registered unconditionally via
-    // the skeleton. The skeleton's install() checks declared dependencies
-    // on session_start instead. There should be no `if (isModuleEnabled("safety"))`
-    // or `if (isModuleEnabled("smart-at"))` in index.ts.
-    expect(indexSrc).not.toMatch(/isModuleEnabled\(["']safety["']\)/);
-    expect(indexSrc).not.toMatch(/isModuleEnabled\(["']smart-at["']\)/);
+  it("gates secretRedaction hook behind isModuleEnabled", () => {
+    expect(indexSrc).toContain('if (isModuleEnabled("secretRedaction"))');
+    expect(indexSrc).toContain("setupRedact");
   });
 
-  it("always loads non-MCP commands (no gating)", () => {
+  it("gates atOverride hook behind isModuleEnabled", () => {
+    expect(indexSrc).toContain('if (isModuleEnabled("atOverride"))');
+    expect(indexSrc).toContain("smartAtModule");
+  });
+
+  it("gates rtk and wakatime hooks behind isModuleEnabled", () => {
+    expect(indexSrc).toContain('if (isModuleEnabled("rtk"))');
+    expect(indexSrc).toContain("setupRtk");
+    expect(indexSrc).toContain('if (isModuleEnabled("wakatime"))');
+    expect(indexSrc).toContain("setupWakatime");
+  });
+
+  it("always loads core commands (no gating)", () => {
     expect(indexSrc).toContain("registerDpModelCommand");
     expect(indexSrc).toContain("registerDpSettingsCommand");
+  });
+
+  it("gates retry and usage commands behind isModuleEnabled", () => {
+    expect(indexSrc).toContain('if (isModuleEnabled("retry"))');
     expect(indexSrc).toContain("registerRetryCommand");
+    expect(indexSrc).toContain('if (isModuleEnabled("usage"))');
+    expect(indexSrc).toContain("registerUsageCommand");
   });
 
   it("gates /mcp command behind isModuleEnabled(mcp)", () => {

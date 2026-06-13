@@ -31,6 +31,11 @@ function cacheScopeForSource(source: string): "global" | "project" {
   return source === "project" ? "project" : "global";
 }
 
+function canUseServer(config: McpServerConfig, cwd?: string): boolean {
+  if (!config.canUseInProject) return true;
+  return config.canUseInProject(cwd ?? process.cwd());
+}
+
 async function connectAll(
   configs: McpServerConfig[],
   registry: any,
@@ -81,6 +86,15 @@ async function connectAll(
   for (const server of configs) {
     if (watchdogFired) break; // remaining servers are already failed
 
+    if (!canUseServer(server, cachedCwd || undefined)) {
+      allServers.set(server.name, {
+        name: server.name, url: server.url ?? server.command ?? "(unknown)", source: server.source,
+        state: "failed", toolCount: 0, tools: [],
+        error: "Project is missing required artefacts for this server",
+      });
+      continue;
+    }
+
     const conn = new McpConnection(server.name, server);
     conn.source = server.source;
     try {
@@ -88,6 +102,18 @@ async function connectAll(
       if (watchdogFired) {
         try { await conn.disconnect(); } catch { /* ignore */ }
         return { schemaChanges, hasNewServer };
+      }
+      if (conn.tools.length === 0) {
+        // Server connected but advertises no tools. Treat this as a
+        // failed state and do NOT write an empty cache, otherwise a
+        // subsequent /reload will keep using the empty cache forever.
+        try { await conn.disconnect(); } catch { /* ignore */ }
+        allServers.set(server.name, {
+          name: server.name, url: server.url ?? server.command ?? "(unknown)", source: server.source,
+          state: "failed", toolCount: 0, tools: [],
+          error: "Server connected but returned no tools (e.g. codegraph without a .codegraph index)",
+        });
+        continue;
       }
       activeConnections.push(conn);
       const actualTools = conn.tools.map((t) => ({ name: t.name, description: t.description, inputSchema: t.inputSchema }));
@@ -195,6 +221,9 @@ export async function updateConfigEnabled(serverName: string, enabled: boolean):
 export async function refreshServerCache(serverName: string, registry: any): Promise<{ ok: boolean; error?: string }> {
   const config = resolveMcpConfigs(cachedCwd).find(s => s.name === serverName);
   if (!config) return { ok: false, error: `Server "${serverName}" not found in config.` };
+  if (!canUseServer(config, cachedCwd || undefined)) {
+    return { ok: false, error: "Project is missing required artefacts for this server" };
+  }
   const existing = activeConnections.find(c => c.serverName === serverName);
   if (existing) {
     try { await existing.disconnect(); } catch { /* ignore */ }
@@ -204,6 +233,12 @@ export async function refreshServerCache(serverName: string, registry: any): Pro
   conn.source = config.source;
   try {
     await conn.connect(30_000);
+    if (conn.tools.length === 0) {
+      try { await conn.disconnect(); } catch { /* ignore */ }
+      const error = "Server connected but returned no tools (e.g. codegraph without a .codegraph index)";
+      allServers.set(config.name, { name: config.name, url: config.url ?? config.command ?? "(unknown)", source: config.source, state: "failed", toolCount: 0, tools: [], error });
+      return { ok: false, error };
+    }
     activeConnections.push(conn);
     allServers.set(config.name, {
       name: config.name, url: config.url ?? config.command ?? "(unknown)", source: config.source,
@@ -242,6 +277,8 @@ export function getCachedMcpConfigs(): McpServerConfig[] {
  * can find it.
  */
 export async function ensureMcpServerReady(pi: ExtensionAPI, config: McpServerConfig, cwd?: string): Promise<void> {
+  if (!canUseServer(config, cwd)) return;
+
   const scope = cacheScopeForSource(config.source);
   const cache = loadScopedMcpCache(scope, cwd);
   const entry = cache?.servers[config.name];
@@ -262,6 +299,21 @@ export async function ensureMcpServerReady(pi: ExtensionAPI, config: McpServerCo
   conn.source = config.source;
   try {
     await conn.connect(30_000);
+    if (conn.tools.length === 0) {
+      // Empty tool list means the server is not useful. Disconnect and
+      // leave cache untouched so the next /reload retries the connection.
+      try { await conn.disconnect(); } catch { /* ignore */ }
+      allServers.set(config.name, {
+        name: config.name,
+        url: config.url ?? config.command ?? "(unknown)",
+        source: config.source,
+        state: "failed",
+        toolCount: 0,
+        tools: [],
+        error: "Server connected but returned no tools (e.g. codegraph without a .codegraph index)",
+      });
+      return;
+    }
     activeConnections.push(conn);
     const tools: McpToolCache[] = conn.tools.map(t => ({
       name: t.name,

@@ -129,14 +129,22 @@ Runtime settings in `~/.pi/agent/decorated-pi.json`. Modules can be toggled via 
 ```json
 {
   "modules": {
-    "patch": true,
-    "safety": true,
-    "rtk": true,
-    "lsp": true,
-    "smart-at": true,
-    "mcp": true,
-    "wakatime": true,
-    "ask": false
+    "tools": {
+      "patchOverrideEdit": true,
+      "ask": true,
+      "lsp": true,
+      "mcp": true
+    },
+    "hooks": {
+      "secretRedaction": true,
+      "rtk": true,
+      "wakatime": true
+    },
+    "commands": {
+      "atOverride": true,
+      "retry": true,
+      "usage": true
+    }
   }
 }
 ```
