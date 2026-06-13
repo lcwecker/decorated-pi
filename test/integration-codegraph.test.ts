@@ -17,7 +17,6 @@ import {
   resolveMcpConfigs,
   BUILTIN_MCP_SERVERS,
 } from "../tools/mcp/config.js";
-import { isCodegraphGuidanceActive } from "../tools/mcp/builtin/codegraph.js";
 import { setModuleEnabled } from "../settings.js";
 
 const PROJECT_CWD = process.cwd();
@@ -114,19 +113,6 @@ describe.sequential("codegraph end-to-end integration", () => {
     expect(src).not.toMatch(/registerCommand\(\s*"codegraph"/);
     expect(src).not.toMatch(/setupCodegraphCommand\(/);
   });
-
-  it("system prompt has ### CodeGraph section, injected conditionally", () => {
-    // Guidance lives in tools/mcp/builtin/codegraph.ts and is pushed
-    // into the guidelines array in index.ts when the codegraph server
-    // is enabled in the resolved MCP config.
-    const src = fs.readFileSync(
-      path.join(import.meta.dirname, "../tools/mcp/builtin/codegraph.ts"),
-      "utf-8",
-    );
-    expect(src).toMatch(/codegraph_[\`*]?\*?[\`*]? MCP tools are enabled/);
-    expect(src).toMatch(/codegraph_explore/);
-    expect(src).toMatch(/codegraph_impact/);
-  });
 });
 
 // ─── .codegraph project artefact gating ────────────────────────────────────
@@ -180,19 +166,16 @@ describe.sequential("codegraph project artefact gating", () => {
 
   it("buildGuidelines does not push CodeGraph guidance when .codegraph/ is missing", () => {
     writeCodegraphEnabled(true);
-    // Gating lives in tools/mcp/builtin/codegraph.ts (isCodegraphGuidanceActive).
-    const codegraphSrc = fs.readFileSync(
-      path.join(import.meta.dirname, "../tools/mcp/builtin/codegraph.ts"),
-      "utf-8",
-    );
-    expect(codegraphSrc).toMatch(/isCodegraphGuidanceActive/);
-    // The predicate must return false when no .codegraph/ exists.
-    expect(isCodegraphGuidanceActive(tmpDir)).toBe(false);
+    // With no system-prompt CodeGraph block, gating follows tool
+    // registration: canUseInProject is the single source of truth.
+    const codegraph = resolveMcpConfigs(tmpDir).find((s) => s.name === "codegraph");
+    expect(codegraph?.canUseInProject?.(tmpDir)).toBe(false);
   });
 
   it("buildGuidelines pushes CodeGraph guidance when .codegraph/ exists", () => {
     writeCodegraphEnabled(true);
     fs.mkdirSync(path.join(tmpDir, ".codegraph"));
-    expect(isCodegraphGuidanceActive(tmpDir)).toBe(true);
+    const codegraph = resolveMcpConfigs(tmpDir).find((s) => s.name === "codegraph");
+    expect(codegraph?.canUseInProject?.(tmpDir)).toBe(true);
   });
 });

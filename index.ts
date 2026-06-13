@@ -39,7 +39,6 @@ import { LspServerManager } from "./tools/lsp/manager.js";
 import { registerAskTool } from "./tools/ask/index.js";
 import { resolveMcpConfigs, migrateLegacyGlobalMcpConfig } from "./tools/mcp/config.js";
 import { ensureMcpServerReady } from "./hooks/mcp.js";
-import { CODEGRAPH_GUIDANCE, isCodegraphGuidanceActive } from "./tools/mcp/builtin/codegraph.js";
 
 import { registerDpModelCommand } from "./commands/dp-model.js";
 import { registerDpSettingsCommand } from "./commands/dp-settings.js";
@@ -78,7 +77,6 @@ function buildGuidelines(): string[] {
     INJECT_AGENTS_MD_GUIDANCE,   // from hooks/inject-agents-md.ts — always on
   ];
   if (isModuleEnabled("secretRedaction")) out.push(REDACT_GUIDANCE);
-  if (isCodegraphGuidanceActive(process.cwd())) out.push(CODEGRAPH_GUIDANCE);
   return out;
 }
 
