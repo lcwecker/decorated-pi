@@ -312,6 +312,23 @@ export function getAllModuleSettings(): Required<ModuleSettings> {
   };
 }
 
+/**
+ * Snapshot of the module settings that pi is currently running with.
+ * Captured once when the extension loads; /dp-settings compares the
+ * current effective settings against this snapshot to decide whether a
+ * reload is actually necessary.
+ */
+let loadedModuleSnapshot: Required<ModuleSettings> | null = null;
+
+export function captureModuleSnapshot(): void {
+  loadedModuleSnapshot = getAllModuleSettings();
+}
+
+export function moduleSnapshotChanged(): boolean {
+  if (!loadedModuleSnapshot) return true;
+  return JSON.stringify(loadedModuleSnapshot) !== JSON.stringify(getAllModuleSettings());
+}
+
 // ─── Usage index (增量同步元数据) ─────────────────────────────────────────────
 
 /** 缓存的上次同步状态: { 文件路径 → { inode, size, mtime } } */

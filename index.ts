@@ -47,7 +47,7 @@ import { registerMcpStatusCommand } from "./commands/mcp-status.js";
 import { registerRetryCommand } from "./commands/retry.js";
 import { registerUsageCommand } from "./commands/usage.js";
 
-import { isModuleEnabled } from "./settings.js";
+import { captureModuleSnapshot, isModuleEnabled } from "./settings.js";
 
 // ─── System-prompt guidelines (hard-coded base, per-module imports) ────────
 //
@@ -99,6 +99,11 @@ function installGuidelines(pi: ExtensionAPI): void {
 }
 
 export default async function (pi: ExtensionAPI) {
+  // Snapshot the module settings that pi is about to load. /dp-settings
+  // compares against this to avoid prompting for reload when the user
+  // has only returned the settings to the currently-loaded state.
+  captureModuleSnapshot();
+
   // ── Skeleton (hooks) ───────────────────────────────────────────────────
   const sk = createSkeleton();
 

@@ -25,6 +25,8 @@ import {
   setImageModelKey,
   getCompactModelKey,
   setCompactModelKey,
+  captureModuleSnapshot,
+  moduleSnapshotChanged,
   type DecoratedPiConfig,
   type ModuleSettings,
 } from "../settings.js";
@@ -258,6 +260,50 @@ describe("Module Settings", () => {
     expect(isModuleEnabled("secretRedaction")).toBe(false);
     expect(isModuleEnabled("lsp")).toBe(false);
     expect(isModuleEnabled("atOverride")).toBe(true);
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// moduleSnapshot (used by /dp-settings to decide whether to prompt reload)
+// ═══════════════════════════════════════════════════════════════════════════
+
+describe("moduleSnapshot", () => {
+  beforeEach(() => {
+    backupConfig();
+    try {
+      if (fs.existsSync(CONFIG_FILE)) fs.unlinkSync(CONFIG_FILE);
+    } catch {}
+  });
+
+  afterEach(() => {
+    restoreConfig();
+  });
+
+  it("moduleSnapshotChanged returns false after capture with no subsequent change", () => {
+    captureModuleSnapshot();
+    expect(moduleSnapshotChanged()).toBe(false);
+  });
+
+  it("moduleSnapshotChanged returns true after a module toggle", () => {
+    captureModuleSnapshot();
+    setModuleEnabled("mcp", !isModuleEnabled("mcp"));
+    expect(moduleSnapshotChanged()).toBe(true);
+  });
+
+  it("moduleSnapshotChanged returns false when toggle is reverted to original", () => {
+    const originalMcp = isModuleEnabled("mcp");
+    captureModuleSnapshot();
+    setModuleEnabled("mcp", !originalMcp);
+    setModuleEnabled("mcp", originalMcp);
+    expect(moduleSnapshotChanged()).toBe(false);
+  });
+
+  it("recapture picks up the current effective state as the new baseline", () => {
+    captureModuleSnapshot();
+    setModuleEnabled("mcp", !isModuleEnabled("mcp"));
+    expect(moduleSnapshotChanged()).toBe(true);
+    captureModuleSnapshot();
+    expect(moduleSnapshotChanged()).toBe(false);
   });
 });
 

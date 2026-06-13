@@ -3,6 +3,7 @@
  */
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { moduleSnapshotChanged } from "../settings.js";
 import { ModuleSettingsComponent } from "../ui/module-settings.js";
 
 export function registerDpSettingsCommand(pi: ExtensionAPI): void {
@@ -14,7 +15,11 @@ export function registerDpSettingsCommand(pi: ExtensionAPI): void {
           (tui, theme, _kb, done) =>
             new ModuleSettingsComponent(tui, theme, () => done(undefined))
         );
-        ctx.ui.notify("Module settings updated. /reload to apply.", "warning");
+        // Only prompt for reload when the effective settings differ from
+        // the snapshot taken when pi loaded the extension.
+        if (moduleSnapshotChanged()) {
+          ctx.ui.notify("Module settings updated. /reload to apply.", "warning");
+        }
         return;
       }
       ctx.ui.notify("dp-settings requires interactive mode.", "warning");
