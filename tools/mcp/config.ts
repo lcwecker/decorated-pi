@@ -31,6 +31,8 @@ export interface McpServerConfig {
   description?: string;
   enabled: boolean;
   source: "builtin" | "global" | "project";
+  /** Optional predicate: return false if this server cannot be used in the given project. */
+  canUseInProject?: (cwd: string) => boolean;
 }
 
 function globalMcpJsonPath(): string {
@@ -188,6 +190,7 @@ export function resolveMcpConfigs(cwd: string): McpServerConfig[] {
         env: s.env ?? existing.env,
         description: s.description ?? existing.description,
         source: "global",
+        canUseInProject: s.canUseInProject ?? existing.canUseInProject,
       });
     } else {
       byName.set(s.name, s);
@@ -207,6 +210,7 @@ export function resolveMcpConfigs(cwd: string): McpServerConfig[] {
         env: s.env ?? existing.env,
         description: s.description ?? existing.description,
         source: "project",
+        canUseInProject: s.canUseInProject ?? existing.canUseInProject,
       });
     } else {
       byName.set(s.name, s);

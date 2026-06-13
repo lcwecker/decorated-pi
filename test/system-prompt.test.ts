@@ -156,12 +156,20 @@ describe("Decorated Pi Guidance structure", () => {
   });
 
   it("CODEGRAPH_GUIDANCE is gated on resolveMcpConfigs codegraph enabled", () => {
-    const src = fs.readFileSync(
+    // The gating lives in tools/mcp/builtin/codegraph.ts (isCodegraphGuidanceActive)
+    // so index.ts only needs to call the predicate.
+    const indexSrc = fs.readFileSync(
       path.join(import.meta.dirname, "../index.ts"),
       "utf-8",
     );
-    expect(src).toMatch(/resolveMcpConfigs\(process\.cwd\(\)\)/);
-    expect(src).toMatch(/c\.name === "codegraph"/);
-    expect(src).not.toMatch(/isModuleEnabled\(["']codegraph["']\)/);
+    const codegraphSrc = fs.readFileSync(
+      path.join(import.meta.dirname, "../tools/mcp/builtin/codegraph.ts"),
+      "utf-8",
+    );
+    expect(indexSrc).toMatch(/isCodegraphGuidanceActive/);
+    expect(indexSrc).not.toMatch(/c\.name === "codegraph"/);
+    expect(codegraphSrc).toMatch(/resolveMcpConfigs/);
+    expect(codegraphSrc).toMatch(/canUseInProject/);
+    expect(codegraphSrc).not.toMatch(/isModuleEnabled\(["']codegraph["']\)/);
   });
 });

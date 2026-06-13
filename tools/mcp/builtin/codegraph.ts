@@ -6,6 +6,9 @@
  * project `.pi/agent/mcp.json`) or via the `/mcp` command. There is no
  * separate /dp-settings toggle; codegraph is just one MCP server.
  */
+import * as fs from "node:fs";
+import * as path from "node:path";
+import { resolveMcpConfigs } from "../config.js";
 import type { McpServerConfig } from "../config.js";
 
 export const CODEGRAPH_BUILTIN: Omit<McpServerConfig, "source"> = {
@@ -15,7 +18,18 @@ export const CODEGRAPH_BUILTIN: Omit<McpServerConfig, "source"> = {
     enabled: false,
     description:
         "Local code knowledge graph (colbymchenry/codegraph). Enable via /mcp.",
+    canUseInProject: (cwd: string) => fs.existsSync(path.join(cwd, ".codegraph")),
 };
+
+/** True when codegraph is enabled in the resolved MCP config AND the
+ *  current project has a .codegraph/ index. Use this to decide whether
+ *  to inject CodeGraph system-prompt guidance. */
+export function isCodegraphGuidanceActive(cwd: string): boolean {
+    const cfg = resolveMcpConfigs(cwd).find((s) => s.name === "codegraph");
+    if (!cfg?.enabled) return false;
+    if (cfg.canUseInProject && !cfg.canUseInProject(cwd)) return false;
+    return true;
+}
 
 export const CODEGRAPH_GUIDANCE = [
     "### CodeGraph, code source map",
