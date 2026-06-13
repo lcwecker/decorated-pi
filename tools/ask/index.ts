@@ -46,6 +46,9 @@ export function registerAskTool(pi: ExtensionAPI): void {
     label: "Ask user",
     description: "Ask the user one or more questions and return their answers. Supports free text, single choice, and multiple choice. Use when you need clarification or a decision before continuing.",
     promptSnippet: "Ask the user one or more clarifying questions",
+    promptGuidelines: [
+      "Before acting on a prompt, ensure you fully understand the user's intent — if ambiguous, ask clarifying questions using the ask tool.",
+    ],
     parameters: Type.Object({
       questions: Type.Array(askQuestionSchema, { minItems: 1, description: "Questions to ask. User navigates between them with Tab / Shift+Tab." }),
     }),

@@ -57,7 +57,7 @@ const BASE_GUIDANCE = [
   "## Decorated Pi Guidance",
   "",
   "### Workflow, how to approach tasks",
-  "- Before acting on a prompt: 1. ensure you fully understand the user's intent — if ambiguous, ask clarifying questions; 2. have researched the existing state — read files, search, investigate. Proceed only when both are clear.",
+  "- Before acting on a prompt, do sufficient research on the existing state — read files, search, investigate — and only proceed once you have a clear picture.",
   "- Exercise caution when performing any **write** operations, especially when you are in a research or exploration phase.",
   "- Before modifying code, match the user's existing code style (naming, formatting, patterns). Do not re-modify lines the user has manually edited since your last change.",
   "",
