@@ -73,7 +73,7 @@ Zero-config MCP client with built-in servers:
 | Exa | `exa_*` | `https://mcp.exa.ai/mcp` |
 | codegraph | `codegraph_*` | bundled binary |
 
-**Custom servers** in `.pi/agent/mcp.json` (project) or `~/.pi/agent/decorated-pi.json` (global). Project overrides global. Tool prompts and schemas are cached locally so MCP tools are available immediately on startup — no manual `/reload` required even on first install.
+**Custom servers** in `.pi/agent/mcp.json` (project) or `~/.pi/agent/mcp.json` (global). Project overrides global. Tool prompts and schemas are cached locally so MCP tools are available immediately on startup.
 
 ```json
 {
@@ -135,7 +135,8 @@ Runtime settings in `~/.pi/agent/decorated-pi.json`. Modules can be toggled via 
     "lsp": true,
     "smart-at": true,
     "mcp": true,
-    "wakatime": true
+    "wakatime": true,
+    "ask": false
   }
 }
 ```

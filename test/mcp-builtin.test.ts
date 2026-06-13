@@ -20,6 +20,7 @@ import {
   loadGlobalMcpConfigs,
   resolveMcpConfigs,
   toggleMcpServerEnabled,
+  migrateLegacyGlobalMcpConfig,
   BUILTIN_MCP_SERVERS,
 } from "../tools/mcp/config.js";
 import {
@@ -53,12 +54,14 @@ function rmrf(dir: string): void {
 }
 
 // ─── Config file mock ────────────────────────────────────────────────────────
-// loadGlobalMcpConfigs reads from ~/.pi/agent/decorated-pi.json via loadConfig().
-// We intercept the module's loadConfig via vi.mock to avoid touching real config.
+// loadGlobalMcpConfigs reads from ~/.pi/agent/mcp.json.
+// We backup/restore the real file around each test.
 
 const CONFIG_DIR = path.join(os.homedir(), ".pi", "agent");
-const CONFIG_FILE = path.join(CONFIG_DIR, "decorated-pi.json");
+const CONFIG_FILE = path.join(CONFIG_DIR, "mcp.json");
+const LEGACY_CONFIG_FILE = path.join(CONFIG_DIR, "decorated-pi.json");
 let globalConfigBackup: string | null = null;
+let legacyConfigBackup: string | null = null;
 
 function backupGlobalConfig() {
   try {
@@ -71,6 +74,16 @@ function backupGlobalConfig() {
   } catch {
     globalConfigBackup = null;
   }
+  try {
+    if (fs.existsSync(LEGACY_CONFIG_FILE)) {
+      legacyConfigBackup = fs.readFileSync(LEGACY_CONFIG_FILE, "utf-8");
+      fs.unlinkSync(LEGACY_CONFIG_FILE);
+    } else {
+      legacyConfigBackup = null;
+    }
+  } catch {
+    legacyConfigBackup = null;
+  }
 }
 
 function restoreGlobalConfig() {
@@ -79,6 +92,13 @@ function restoreGlobalConfig() {
     if (globalConfigBackup !== null) {
       if (!fs.existsSync(CONFIG_DIR)) fs.mkdirSync(CONFIG_DIR, { recursive: true });
       fs.writeFileSync(CONFIG_FILE, globalConfigBackup, "utf-8");
+    }
+  } catch { /* best effort */ }
+  try {
+    if (fs.existsSync(LEGACY_CONFIG_FILE)) fs.unlinkSync(LEGACY_CONFIG_FILE);
+    if (legacyConfigBackup !== null) {
+      if (!fs.existsSync(CONFIG_DIR)) fs.mkdirSync(CONFIG_DIR, { recursive: true });
+      fs.writeFileSync(LEGACY_CONFIG_FILE, legacyConfigBackup, "utf-8");
     }
   } catch { /* best effort */ }
 }
@@ -294,6 +314,71 @@ describe("loadGlobalMcpConfigs", () => {
     });
     const configs = loadGlobalMcpConfigs();
     expect(configs.map((c) => c.name).sort()).toEqual(["global-http", "global-sse"]);
+  });
+
+  it("migrates legacy config from decorated-pi.json", () => {
+    // Ensure the new file does not exist and the legacy file has mcpServers.
+    if (fs.existsSync(CONFIG_FILE)) fs.unlinkSync(CONFIG_FILE);
+    const legacy = { modules: { mcp: true }, mcpServers: { "legacy-server": { url: "http://legacy/mcp" } } };
+    writeJson(LEGACY_CONFIG_FILE, legacy);
+
+    migrateLegacyGlobalMcpConfig();
+
+    // New file created
+    expect(fs.existsSync(CONFIG_FILE)).toBe(true);
+    const migrated = JSON.parse(fs.readFileSync(CONFIG_FILE, "utf-8"));
+    expect(migrated.mcpServers["legacy-server"].url).toBe("http://legacy/mcp");
+
+    // Legacy file cleaned
+    const cleaned = JSON.parse(fs.readFileSync(LEGACY_CONFIG_FILE, "utf-8"));
+    expect(cleaned.mcpServers).toBeUndefined();
+    expect(cleaned.modules?.mcp).toBe(true);
+  });
+
+  it("does not overwrite existing same-named entries in mcp.json", () => {
+    // Pre-populate mcp.json with a "shared" server.
+    writeJson(CONFIG_FILE, {
+      mcpServers: {
+        shared: { url: "http://new-version/mcp", enabled: true },
+      },
+    });
+    // Legacy has both "shared" and "new-from-legacy".
+    const legacy = {
+      mcpServers: {
+        shared: { url: "http://old-version/mcp", enabled: false },
+        "new-from-legacy": { url: "http://legacy/mcp" },
+      },
+    };
+    writeJson(LEGACY_CONFIG_FILE, legacy);
+
+    migrateLegacyGlobalMcpConfig();
+
+    const migrated = JSON.parse(fs.readFileSync(CONFIG_FILE, "utf-8"));
+    // "shared" keeps the new file's version
+    expect(migrated.mcpServers["shared"].url).toBe("http://new-version/mcp");
+    expect(migrated.mcpServers["shared"].enabled).toBe(true);
+    // "new-from-legacy" is added
+    expect(migrated.mcpServers["new-from-legacy"].url).toBe("http://legacy/mcp");
+  });
+
+  it("is a no-op when legacy has no mcpServers", () => {
+    if (fs.existsSync(CONFIG_FILE)) fs.unlinkSync(CONFIG_FILE);
+    writeJson(LEGACY_CONFIG_FILE, { modules: { mcp: true } });
+
+    migrateLegacyGlobalMcpConfig();
+
+    expect(fs.existsSync(CONFIG_FILE)).toBe(false);
+    const legacy = JSON.parse(fs.readFileSync(LEGACY_CONFIG_FILE, "utf-8"));
+    expect(legacy.modules?.mcp).toBe(true);
+  });
+
+  it("is a no-op when legacy mcpServers is empty", () => {
+    if (fs.existsSync(CONFIG_FILE)) fs.unlinkSync(CONFIG_FILE);
+    writeJson(LEGACY_CONFIG_FILE, { mcpServers: {} });
+
+    migrateLegacyGlobalMcpConfig();
+
+    expect(fs.existsSync(CONFIG_FILE)).toBe(false);
   });
 });
 
@@ -765,21 +850,21 @@ describe("toggleMcpServerEnabled", () => {
 
   // Regression test for the `require("../settings.js")` ESM bug that
   // made global toggles fail silently (UI showed "Failed to toggle").
-  it("toggles a global server (writes to ~/.pi/agent/decorated-pi.json)", () => {
-    const CONFIG_FILE = path.join(os.homedir(), ".pi/agent/decorated-pi.json");
-    const original = fs.existsSync(CONFIG_FILE)
-      ? fs.readFileSync(CONFIG_FILE, "utf-8")
+  it("toggles a global server (writes to ~/.pi/agent/mcp.json)", () => {
+    const GLOBAL_MCP_FILE = path.join(os.homedir(), ".pi/agent/mcp.json");
+    const original = fs.existsSync(GLOBAL_MCP_FILE)
+      ? fs.readFileSync(GLOBAL_MCP_FILE, "utf-8")
       : null;
     try {
       const result = toggleMcpServerEnabled("context7", false, "global");
       expect(result).toBe(true);
-      const loaded = JSON.parse(fs.readFileSync(CONFIG_FILE, "utf-8"));
+      const loaded = JSON.parse(fs.readFileSync(GLOBAL_MCP_FILE, "utf-8"));
       expect(loaded.mcpServers?.["context7"]?.enabled).toBe(false);
     } finally {
       if (original === null) {
-        try { fs.unlinkSync(CONFIG_FILE); } catch {}
+        try { fs.unlinkSync(GLOBAL_MCP_FILE); } catch {}
       } else {
-        fs.writeFileSync(CONFIG_FILE, original, "utf-8");
+        fs.writeFileSync(GLOBAL_MCP_FILE, original, "utf-8");
       }
     }
   });

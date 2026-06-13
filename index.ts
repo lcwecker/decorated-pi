@@ -37,7 +37,7 @@ import { registerPatchTool } from "./tools/patch/index.js";
 import { registerLspTools } from "./tools/lsp/tools.js";
 import { LspServerManager } from "./tools/lsp/manager.js";
 import { registerAskTool } from "./tools/ask/index.js";
-import { resolveMcpConfigs } from "./tools/mcp/config.js";
+import { resolveMcpConfigs, migrateLegacyGlobalMcpConfig } from "./tools/mcp/config.js";
 import { ensureMcpServerReady } from "./hooks/mcp.js";
 import { CODEGRAPH_GUIDANCE } from "./tools/mcp/builtin/codegraph.js";
 
@@ -67,16 +67,19 @@ const BASE_GUIDANCE = [
 ].join("\n");
 
 /** Build the list of guideline strings to inject, in prompt order.
- *  Always-on rules first, then per-module guidelines (skipping disabled
- *  modules). Add new per-module guidelines by importing the constant
- *  here and pushing it inside an `isModuleEnabled(...)` guard. */
+ *  Always-on rules first, then per-module guidelines. CodeGraph guidance
+ *  follows the MCP server switch chain: mcp module on → codegraph server
+ *  on → guidance injected. The mcp module check lives in
+ *  `resolveMcpConfigs`, so this code only needs to look at the server's
+ *  own `enabled` flag. */
 function buildGuidelines(): string[] {
   const out: string[] = [
     BASE_GUIDANCE,
     REDACT_GUIDANCE,             // from hooks/redact.ts — always on (safety module)
     INJECT_AGENTS_MD_GUIDANCE,   // from hooks/inject-agents-md.ts — always on (smart-at module)
   ];
-  if (isModuleEnabled("codegraph")) out.push(CODEGRAPH_GUIDANCE);
+  const codegraph = resolveMcpConfigs(process.cwd()).find((c) => c.name === "codegraph");
+  if (codegraph?.enabled) out.push(CODEGRAPH_GUIDANCE);
   return out;
 }
 
@@ -128,10 +131,14 @@ export default async function (pi: ExtensionAPI) {
   if (isModuleEnabled("lsp")) registerLspTools(pi, new LspServerManager());
   if (isModuleEnabled("ask")) registerAskTool(pi);
 
-  // MCP: hook AND tool are gated together. Disabling the module
-  // means no session_start handler runs, no tools register, and no
-  // background connections are attempted.
+  // MCP: hook, tools, and /mcp command are gated together. Disabling the
+  // module means no session_start handler runs, no tools register, no
+  // /mcp command is available, and no background connections are attempted.
   if (isModuleEnabled("mcp")) {
+    // One-time migration: legacy global MCP configs in
+    // ~/.pi/agent/decorated-pi.json move to ~/.pi/agent/mcp.json. Run
+    // explicitly here so `loadGlobalMcpConfigs` stays pure.
+    migrateLegacyGlobalMcpConfig();
     sk.register(mcpModule);
     const configs = resolveMcpConfigs(process.cwd()).filter(s => s.enabled);
     // Per-server readiness: cache hit → register from cache (fast).
@@ -140,6 +147,7 @@ export default async function (pi: ExtensionAPI) {
     for (const config of configs) {
       await ensureMcpServerReady(pi, config, process.cwd());
     }
+    registerMcpStatusCommand(pi);
   }
 
   // ── System-prompt guidelines (single handler, array order = prompt order) ──
@@ -148,7 +156,6 @@ export default async function (pi: ExtensionAPI) {
   // ── Commands ──────────────────────────────────────────────────────────
   registerDpModelCommand(pi);
   registerDpSettingsCommand(pi);
-  registerMcpStatusCommand(pi);
   registerRetryCommand(pi);
   registerUsageCommand(pi);
 

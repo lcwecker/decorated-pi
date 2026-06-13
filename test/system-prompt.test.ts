@@ -106,9 +106,8 @@ describe("sortSystemPromptOptions", () => {
   });
 });
 
-// ─── Decorated Pi Guidance: main block in hooks/skeleton.ts + codegraph conditional ──────────
+// ─── Decorated Pi Guidance: main block + codegraph follows MCP server switch ──────────
 
-import { isCodegraphModuleEnabled, getAllModuleSettings, setModuleEnabled } from "../settings.js";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
@@ -155,28 +154,14 @@ describe("Decorated Pi Guidance structure", () => {
     expect(src).toMatch(/CODEGRAPH_GUIDANCE/);
     expect(src).toMatch(/buildGuidelines/);
   });
-});
 
-describe.sequential("isCodegraphModuleEnabled", () => {
-  let tmpDir: string;
-  let prevModuleState: boolean;
-
-  beforeEach(() => {
-    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "codegraph-active-"));
-    prevModuleState = getAllModuleSettings().codegraph;
-    setModuleEnabled("codegraph", false);
-  });
-  afterEach(() => {
-    fs.rmSync(tmpDir, { recursive: true, force: true });
-    setModuleEnabled("codegraph", prevModuleState ?? false);
-  });
-
-  it("returns false on a fresh project (module off by default)", () => {
-    expect(isCodegraphModuleEnabled()).toBe(false);
-  });
-
-  it("returns true when module is on (no .codegraph/ probe needed)", () => {
-    setModuleEnabled("codegraph", true);
-    expect(isCodegraphModuleEnabled()).toBe(true);
+  it("CODEGRAPH_GUIDANCE is gated on resolveMcpConfigs codegraph enabled", () => {
+    const src = fs.readFileSync(
+      path.join(import.meta.dirname, "../index.ts"),
+      "utf-8",
+    );
+    expect(src).toMatch(/resolveMcpConfigs\(process\.cwd\(\)\)/);
+    expect(src).toMatch(/c\.name === "codegraph"/);
+    expect(src).not.toMatch(/isModuleEnabled\(["']codegraph["']\)/);
   });
 });

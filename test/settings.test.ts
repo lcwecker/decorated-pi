@@ -144,12 +144,10 @@ describe("Module Settings", () => {
     expect(settings["smart-at"]).toBe(true);
   });
 
-  it("defaults codegraph to DISABLED (opt-in, unlike the rest)", () => {
-    // codegraph pulls in a heavy bundled Node runtime and a per-project
-    // SQLite DB; defaulting to on would surprise users who never asked
-    // for it. /dp-settings must therefore show it as "off" out of the box.
-    expect(getAllModuleSettings().codegraph).toBe(false);
-    expect(isModuleEnabled("codegraph")).toBe(false);
+  it("does not expose codegraph as a module switch", () => {
+    // codegraph is now just an MCP server, not a top-level module toggle.
+    const settings = getAllModuleSettings();
+    expect("codegraph" in settings).toBe(false);
   });
 
   it("isModuleEnabled returns true by default", () => {

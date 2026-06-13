@@ -1,25 +1,21 @@
 /**
  * codegraph builtin MCP server — config + system-prompt guidance.
  *
- * Injected by `index.ts` → `buildGuidelines()` when the codegraph
- * module is enabled (see `isModuleEnabled("codegraph")` in settings).
+ * Enabled state is controlled like any other MCP server: through the
+ * MCP config (global `~/.pi/agent/mcp.json` under `mcpServers`, or
+ * project `.pi/agent/mcp.json`) or via the `/mcp` command. There is no
+ * separate /dp-settings toggle; codegraph is just one MCP server.
  */
 import type { McpServerConfig } from "../config.js";
-import { isCodegraphModuleEnabled } from "../../../settings.js";
 
 export const CODEGRAPH_BUILTIN: Omit<McpServerConfig, "source"> = {
     name: "codegraph",
     command: "codegraph",
     args: ["serve", "--mcp"],
-    enabled: false, // overridden by isCodegraphModuleEnabled() at resolve time
+    enabled: false,
     description:
-        "Local code knowledge graph (colbymchenry/codegraph). Enable via /dp-settings.",
+        "Local code knowledge graph (colbymchenry/codegraph). Enable via /mcp.",
 };
-
-/** Predicate for `resolveMcpConfigs` to gate the codegraph server. */
-export function codegraphEnabled(): boolean {
-    return isCodegraphModuleEnabled();
-}
 
 export const CODEGRAPH_GUIDANCE = [
     "### CodeGraph, code source map",

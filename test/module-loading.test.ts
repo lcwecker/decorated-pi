@@ -206,11 +206,14 @@ describe("index.ts — conditional loading structure (new architecture)", () => 
     expect(indexSrc).not.toMatch(/isModuleEnabled\(["']smart-at["']\)/);
   });
 
-  it("always loads commands (no gating)", () => {
+  it("always loads non-MCP commands (no gating)", () => {
     expect(indexSrc).toContain("registerDpModelCommand");
     expect(indexSrc).toContain("registerDpSettingsCommand");
-    expect(indexSrc).toContain("registerMcpStatusCommand");
     expect(indexSrc).toContain("registerRetryCommand");
+  });
+
+  it("gates /mcp command behind isModuleEnabled(mcp)", () => {
+    expect(indexSrc).toMatch(/if\s*\(\s*isModuleEnabled\(["']mcp["']\)\s*\)[\s\S]*?registerMcpStatusCommand\(pi\)/);
   });
 
   it("imports isModuleEnabled from settings", () => {

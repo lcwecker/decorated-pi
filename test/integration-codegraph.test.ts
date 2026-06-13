@@ -1,58 +1,79 @@
 /**
  * End-to-end integration smoke test for codegraph.
- * Validates the full chain: dp-settings → module flag → guidance → MCP broker.
+ *
+ * Codegraph is now just an MCP server. The chain is:
+ *   mcp module on → codegraph server enabled in mcp config → guidance injected.
  *
  * Uses `process.cwd()` so the test works regardless of where the
- * decorated-pi repo is checked out. Each test sets a deterministic
- * module state via `setModuleEnabled` and restores it in `afterEach`.
- *
- * The global `mcpServers.codegraph` entry in the user's
- * `~/.pi/agent/decorated-pi.json` would override the builtin codegraph
- * entry with `source: "global"` and a user-controlled `enabled` flag,
- * polluting these tests. We snapshot+strip `mcpServers` in `beforeEach`
- * and restore it in `afterEach` so the suite is independent of the
- * user's actual config.
+ * decorated-pi repo is checked out. We snapshot the global
+ * `~/.pi/agent/mcp.json` and temporarily write an
+ * `mcpServers.codegraph` entry to drive the builtin server state.
  */
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { isModuleEnabled, setModuleEnabled, getAllModuleSettings } from "../settings.js";
-import { resolveMcpConfigs, BUILTIN_MCP_SERVERS } from "../tools/mcp/config.js";
+import {
+  resolveMcpConfigs,
+  BUILTIN_MCP_SERVERS,
+} from "../tools/mcp/config.js";
+import { setModuleEnabled } from "../settings.js";
 
 const PROJECT_CWD = process.cwd();
-const CONFIG_FILE = path.join(os.homedir(), ".pi", "agent", "decorated-pi.json");
+const CONFIG_DIR = path.join(os.homedir(), ".pi", "agent");
+const CONFIG_FILE = path.join(CONFIG_DIR, "mcp.json");
+const LEGACY_CONFIG_FILE = path.join(CONFIG_DIR, "decorated-pi.json");
+
+function writeCodegraphEnabled(enabled: boolean): void {
+  let parsed: Record<string, any> = {};
+  if (fs.existsSync(CONFIG_FILE)) {
+    parsed = JSON.parse(fs.readFileSync(CONFIG_FILE, "utf-8"));
+  }
+  parsed.mcpServers = parsed.mcpServers || {};
+  parsed.mcpServers.codegraph = { enabled };
+  const dir = path.dirname(CONFIG_FILE);
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(CONFIG_FILE, JSON.stringify(parsed, null, 2) + "\n", "utf-8");
+}
 
 describe.sequential("codegraph end-to-end integration", () => {
-  let prevModuleState: boolean | undefined;
   let prevConfigRaw: string | null = null;
+  let prevLegacyRaw: string | null = null;
   let hadConfig = false;
+  let hadLegacyConfig = false;
 
   beforeEach(() => {
-    prevModuleState = getAllModuleSettings().codegraph;
-    // Snapshot and strip `mcpServers` from the global config so it
-    // doesn't override the builtin codegraph entry.
     if (fs.existsSync(CONFIG_FILE)) {
       hadConfig = true;
       prevConfigRaw = fs.readFileSync(CONFIG_FILE, "utf-8");
-      const parsed = JSON.parse(prevConfigRaw);
-      delete parsed.mcpServers;
-      fs.writeFileSync(CONFIG_FILE, JSON.stringify(parsed, null, 2) + "\n", "utf-8");
+      fs.unlinkSync(CONFIG_FILE);
     } else {
       hadConfig = false;
       prevConfigRaw = null;
     }
+    if (fs.existsSync(LEGACY_CONFIG_FILE)) {
+      hadLegacyConfig = true;
+      prevLegacyRaw = fs.readFileSync(LEGACY_CONFIG_FILE, "utf-8");
+      const parsed = JSON.parse(prevLegacyRaw);
+      delete parsed.mcpServers;
+      fs.writeFileSync(LEGACY_CONFIG_FILE, JSON.stringify(parsed, null, 2) + "\n", "utf-8");
+    } else {
+      hadLegacyConfig = false;
+      prevLegacyRaw = null;
+    }
   });
+
   afterEach(() => {
     if (hadConfig && prevConfigRaw !== null) {
       fs.writeFileSync(CONFIG_FILE, prevConfigRaw, "utf-8");
+    } else if (fs.existsSync(CONFIG_FILE)) {
+      fs.unlinkSync(CONFIG_FILE);
     }
-    setModuleEnabled("codegraph", prevModuleState ?? false);
-  });
-
-  it("module flag reads from dp-settings (set ON for this test)", () => {
-    setModuleEnabled("codegraph", true);
-    expect(isModuleEnabled("codegraph")).toBe(true);
+    if (hadLegacyConfig && prevLegacyRaw !== null) {
+      fs.writeFileSync(LEGACY_CONFIG_FILE, prevLegacyRaw, "utf-8");
+    } else if (fs.existsSync(LEGACY_CONFIG_FILE)) {
+      fs.unlinkSync(LEGACY_CONFIG_FILE);
+    }
   });
 
   it("BUILTIN_MCP_SERVERS has the codegraph entry", () => {
@@ -62,21 +83,25 @@ describe.sequential("codegraph end-to-end integration", () => {
     expect(entry?.args).toEqual(["serve", "--mcp"]);
   });
 
-  it("resolveMcpConfigs returns the codegraph server enabled when module is on", () => {
-    setModuleEnabled("codegraph", true);
+  it("resolveMcpConfigs returns codegraph enabled when mcpServers.codegraph.enabled is true", () => {
+    writeCodegraphEnabled(true);
     const resolved = resolveMcpConfigs(PROJECT_CWD);
     const codegraph = resolved.find((s) => s.name === "codegraph");
     expect(codegraph).toBeDefined();
     expect(codegraph?.enabled).toBe(true);
-    expect(codegraph?.source).toBe("builtin");
   });
 
-  it("resolveMcpConfigs disables codegraph when module is off", () => {
-    setModuleEnabled("codegraph", false);
+  it("resolveMcpConfigs returns codegraph disabled by default", () => {
     const resolved = resolveMcpConfigs(PROJECT_CWD);
     const codegraph = resolved.find((s) => s.name === "codegraph");
     expect(codegraph).toBeDefined();
     expect(codegraph?.enabled).toBe(false);
+  });
+
+  it("resolveMcpConfigs returns empty when the mcp master switch is off", () => {
+    setModuleEnabled("mcp", false);
+    writeCodegraphEnabled(true);
+    expect(resolveMcpConfigs(PROJECT_CWD)).toEqual([]);
   });
 
   it("slash command is not registered", () => {
@@ -89,8 +114,9 @@ describe.sequential("codegraph end-to-end integration", () => {
   });
 
   it("system prompt has ### CodeGraph section, injected conditionally", () => {
-    // Guidance now lives in tools/mcp/builtin/codegraph.ts and is
-    // pushed into the guidelines array in index.ts when codegraph is enabled.
+    // Guidance lives in tools/mcp/builtin/codegraph.ts and is pushed
+    // into the guidelines array in index.ts when the codegraph server
+    // is enabled in the resolved MCP config.
     const src = fs.readFileSync(
       path.join(import.meta.dirname, "../tools/mcp/builtin/codegraph.ts"),
       "utf-8",

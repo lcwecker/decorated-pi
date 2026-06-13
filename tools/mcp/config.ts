@@ -5,16 +5,20 @@
  * hit sets defaults; later sources can override specific fields.
  *
  * Persistence locations:
- *   - global: `~/.pi/agent/decorated-pi.json` (under `mcpServers`)
+ *   - global: `~/.pi/agent/mcp.json` (under `mcpServers`)
  *   - project: `<cwd>/.pi/agent/mcp.json` (under `mcpServers`)
+ *
+ * Legacy: global MCP servers used to live in `~/.pi/agent/decorated-pi.json`
+ * under `mcpServers`. `loadGlobalMcpConfigs()` automatically migrates that
+ * data to `~/.pi/agent/mcp.json` on first read.
  */
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { spawnSync } from "node:child_process";
-import { loadConfig } from "../../settings.js";
+import { isModuleEnabled } from "../../settings.js";
 import type { DependencyStatus } from "../../hooks/skeleton.js";
-import { BUILTIN_MCP_SERVERS, codegraphEnabled } from "./builtin/index.js";
+import { BUILTIN_MCP_SERVERS } from "./builtin/index.js";
 
 export { BUILTIN_MCP_SERVERS } from "./builtin/index.js";
 
@@ -29,6 +33,10 @@ export interface McpServerConfig {
   source: "builtin" | "global" | "project";
 }
 
+function globalMcpJsonPath(): string {
+  return path.join(os.homedir(), ".pi", "agent", "mcp.json");
+}
+
 function readMcpJson(filePath: string): Record<string, { url?: string; command?: string; args?: string[]; env?: Record<string, string>; enabled?: boolean; description?: string }> | null {
   try {
     const raw = JSON.parse(fs.readFileSync(filePath, "utf-8"));
@@ -39,6 +47,64 @@ function readMcpJson(filePath: string): Record<string, { url?: string; command?:
   } catch {
     return null;
   }
+}
+
+/**
+ * One-time migration: older versions stored global MCP servers in
+ * `~/.pi/agent/decorated-pi.json` under `mcpServers`. Move that data to
+ * the dedicated `~/.pi/agent/mcp.json` file so global and project configs
+ * are symmetric.
+ *
+ * Rules:
+ *   - Only runs when the legacy file has at least one `mcpServers` entry.
+ *   - For each legacy server name, if `mcp.json` already has an entry with
+ *     the same name, the legacy entry is skipped (new file wins).
+ *   - Idempotent: after running once, the legacy file no longer has
+ *     `mcpServers`, so a second call is a no-op.
+ */
+export function migrateLegacyGlobalMcpConfig(): void {
+  const legacyPath = path.join(os.homedir(), ".pi", "agent", "decorated-pi.json");
+  const newPath = globalMcpJsonPath();
+
+  let legacy: Record<string, any> | null = null;
+  try {
+    legacy = JSON.parse(fs.readFileSync(legacyPath, "utf-8"));
+  } catch {
+    return;
+  }
+  if (!legacy || !legacy.mcpServers || typeof legacy.mcpServers !== "object") return;
+  if (Object.keys(legacy.mcpServers).length === 0) return;
+
+  // Load existing new file (if any). If it is corrupt, leave everything
+  // alone — safer than clobbering.
+  let newConfig: Record<string, any> = { mcpServers: {} };
+  if (fs.existsSync(newPath)) {
+    try {
+      const parsed = JSON.parse(fs.readFileSync(newPath, "utf-8"));
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+        newConfig = parsed;
+        if (!newConfig.mcpServers || typeof newConfig.mcpServers !== "object") {
+          newConfig.mcpServers = {};
+        }
+      }
+    } catch {
+      return;
+    }
+  }
+
+  // Merge: only add legacy entries that don't already exist in the new file.
+  for (const [name, entry] of Object.entries(legacy.mcpServers)) {
+    if (!(name in newConfig.mcpServers)) {
+      newConfig.mcpServers[name] = entry;
+    }
+  }
+
+  const dir = path.dirname(newPath);
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(newPath, JSON.stringify(newConfig, null, 2) + "\n", "utf-8");
+
+  delete legacy.mcpServers;
+  fs.writeFileSync(legacyPath, JSON.stringify(legacy, null, 2) + "\n", "utf-8");
 }
 
 /** Load project-level MCP configs from cwd only. */
@@ -69,18 +135,18 @@ export function loadProjectMcpConfigs(cwd: string): McpServerConfig[] {
   return configs;
 }
 
-/** Load global MCP configs from ~/.pi/agent/decorated-pi.json. */
+/** Load global MCP configs from ~/.pi/agent/mcp.json. */
 export function loadGlobalMcpConfigs(): McpServerConfig[] {
-  const config = loadConfig();
-  if (!config.mcpServers) return [];
+  const servers = readMcpJson(globalMcpJsonPath());
+  if (!servers) return [];
 
-  return Object.entries(config.mcpServers).map(([name, entry]) => ({
+  return Object.entries(servers).map(([name, entry]) => ({
     name,
     url: entry.url,
     command: entry.command,
     args: entry.args,
     env: entry.env,
-    description: (entry as any).description as string | undefined,
+    description: entry.description,
     enabled: entry.enabled !== false,
     source: "global" as const,
   }));
@@ -96,16 +162,17 @@ export function isSseUrl(url: string): boolean {
  * Later sources override earlier ones for the same server name.
  */
 export function resolveMcpConfigs(cwd: string): McpServerConfig[] {
+  // The mcp module switch is the master switch. When it is off, no MCP
+  // server config is considered active — this keeps the chain simple:
+  // mcp off → all servers off → no codegraph guidance.
+  if (!isModuleEnabled("mcp")) return [];
+
   const byName = new Map<string, McpServerConfig>();
 
-  // Builtin (lowest priority). The codegraph entry's `enabled` flag is
-  // computed at resolve time from the dp-settings module toggle.
+  // Builtin (lowest priority). Use the builtin's own `enabled` default.
+  // Servers can be enabled via the `/mcp` command or by editing mcp.json.
   for (const s of BUILTIN_MCP_SERVERS) {
-    if (s.name === "codegraph") {
-      byName.set(s.name, { ...s, enabled: codegraphEnabled(), source: "builtin" });
-    } else {
-      byName.set(s.name, { ...s, source: "builtin" });
-    }
+    byName.set(s.name, { ...s, source: "builtin" });
   }
 
   // Global — preserve url/command/description from builtin if not overridden
@@ -201,13 +268,14 @@ export function toggleMcpServerEnabled(
       if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
       fs.writeFileSync(filePath, JSON.stringify(raw, null, 2) + "\n", "utf-8");
     } else {
-      const config = loadConfig();
-      config.mcpServers = config.mcpServers || {};
-      config.mcpServers[serverName] = { ...(config.mcpServers[serverName] || {}), enabled };
-      const configPath = path.join(os.homedir(), ".pi/agent/decorated-pi.json");
-      const dir = path.dirname(configPath);
+      const filePath = globalMcpJsonPath();
+      const raw = readMcpJsonSafe(filePath) || { mcpServers: {} };
+      const servers = raw.mcpServers ?? {};
+      servers[serverName] = { ...(servers[serverName] || {}), enabled };
+      raw.mcpServers = servers;
+      const dir = path.dirname(filePath);
       if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-      fs.writeFileSync(configPath, JSON.stringify(config, null, 2) + "\n", "utf-8");
+      fs.writeFileSync(filePath, JSON.stringify(raw, null, 2) + "\n", "utf-8");
     }
     return true;
   } catch {

@@ -42,9 +42,7 @@ export interface ModuleSettings {
   mcp?: boolean;
   wakatime?: boolean;
   "rtk"?: boolean;
-  codegraph?: boolean;
   ask?: boolean;
-  todo?: boolean;
 }
 
 export interface UsageIndexEntry {
@@ -161,9 +159,7 @@ const DEFAULT_MODULES: Required<ModuleSettings> = {
   mcp: true,
   wakatime: true,
   "rtk": true,
-  codegraph: false,  // opt-in: heavy binary, not everyone wants it
   ask: false,        // opt-in: blocks agent loop waiting for user input
-  todo: false,       // opt-in: session management tool
 };
 
 export function isModuleEnabled(name: keyof ModuleSettings): boolean {
@@ -180,18 +176,6 @@ export function setModuleEnabled(name: keyof ModuleSettings, enabled: boolean) {
 export function getAllModuleSettings(): Required<ModuleSettings> {
   const modules = loadConfig().modules ?? {};
   return { ...DEFAULT_MODULES, ...modules };
-}
-
-// ─── Codegraph (drives the builtin MCP server's auto-enable) ───────────────
-
-/**
- * True when the user has enabled the codegraph module via /dp-settings.
- * Default is OFF (opt-in) — `modules.codegraph` defaults to `false`.
- * When true, the builtin MCP server is enabled and the CodeGraph
- * guidance section is injected into the system prompt.
- */
-export function isCodegraphModuleEnabled(): boolean {
-  return isModuleEnabled("codegraph");
 }
 
 // ─── Usage index (增量同步元数据) ─────────────────────────────────────────────

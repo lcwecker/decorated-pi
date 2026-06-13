@@ -15,9 +15,7 @@ const MODULE_LABELS: Record<keyof ModuleSettings, string> = {
   mcp: "MCP",
   wakatime: "WakaTime",
   "rtk": "RTK",
-  "codegraph": "Codegraph",
   ask: "Ask",
-  todo: "Todo",
 };
 
 const MODULE_DESCS: Record<keyof ModuleSettings, string> = {
@@ -25,12 +23,10 @@ const MODULE_DESCS: Record<keyof ModuleSettings, string> = {
   safety: "Redact secrets from read / bash output before they enter model context",
   lsp: "Language server diagnostics, hover, definition, references, symbols, rename",
   "smart-at": "Project-aware file search replacing default autocomplete",
-  mcp: "MCP client for context7 and exa (zero-config)",
+  mcp: "MCP client with builtin servers (context7, exa, codegraph)",
   wakatime: "Send coding activity heartbeats to WakaTime",
   "rtk": "Rewrite bash through system RTK when available",
-  "codegraph": "Codegraph MCP server for code structure queries",
   ask: "Interactive ask tool for user clarification (blocks loop until answered)",
-  todo: "Session todo list management tool",
 };
 
 class DynamicBorder implements Component {
