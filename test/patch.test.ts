@@ -1002,3 +1002,231 @@ describe("diff display: leading whitespace", () => {
     expect(p.error).toBeTruthy();
   });
 });
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Diff display: hunk line numbers must be consistent
+// ═══════════════════════════════════════════════════════════════════════════
+
+function assertHeaderCoversBody(diff: string | undefined) {
+  expect(diff).toBeTruthy();
+  const lines = (diff ?? "").split("\n");
+
+  // Parse the hunk header, e.g. "@@ lines 6-13 @@".
+  const headerLine = lines.find((l) => l.startsWith("@@ lines"));
+  expect(headerLine).toBeTruthy();
+  const match = headerLine!.match(/@@ lines (\d+)-(\d+) @@/);
+  expect(match).toBeTruthy();
+  const headerStart = parseInt(match![1], 10);
+  const headerEnd = parseInt(match![2], 10);
+
+  // Collect every line number that appears in the diff body.
+  const bodyLineNumbers: number[] = [];
+  for (const line of lines) {
+    const m = line.match(/^[-+ ]?(\d+) /);
+    if (m) bodyLineNumbers.push(parseInt(m[1], 10));
+  }
+
+  const minBodyLine = Math.min(...bodyLineNumbers);
+  const maxBodyLine = Math.max(...bodyLineNumbers);
+
+  // The header range must cover the full span of displayed line numbers.
+  expect(headerStart).toBeLessThanOrEqual(minBodyLine);
+  expect(headerEnd).toBeGreaterThanOrEqual(maxBodyLine);
+}
+
+describe("diff display: hunk line-number consistency", () => {
+  let tmpDir: string;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "patch-lineno-"));
+  });
+
+  afterEach(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+
+  it("hunk header range must cover all displayed line numbers (preview path)", async () => {
+    // Reproduce a codegraph-style edit: replace a multi-line comment
+    // block near the top of a file. Removed lines keep old-file numbers
+    // while added/context lines use new-file numbers; the hunk header
+    // must still cover every displayed line number.
+    const original = [
+      "/**",
+      " * codegraph builtin MCP server — config + project artefact check.",
+      " *",
+      " * Enabled state is controlled like any other MCP server: through the",
+      " * MCP config (global `~/.pi/agent/mcp.json` under `mcpServers`, or",
+      " * project `.pi/agent/mcp.json`) or via the `/mcp` command. There is no",
+      " * separate /dp-settings toggle; codegraph is just one MCP server.",
+      " *",
+      " * Each tool's MCP `description` is injected into the system-prompt",
+      " * Guidelines section via `promptGuidelines`, so no separate system-prompt",
+      " * block is needed.",
+      " */",
+      "import * as fs from \"node:fs\";",
+      "import * as path from \"node:path\";",
+      "import { resolveMcpConfigs } from \"../config.js\";",
+      "import type { McpServerConfig } from \"../config.js\";",
+      "",
+      "export const CODEGRAPH_BUILTIN: Omit<McpServerConfig, \"source\"> = {",
+    ].join("\n") + "\n";
+
+    fs.writeFileSync(path.join(tmpDir, "f.txt"), original);
+
+    const oldStr = [
+      " * Each tool's MCP `description` is injected into the system-prompt",
+      " * Guidelines section via `promptGuidelines`, so no separate system-prompt",
+      " * block is needed.",
+      "",
+    ].join("\n");
+
+    const newStr = [
+      " * Each tool's MCP `description` is shown verbatim in the system prompt,",
+      " * so no hand-written CodeGraph guidance block is needed.",
+      "",
+    ].join("\n");
+
+    const p = await computePatchPreview(
+      { path: "f.txt", edits: [{ old_str: oldStr, new_str: newStr }] },
+      tmpDir,
+    );
+    assertHeaderCoversBody(p.diff);
+  });
+
+  it("hunk header range must cover all displayed line numbers (execute path)", async () => {
+    const original = [
+      "/**",
+      " * codegraph builtin MCP server — config + project artefact check.",
+      " *",
+      " * Enabled state is controlled like any other MCP server: through the",
+      " * MCP config (global `~/.pi/agent/mcp.json` under `mcpServers`, or",
+      " * project `.pi/agent/mcp.json`) or via the `/mcp` command. There is no",
+      " * separate /dp-settings toggle; codegraph is just one MCP server.",
+      " *",
+      " * Each tool's MCP `description` is injected into the system-prompt",
+      " * Guidelines section via `promptGuidelines`, so no separate system-prompt",
+      " * block is needed.",
+      " */",
+      "import * as fs from \"node:fs\";",
+      "import * as path from \"node:path\";",
+      "import { resolveMcpConfigs } from \"../config.js\";",
+      "import type { McpServerConfig } from \"../config.js\";",
+      "",
+      "export const CODEGRAPH_BUILTIN: Omit<McpServerConfig, \"source\"> = {",
+    ].join("\n") + "\n";
+
+    fs.writeFileSync(path.join(tmpDir, "f.txt"), original);
+
+    const oldStr = [
+      " * Each tool's MCP `description` is injected into the system-prompt",
+      " * Guidelines section via `promptGuidelines`, so no separate system-prompt",
+      " * block is needed.",
+      "",
+    ].join("\n");
+
+    const newStr = [
+      " * Each tool's MCP `description` is shown verbatim in the system prompt,",
+      " * so no hand-written CodeGraph guidance block is needed.",
+      "",
+    ].join("\n");
+
+    const result = await applyPatch(
+      { path: "f.txt", edits: [{ old_str: oldStr, new_str: newStr }] },
+      tmpDir,
+    );
+    assertHeaderCoversBody(result.diff);
+  });
+
+  it("line numbers stay consistent with CRLF line endings", async () => {
+    const original = "line1\r\nline2\r\nline3\r\nline4\r\n";
+    fs.writeFileSync(path.join(tmpDir, "f.txt"), original);
+    const p = await computePatchPreview(
+      { path: "f.txt", edits: [{ old_str: "line3", new_str: "line3_modified" }] },
+      tmpDir,
+    );
+    assertHeaderCoversBody(p.diff);
+  });
+
+  it("line numbers stay consistent without trailing newline", async () => {
+    const original = "line1\nline2\nline3\nline4"; // no trailing newline
+    fs.writeFileSync(path.join(tmpDir, "f.txt"), original);
+    const p = await computePatchPreview(
+      { path: "f.txt", edits: [{ old_str: "line3", new_str: "line3_modified" }] },
+      tmpDir,
+    );
+    assertHeaderCoversBody(p.diff);
+  });
+
+  it("line numbers stay consistent when old_str starts with a newline", async () => {
+    // LLM sometimes sends old_str that includes the preceding newline.
+    const original = "line1\nline2\nline3\nline4\n";
+    fs.writeFileSync(path.join(tmpDir, "f.txt"), original);
+    const p = await computePatchPreview(
+      { path: "f.txt", edits: [{ old_str: "\nline2\nline3", new_str: "\nline2_new\nline3_new" }] },
+      tmpDir,
+    );
+    assertHeaderCoversBody(p.diff);
+  });
+
+  it("line numbers stay consistent for multi-edit chained replacements", async () => {
+    const original = [
+      "/**",
+      " * header",
+      " */",
+      "const A = 1;",
+      "const B = 2;",
+      "const C = 3;",
+      "const D = 4;",
+    ].join("\n") + "\n";
+    fs.writeFileSync(path.join(tmpDir, "f.txt"), original);
+    const result = await applyPatch(
+      {
+        path: "f.txt",
+        edits: [
+          { old_str: "const A = 1;", new_str: "const A = 10;" },
+          { old_str: "const C = 3;", new_str: "const C = 30;" },
+        ],
+      },
+      tmpDir,
+    );
+    assertHeaderCoversBody(result.diff);
+  });
+
+  it("line numbers stay consistent when replacement is at the very end of file", async () => {
+    const original = "line1\nline2\nline3";
+    fs.writeFileSync(path.join(tmpDir, "f.txt"), original);
+    const p = await computePatchPreview(
+      { path: "f.txt", edits: [{ old_str: "line3", new_str: "line3_last" }] },
+      tmpDir,
+    );
+    assertHeaderCoversBody(p.diff);
+  });
+
+  it("line numbers stay consistent for index.ts-style single-line replacement", async () => {
+    // Exact file structure the user reported (before the wording patch).
+    const original = [
+      "",
+      "const BASE_GUIDANCE = [",
+      '  "## Decorated Pi Guidance",',
+      '  "",',
+      '  "### Workflow, how to approach tasks",',
+      '  "- Before acting on a prompt: 1. ensure you fully understand the user\'s intent — if ambiguous, ask clarifying questions; 2. have researched the existing state — read files, search, investigate. Proceed only when both are clear.",',
+      '  "- Exercise caution when performing any **write** operations, especially when you are in a research or exploration phase.",',
+      '  "- Before modifying code, match the user\'s existing code style (naming, formatting, patterns). Do not re-modify lines the user has manually edited since your last change.",',
+      '  "",',
+      '  "### Filesystem Safety, where NOT to write",',
+    ].join("\n") + "\n";
+
+    fs.writeFileSync(path.join(tmpDir, "index.ts"), original);
+
+    const oldStr = '  "- Before acting on a prompt: 1. ensure you fully understand the user\'s intent — if ambiguous, ask clarifying questions; 2. have researched the existing state — read files, search, investigate. Proceed only when both are clear.",';
+    const newStr = '  "- Before acting on a prompt, have researched the existing state — read files, search, investigate.",';
+
+    const p = await computePatchPreview(
+      { path: "index.ts", edits: [{ old_str: oldStr, new_str: newStr }] },
+      tmpDir,
+    );
+    assertHeaderCoversBody(p.diff);
+  });
+});

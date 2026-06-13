@@ -1076,11 +1076,17 @@ interface LineRange {
   endLine: number;
 }
 
-/** Build line offset table: offsets[i] = character offset of line i+1 (1-based) */
+/** Build line offset table: offsets[i] = character offset of line i+1 (1-based).
+ *  If the content does not end with a newline, the final line has no
+ *  trailing marker; push an extra offset at content.length so callers
+ *  like lineAtOffset / extractLineRange handle the last line correctly. */
 function buildLineOffsets(content: string): number[] {
   const offsets = [0];
   for (let i = 0; i < content.length; i++) {
     if (content[i] === "\n") offsets.push(i + 1);
+  }
+  if (content.length > 0 && content[content.length - 1] !== "\n") {
+    offsets.push(content.length);
   }
   return offsets;
 }
