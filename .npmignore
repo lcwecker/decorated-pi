@@ -2,3 +2,5 @@ test/
 vitest.config.ts
 .opencode/
 *.tgz
+AGENTS.md
+.codegraph/
