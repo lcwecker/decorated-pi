@@ -1,6 +1,6 @@
 {
     "name": "decorated-pi",
-    "version": "0.6.0",
+    "version": "0.7.0",
     "description": "decorated-pi is a practical enhancement pack for pi coding agent — token-efficient workflow, cache-friendly design, and smarter tools.",
     "keywords": [
         "pi",
@@ -10,8 +10,9 @@
         "mcp",
         "security",
         "lsp",
-        "language-server",
-        "secret-detection"
+        "lsp-client",
+        "secret-redaction",
+        "codegraph"
     ],
     "license": "MIT",
     "repository": {
