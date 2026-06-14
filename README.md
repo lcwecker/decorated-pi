@@ -18,7 +18,7 @@ Multiple layers of token savings that compound across every session. **All integ
 
 **RTK** — integrates [RTK](https://github.com/rtk-ai/rtk) to compress bash output into structured summaries, so the LLM never sees raw noise.
 
-**codegraph** — integrates [codegraph](https://github.com/colbymchenry/codegraph) to offer a code map of your project, so the LLM can navigate symbols and call graphs without chaining `ls` → `grep` → `read`.
+**Codegraph** — integrates [codegraph](https://github.com/colbymchenry/codegraph) to offer a code map of your project, so the LLM can navigate symbols and call graphs without chaining `ls` → `grep` → `read`.
 
 **Auxiliary Models** — offloads heavy-but-dumb tasks to cheaper models so your primary model only pays for the hard work:
 

@@ -36,8 +36,9 @@ import { setupRtk } from "./hooks/rtk.js";
 import { registerPatchTool } from "./tools/patch/index.js";
 import { registerLspTools } from "./tools/lsp/tools.js";
 import { LspServerManager } from "./tools/lsp/manager.js";
+import { collectLspDependencyStatuses } from "./tools/lsp/servers.js";
 import { registerAskTool } from "./tools/ask/index.js";
-import { resolveMcpConfigs, migrateLegacyGlobalMcpConfig } from "./tools/mcp/config.js";
+import { resolveMcpConfigs, migrateLegacyGlobalMcpConfig, collectMcpDependencyStatuses } from "./tools/mcp/config.js";
 import { ensureMcpServerReady } from "./hooks/mcp.js";
 
 import { registerDpModelCommand } from "./commands/dp-model.js";
@@ -130,7 +131,15 @@ export default async function (pi: ExtensionAPI) {
 
   // ── Tools (conditional on module switches) ────────────────────────────
   if (isModuleEnabled("patchOverrideEdit")) registerPatchTool(pi);
-  if (isModuleEnabled("lsp")) registerLspTools(pi, new LspServerManager());
+  if (isModuleEnabled("lsp")) {
+    registerLspTools(pi, new LspServerManager());
+    for (const dep of collectLspDependencyStatuses(process.cwd())) {
+      sk.declareDependency({
+        label: `lsp:${dep.label}`,
+        check: () => collectLspDependencyStatuses(process.cwd()).some((s) => s.label === dep.label && s.state === "ok"),
+      });
+    }
+  }
   if (isModuleEnabled("ask")) registerAskTool(pi);
 
   // MCP: hook, tools, and /mcp command are gated together. Disabling the
@@ -142,6 +151,12 @@ export default async function (pi: ExtensionAPI) {
     // explicitly here so `loadGlobalMcpConfigs` stays pure.
     migrateLegacyGlobalMcpConfig();
     sk.register(mcpModule);
+    for (const dep of collectMcpDependencyStatuses(process.cwd())) {
+      sk.declareDependency({
+        label: dep.module,
+        check: () => collectMcpDependencyStatuses(process.cwd()).some((s) => s.module === dep.module && s.state === "ok"),
+      });
+    }
     const configs = resolveMcpConfigs(process.cwd()).filter(s => s.enabled);
     // Per-server readiness: cache hit → register from cache (fast).
     // Cache miss → connect synchronously, write cache, then register

@@ -103,6 +103,7 @@ export function createSkeleton(): Skeleton {
   const modules: Module[] = [];
   const registry = new Map<HookEvent, Array<{ module: string; handler: (event: any, ctx: ExtensionContext, pi: ExtensionAPI) => any }>>();
   const dependencies: Dependency[] = [];
+  let dependencyNotifyTimer: ReturnType<typeof setTimeout> | undefined;
 
   function collect(mod: Module) {
     for (const [event, handlers] of Object.entries(mod.hooks)) {
@@ -146,21 +147,40 @@ export function createSkeleton(): Skeleton {
       }
 
       // Skeleton-owned: dependency check on session_start.
-      pi.on("session_start", async (_event: any, ctx: ExtensionContext) => {
+      // Defer with setTimeout(0) so the notification fires AFTER pi's
+      // startup/reload UI rebuild (rebuildChatFromMessages); otherwise it
+      // is appended to the chat and immediately wiped.
+      const runDependencyCheck = (ctx: ExtensionContext) => {
         if (!ctx.hasUI) return;
-        const hints: string[] = [];
-        let anyMissing = false;
-        for (const dep of dependencies) {
-          let ok = false;
-          try { ok = dep.check(); } catch { ok = false; }
-          if (!ok) {
-            anyMissing = true;
-            if (dep.hint) hints.push(`  [${dep.label}] ${dep.hint}`);
+        if (dependencyNotifyTimer) clearTimeout(dependencyNotifyTimer);
+        dependencyNotifyTimer = setTimeout(() => {
+          dependencyNotifyTimer = undefined;
+          const missing: string[] = [];
+          for (const dep of dependencies) {
+            let ok = false;
+            try { ok = dep.check(); } catch { ok = false; }
+            if (!ok) missing.push(dep.label);
           }
-        }
-        if (anyMissing) {
-          ctx.ui.notify(`[decorated-pi] missing dependencies:\n${hints.join("\n")}`, "info");
-        }
+          if (missing.length) {
+            try {
+              ctx.ui.notify(`[decorated-pi] missing dependencies: ${missing.join(", ")}`, "info");
+            } catch {
+              // Extension context may be stale if another reload/session switch happened.
+            }
+          }
+        }, 0);
+      };
+      pi.on("session_start", async (event: any, ctx: ExtensionContext) => {
+        // Only check on cold startup and explicit reload — other reasons
+        // (new/resume/fork) inherit the existing session's tool/runtime
+        // and don't need a fresh check.
+        if (event.reason !== "startup" && event.reason !== "reload") return;
+        runDependencyCheck(ctx);
+      });
+      pi.on("session_shutdown", async () => {
+        if (!dependencyNotifyTimer) return;
+        clearTimeout(dependencyNotifyTimer);
+        dependencyNotifyTimer = undefined;
       });
 
       // Skeleton-owned: system-prompt options sort for cache stability.
