@@ -71,7 +71,7 @@ describe("extension load smoke test", () => {
     // regardless of the user's real ~/.pi/agent/decorated-pi.json.
     const clean = {
       modules: {
-        tools: { patchOverrideEdit: true, ask: true, lsp: true, mcp: true },
+        tools: { patchOverrideEdit: true, ask: true, lsp: false, mcp: false },
         hooks: { secretRedaction: true, rtk: true, wakatime: true },
         commands: { atOverride: true, retry: true, usage: true },
       },
@@ -101,12 +101,14 @@ describe("extension load smoke test", () => {
     expect(() => mod.default(mockPi)).not.toThrow();
   });
 
-  it("registers the four slash commands", async () => {
+  it("registers the expected slash commands", async () => {
     const mod = await import("../index.js");
     const mockPi = makeMockPi();
     await mod.default(mockPi);
+    // With mcp disabled, /mcp is not registered. Core commands are always
+    // present: dp-model, dp-settings, retry. /usage is also enabled.
     expect(mockPi.log.commands).toEqual(
-      expect.arrayContaining(["dp-model", "dp-settings", "mcp", "retry"]),
+      expect.arrayContaining(["dp-model", "dp-settings", "retry"]),
     );
   });
 

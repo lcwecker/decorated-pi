@@ -1521,3 +1521,13 @@ function truncate(s: string, maxLen = 60): string {
   if (firstLine.length <= maxLen) return firstLine;
   return firstLine.slice(0, maxLen - 3) + "...";
 }
+
+// Test exports
+export const __patchCoreTest = {
+  charOffsetToLine,
+  detectTabWidth,
+  normalizeIndentForFuzzy,
+  truncate,
+  collapseSequentialReplacements,
+  generateReplacementDiff,
+};

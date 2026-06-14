@@ -82,9 +82,11 @@ export function loadConfig(): DecoratedPiConfig {
   try {
     if (fs.existsSync(CONFIG_FILE)) {
       const config = JSON.parse(fs.readFileSync(CONFIG_FILE, "utf-8")) as DecoratedPiConfig;
-      if (migrateModuleSettings(config)) {
-        saveConfig(config);
-      }
+      // Mutate in place. Do NOT call saveConfig here — saveConfig calls
+      // loadConfig first, which would re-trigger the migration (and the
+      // file on disk hasn't been written yet), causing deep recursion.
+      // The migrated shape is persisted on the next explicit saveConfig.
+      migrateModuleSettings(config);
       return config;
     }
   } catch {}

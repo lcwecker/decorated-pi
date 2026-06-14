@@ -1229,4 +1229,500 @@ describe("diff display: hunk line-number consistency", () => {
     );
     assertHeaderCoversBody(p.diff);
   });
+
+  it("does not collapse sequential edits that do not chain", async () => {
+    const original = "alpha\nbeta\ngamma\n";
+    fs.writeFileSync(path.join(tmpDir, "chain.ts"), original);
+
+    const p = await computePatchPreview(
+      {
+        path: "chain.ts",
+        edits: [
+          { old_str: "alpha", new_str: "ALPHA" },
+          { old_str: "gamma", new_str: "GAMMA" },
+        ],
+      },
+      tmpDir,
+    );
+    expect(p.diff).toContain("-1 alpha");
+    expect(p.diff).toContain("+1 ALPHA");
+    expect(p.diff).toContain("-3 gamma");
+    expect(p.diff).toContain("+3 GAMMA");
+  });
+});
+
+// ─── diagnoseOldStrMismatch ───────────────────────────────────────────────
+
+describe("diagnoseOldStrMismatch", () => {
+  it("reports tab vs space mismatch", async () => {
+    const { diagnoseOldStrMismatch } = await import("../tools/patch/core.js");
+    const msg = diagnoseOldStrMismatch("    hello", "\thello");
+    expect(msg).toContain("tab vs space");
+  });
+
+  it("reports trailing whitespace mismatch", async () => {
+    const { diagnoseOldStrMismatch } = await import("../tools/patch/core.js");
+    const msg = diagnoseOldStrMismatch("hello", "hello ");
+    expect(msg).toContain("trailing whitespace mismatch");
+  });
+
+  it("reports case mismatch", async () => {
+    const { diagnoseOldStrMismatch } = await import("../tools/patch/core.js");
+    const msg = diagnoseOldStrMismatch("Hello", "hello");
+    expect(msg).toContain("case mismatch");
+  });
+
+  it("reports indent mismatch when trimmed content matches", async () => {
+    const { diagnoseOldStrMismatch } = await import("../tools/patch/core.js");
+    const msg = diagnoseOldStrMismatch("  hello world", "    hello world");
+    expect(msg).toContain("indent mismatch");
+  });
+
+  it("reports first matching line but full block differs", async () => {
+    const { diagnoseOldStrMismatch } = await import("../tools/patch/core.js");
+    const content = "line1\nline2\nline3";
+    const oldStr = "line1\nchanged";
+    const msg = diagnoseOldStrMismatch(oldStr, content);
+    expect(msg).toContain("diff at line 2");
+    expect(msg).toContain('actual: "line2"');
+    expect(msg).toContain('expected: "changed"');
+  });
+
+  it("reports first line matches but block length differs", async () => {
+    const { diagnoseOldStrMismatch } = await import("../tools/patch/core.js");
+    const content = "line1\nline2";
+    const oldStr = "line1\nline2\nline3";
+    const msg = diagnoseOldStrMismatch(oldStr, content);
+    expect(msg).toContain("diff at line 3");
+    expect(msg).toContain('actual: "<EOF>"');
+    expect(msg).toContain('expected: "line3"');
+  });
+
+  it("reports content not found for short strings", async () => {
+    const { diagnoseOldStrMismatch } = await import("../tools/patch/core.js");
+    const msg = diagnoseOldStrMismatch("xyz", "abc\ndef");
+    expect(msg).toBe(""); // firstOldLine.trim().length <= 3
+  });
+
+  it("reports content not found for longer strings", async () => {
+    const { diagnoseOldStrMismatch } = await import("../tools/patch/core.js");
+    const msg = diagnoseOldStrMismatch("this long string is not present", "abc\ndef");
+    expect(msg).toContain("not found anywhere in the file");
+    expect(msg).toContain("File may have changed");
+  });
+});
+
+// ─── diagnoseOldStrNotUnique ──────────────────────────────────────────────
+
+describe("diagnoseOldStrNotUnique", () => {
+  it("returns empty string when old_str is absent", async () => {
+    const { diagnoseOldStrNotUnique } = await import("../tools/patch/core.js");
+    expect(diagnoseOldStrNotUnique("missing", "abc\ndef")).toBe("");
+  });
+
+  it("reports a single occurrence and suggests adding context", async () => {
+    const { diagnoseOldStrNotUnique } = await import("../tools/patch/core.js");
+    const msg = diagnoseOldStrNotUnique("unique", "unique\nother");
+    expect(msg).toContain("appears 1 times");
+    expect(msg).toContain("Add more surrounding context");
+  });
+
+  it("lists line numbers of duplicate occurrences", async () => {
+    const { diagnoseOldStrNotUnique } = await import("../tools/patch/core.js");
+    const msg = diagnoseOldStrNotUnique("dup", "dup\ndup\ndup");
+    expect(msg).toContain("appears 3 times");
+    expect(msg).toContain("line 1");
+    expect(msg).toContain("line 2");
+    expect(msg).toContain("line 3");
+  });
+
+  it("truncates to 5 occurrences", async () => {
+    const { diagnoseOldStrNotUnique } = await import("../tools/patch/core.js");
+    const content = Array(10).fill("x").join("\n");
+    const msg = diagnoseOldStrNotUnique("x", content);
+    expect(msg).toContain("5 more");
+  });
+});
+
+// ─── chained edit merging ─────────────────────────────────────────────────
+
+describe("chained edit merging in diff", () => {
+  let chainTmpDir: string;
+  beforeEach(() => {
+    chainTmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "patch-chain-"));
+  });
+  afterEach(() => {
+    fs.rmSync(chainTmpDir, { recursive: true, force: true });
+  });
+
+  function writeChainFile(name: string, content: string): void {
+    fs.writeFileSync(path.join(chainTmpDir, name), content, "utf8");
+  }
+  function readChainFile(name: string): string {
+    return fs.readFileSync(path.join(chainTmpDir, name), "utf8");
+  }
+
+  it("merges adjacent edits that form a chain", async () => {
+    writeChainFile("chain.ts", "a\nb\nc\n");
+    const result = await applyPatches([
+      {
+        path: "chain.ts",
+        edits: [
+          { old_str: "a", new_str: "A" },
+          { old_str: "b", new_str: "B" },
+          { old_str: "c", new_str: "C" },
+        ],
+      },
+    ], chainTmpDir);
+    expect(readChainFile("chain.ts")).toBe("A\nB\nC\n");
+    const diff = generatePatchDiff(result);
+    expect(diff).toContain("@@");
+  });
+
+  it("handles edits that shift line numbers after replacement", async () => {
+    writeChainFile("shift.ts", "line1\nline2\nline3\n");
+    const result = await applyPatches([
+      {
+        path: "shift.ts",
+        edits: [
+          { old_str: "line1", new_str: "L1\nextra" },
+          { old_str: "line3", new_str: "L3" },
+        ],
+      },
+    ], chainTmpDir);
+    expect(readChainFile("shift.ts")).toBe("L1\nextra\nline2\nL3\n");
+    const diff = generatePatchDiff(result);
+    expect(diff).toContain("L1");
+    expect(diff).toContain("L3");
+  });
+});
+
+// ─── internal helpers ─────────────────────────────────────────────────────
+
+describe("patch core internal helpers", () => {
+  it("charOffsetToLine returns 1-based line numbers", async () => {
+    const { __patchCoreTest } = await import("../tools/patch/core.js");
+    expect(__patchCoreTest.charOffsetToLine("abc", 0)).toBe(1);
+    expect(__patchCoreTest.charOffsetToLine("a\nb\nc", 2)).toBe(2);
+    expect(__patchCoreTest.charOffsetToLine("a\nb\nc", 4)).toBe(3);
+    expect(__patchCoreTest.charOffsetToLine("a\nb\nc", 999)).toBe(3);
+  });
+
+  it("detectTabWidth returns 0 when there are not enough tab-only lines", async () => {
+    const { __patchCoreTest } = await import("../tools/patch/core.js");
+    expect(__patchCoreTest.detectTabWidth("no tabs here")).toBe(0);
+    expect(__patchCoreTest.detectTabWidth("\t\t\t")).toBe(0);
+  });
+
+  it("detectTabWidth infers tab width from indentation progression", async () => {
+    const { __patchCoreTest } = await import("../tools/patch/core.js");
+    // Tab-only lines with 4-tab progression → differences of 4 → tab width 4
+    const content = [
+      "\t\t\t\tline",
+      "\t\t\t\t\t\t\t\tline",
+      "\t\t\t\t\t\t\t\t\t\t\t\tline",
+    ].join("\n");
+    expect(__patchCoreTest.detectTabWidth(content)).toBe(4);
+  });
+
+  it("detectTabWidth infers tab width 2 from 2-tab progression", async () => {
+    const { __patchCoreTest } = await import("../tools/patch/core.js");
+    const content = [
+      "\t\tline",
+      "\t\t\t\tline",
+      "\t\t\t\t\t\tline",
+    ].join("\n");
+    expect(__patchCoreTest.detectTabWidth(content)).toBe(2);
+  });
+
+  it("detectTabWidth ignores jumps larger than 8", async () => {
+    const { __patchCoreTest } = await import("../tools/patch/core.js");
+    const content = [
+      "\t\t\t\tline",
+      "\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\tline", // jump of 12 tabs (16 total)
+      "\t\t\t\t\t\t\t\tline",
+      "\t\t\t\t\t\t\t\t\t\t\t\tline",
+    ].join("\n");
+    expect(__patchCoreTest.detectTabWidth(content)).toBe(4);
+  });
+
+  it("normalizeIndentForFuzzy preserves identical leading whitespace", async () => {
+    const { __patchCoreTest } = await import("../tools/patch/core.js");
+    expect(__patchCoreTest.normalizeIndentForFuzzy("  hello", "  world")).toBe("  world");
+  });
+
+  it("normalizeIndentForFuzzy replaces new leading whitespace with actual style", async () => {
+    const { __patchCoreTest } = await import("../tools/patch/core.js");
+    expect(__patchCoreTest.normalizeIndentForFuzzy("\thello", "    world")).toBe("\tworld");
+    expect(__patchCoreTest.normalizeIndentForFuzzy("    hello", "\tworld")).toBe("    world");
+  });
+
+  it("truncate returns short strings unchanged", async () => {
+    const { __patchCoreTest } = await import("../tools/patch/core.js");
+    expect(__patchCoreTest.truncate("short")).toBe("short");
+  });
+
+  it("truncate returns the first line when it fits", async () => {
+    const { __patchCoreTest } = await import("../tools/patch/core.js");
+    const first = "first line content";
+    const long = `${first}\n${"second line text ".repeat(20)}`;
+    expect(__patchCoreTest.truncate(long, 100)).toBe(first);
+    expect(__patchCoreTest.truncate(long, 100)).not.toContain("second line");
+  });
+
+  it("truncate slices the first line when it exceeds the limit", async () => {
+    const { __patchCoreTest } = await import("../tools/patch/core.js");
+    const long = "a".repeat(100);
+    expect(__patchCoreTest.truncate(long, 20)).toBe("a".repeat(17) + "...");
+  });
+});
+
+// ─── diagnose with tab files ──────────────────────────────────────────────
+
+describe("diagnoseOldStrMismatch with tab-indented files", () => {
+  it("detects tab width and reports a tab-related mismatch", async () => {
+    const { diagnoseOldStrMismatch } = await import("../tools/patch/core.js");
+    // File uses 4 tabs (16 logical spaces at width 4); old_str uses 16 spaces
+    const content = ["\t\t\t\tfoo", "\t\t\t\tbar"].join("\n");
+    const msg = diagnoseOldStrMismatch("                foo", content);
+    expect(msg).toContain("tab vs space");
+  });
+
+  it("uses truncate on very long first lines", async () => {
+    const { diagnoseOldStrMismatch } = await import("../tools/patch/core.js");
+    const longLine = "x".repeat(200);
+    const content = "abc\ndef";
+    const msg = diagnoseOldStrMismatch(longLine, content);
+    // The message quotes the trimmed first 60 chars; it does not contain "..."
+    expect(msg).toContain('Content "');
+    expect(msg).toContain('not found anywhere in the file');
+    expect(msg.length).toBeLessThan(longLine.length + 50);
+  });
+});
+
+// ─── applyPatch edge cases ────────────────────────────────────────────────
+
+describe("applyPatch edge cases", () => {
+  let edgeTmpDir: string;
+  beforeEach(() => {
+    edgeTmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "patch-edge-"));
+  });
+  afterEach(() => {
+    fs.rmSync(edgeTmpDir, { recursive: true, force: true });
+  });
+
+  function writeEdgeFile(name: string, content: string): void {
+    fs.writeFileSync(path.join(edgeTmpDir, name), content, "utf8");
+  }
+  function readEdgeFile(name: string): string {
+    return fs.readFileSync(path.join(edgeTmpDir, name), "utf8");
+  }
+
+  it("handles a replacement at the very end of file without trailing newline", async () => {
+    writeEdgeFile("no-nl.txt", "abc");
+    await applyPatches([
+      { path: "no-nl.txt", edits: [{ old_str: "abc", new_str: "xyz" }] },
+    ], edgeTmpDir);
+    expect(readEdgeFile("no-nl.txt")).toBe("xyz");
+  });
+
+  it("handles fuzzy match when indentation differs", async () => {
+    writeEdgeFile("fuzzy.txt", "function foo() {\n  return 1;\n}\n");
+    await applyPatches([
+      {
+        path: "fuzzy.txt",
+        edits: [{ old_str: "  return 1;", new_str: "  return 2;" }],
+      },
+    ], edgeTmpDir);
+    expect(readEdgeFile("fuzzy.txt")).toContain("return 2;");
+  });
+
+  it("handles fuzzy match with trailing whitespace differences", async () => {
+    writeEdgeFile("fuzzy2.txt", "function foo() {\n  return 1; \n}\n");
+    await applyPatches([
+      {
+        path: "fuzzy2.txt",
+        edits: [{ old_str: "  return 1;", new_str: "  return 2;" }],
+      },
+    ], edgeTmpDir);
+    expect(readEdgeFile("fuzzy2.txt")).toContain("return 2;");
+  });
+
+  it("reports error for non-existent file", async () => {
+    await expect(applyPatches(
+      [{ path: "missing.txt", edits: [{ old_str: "a", new_str: "b" }] }],
+      edgeTmpDir,
+    )).rejects.toThrow();
+  });
+
+  it("reports error when old_str is not unique", async () => {
+    writeEdgeFile("dup.txt", "dup\ndup\ndup\n");
+    await expect(applyPatches(
+      [{ path: "dup.txt", edits: [{ old_str: "dup", new_str: "x" }] }],
+      edgeTmpDir,
+    )).rejects.toThrow(/appears 3 times/);
+  });
+
+  it("applies a patch that requires tab-vs-space fuzzy matching", async () => {
+    writeEdgeFile("tabs.txt", "function foo() {\n\treturn 1;\n}\n");
+    await applyPatches([
+      {
+        path: "tabs.txt",
+        edits: [{ old_str: "    return 1;", new_str: "    return 2;" }],
+      },
+    ], edgeTmpDir);
+    expect(readEdgeFile("tabs.txt")).toContain("return 2;");
+  });
+});
+
+// ─── diagnoseOldStrMismatch first-line-match edge cases ───────────────────
+
+describe("diagnoseOldStrMismatch first-line match", () => {
+  it("reports single-line match where the full block does not (defensive branch)", async () => {
+    const { diagnoseOldStrMismatch } = await import("../tools/patch/core.js");
+    const msg = diagnoseOldStrMismatch("line2", "line1\nline2\nline3");
+    expect(msg).toContain("First line matches at line 2, but full 1-line block does not.");
+  });
+});
+
+// ─── line endings and overwrite ───────────────────────────────────────────
+
+describe("patch line endings and overwrite", () => {
+  let leTmpDir: string;
+  beforeEach(() => {
+    leTmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "patch-le-"));
+  });
+  afterEach(() => {
+    fs.rmSync(leTmpDir, { recursive: true, force: true });
+  });
+
+  function writeLeFile(name: string, content: string): void {
+    fs.writeFileSync(path.join(leTmpDir, name), content, "utf8");
+  }
+  function readLeFile(name: string): string {
+    return fs.readFileSync(path.join(leTmpDir, name), "utf8");
+  }
+
+  it("preserves CRLF line endings when editing", async () => {
+    writeLeFile("crlf.txt", "line1\r\nline2\r\nline3");
+    await applyPatches([
+      { path: "crlf.txt", edits: [{ old_str: "line2", new_str: "LINE2" }] },
+    ], leTmpDir);
+    expect(readLeFile("crlf.txt")).toBe("line1\r\nLINE2\r\nline3");
+  });
+
+  it("creates a new file via overwrite", async () => {
+    const result = await applyPatches([
+      { path: "new.txt", overwrite: true, new_str: "hello world" },
+    ], leTmpDir);
+    expect(readLeFile("new.txt")).toBe("hello world");
+    expect(result.created).toContain("new.txt");
+  });
+
+  it("overwrites an existing file via overwrite", async () => {
+    writeLeFile("existing.txt", "old content");
+    const result = await applyPatches([
+      { path: "existing.txt", overwrite: true, new_str: "new content" },
+    ], leTmpDir);
+    expect(readLeFile("existing.txt")).toBe("new content");
+    expect(result.modified).toContain("existing.txt");
+  });
+});
+
+// ─── chained edit merge break ─────────────────────────────────────────────
+
+describe("chained edit merge break", () => {
+  let chainTmpDir: string;
+  beforeEach(() => {
+    chainTmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "patch-chain-"));
+  });
+  afterEach(() => {
+    fs.rmSync(chainTmpDir, { recursive: true, force: true });
+  });
+
+  function writeChainFile(name: string, content: string): void {
+    fs.writeFileSync(path.join(chainTmpDir, name), content, "utf8");
+  }
+  function readChainFile(name: string): string {
+    return fs.readFileSync(path.join(chainTmpDir, name), "utf8");
+  }
+
+  it("does not merge edits whose outputs do not chain", async () => {
+    writeChainFile("break.ts", "alpha\nbeta\ngamma\n");
+    const result = await applyPatches([
+      {
+        path: "break.ts",
+        edits: [
+          { old_str: "alpha", new_str: "ALPHA" },
+          { old_str: "gamma", new_str: "GAMMA" },
+        ],
+      },
+    ], chainTmpDir);
+    expect(readChainFile("break.ts")).toBe("ALPHA\nbeta\nGAMMA\n");
+    expect(result.modified).toContain("break.ts");
+  });
+
+  it("collapseSequentialReplacements breaks when next edit does not chain", async () => {
+    const { __patchCoreTest } = await import("../tools/patch/core.js");
+    const reps = [
+      {
+        oldStartLine: 1,
+        oldEndLine: 1,
+        newStartLine: 1,
+        newEndLine: 1,
+        oldLines: ["alpha"],
+        newLines: ["ALPHA"],
+        anchor: undefined,
+        anchorMissing: false,
+      },
+      {
+        oldStartLine: 3,
+        oldEndLine: 3,
+        newStartLine: 3,
+        newEndLine: 3,
+        oldLines: ["gamma"],
+        newLines: ["GAMMA"],
+        anchor: undefined,
+        anchorMissing: false,
+      },
+    ];
+    const collapsed = __patchCoreTest.collapseSequentialReplacements(reps);
+    expect(collapsed).toHaveLength(2);
+    expect(collapsed[0].newLines).toEqual(["ALPHA"]);
+    expect(collapsed[1].newLines).toEqual(["GAMMA"]);
+  });
+});
+
+// ─── generateReplacementDiff edge cases ───────────────────────────────────
+
+describe("generateReplacementDiff", () => {
+  it("returns empty string when there are no reps", async () => {
+    const { __patchCoreTest } = await import("../tools/patch/core.js");
+    expect(__patchCoreTest.generateReplacementDiff("f.txt", [], [])).toBe("");
+  });
+
+  it("renders a multi-hunk diff via computePatchPreview", async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "patch-multihunk-"));
+    try {
+      const content = Array.from({ length: 20 }, (_, i) => `line${i + 1}`).join("\n") + "\n";
+      fs.writeFileSync(path.join(tmpDir, "f.txt"), content);
+      const p = await computePatchPreview(
+        {
+          path: "f.txt",
+          edits: [
+            { old_str: "line2", new_str: "LINE2" },
+            { old_str: "line18", new_str: "LINE18" },
+          ],
+        },
+        tmpDir,
+      );
+      expect(p.diff).toContain("line2");
+      expect(p.diff).toContain("LINE2");
+      expect(p.diff).toContain("line18");
+      expect(p.diff).toContain("LINE18");
+      expect(p.diff).toContain("@@ lines 15-20 @@");
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
 });
