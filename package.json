@@ -12,7 +12,11 @@
         "lsp",
         "lsp-client",
         "secret-redaction",
-        "codegraph"
+        "codegraph",
+        "fff",
+        "smart-at",
+        "fuzzy-search",
+        "file-finder"
     ],
     "license": "MIT",
     "repository": {
@@ -22,6 +26,7 @@
     "homepage": "https://github.com/lcwecker/decorated-pi#readme",
     "bugs": "https://github.com/lcwecker/decorated-pi/issues",
     "dependencies": {
+        "@ff-labs/fff-node": "^0.9.4",
         "@modelcontextprotocol/sdk": "^1.29.0",
         "file-type": "^21.3.4",
         "openai": "^6.37.0"
@@ -39,13 +44,15 @@
     },
     "devDependencies": {
         "@types/node": "^22.15.3",
+        "@vitest/coverage-v8": "4.1.8",
         "depcheck": "^1.4.7",
         "publint": "^0.3.21",
-        "vitest": "^4.1.6"
+        "vitest": "4.1.8"
     },
     "scripts": {
         "prepack": "depcheck --fail-on-missing",
-        "test": "vitest run",
+        "test": "vitest run --coverage",
+        "bench": "vitest bench --run",
         "typecheck": "tsc --noEmit",
         "prepublishOnly": "npm install --no-audit --no-fund && npm test && npm run typecheck && depcheck --fail-on-missing && publint"
     }

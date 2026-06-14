@@ -48,12 +48,33 @@ Drop‑in replacements for Pi's built‑in tools, with better UX and fewer waste
 
 #### Smarter `@` File Search
 
-| Aspect | Pi native `@` | `decorated-pi` |
+`decorated-pi` replaces pi's built-in `@` autocomplete with a high-speed file finder backed by **[`@ff-labs/fff-node`](https://github.com/dmtrKovalenko/fff)**— a Rust SIMD fuzzy file search engine with in-memory index, frecency ranking, and git status awareness. Pi's native provider shells out to `fd` on every keystroke.
+
+| Aspect | Pi native `@` | `decorated-pi` (FFF) |
 | ------ | :---: | :---: |
-| **Speed** | ❌ re‑scans filesystem on every trigger | ✅ caches once per `@` trigger |
-| **Noise filtering** | ❌ no penalty system, shows hidden files | ✅ tiered penalty auto‑filters clutter |
-| **Default suggestions** | ❌ all files visible on empty query | ✅ only visible project files |
-| **Match precision** | ❌ case‑insensitive simple scoring | ✅ multi‑level case‑sensitive scoring |
+| **Speed** | ❌ walks filesystem via `fd` subprocess on every keystroke | ✅ in‑memory index built once per session, ~0.1 ms / query |
+| **Ranking** | ❌ 4‑bucket case‑sensitive score (exact/starts/contains/path) | ✅ fuzzy match + frecency + git status (boots from git log) |
+| **Noise** | ❌ shows every file in the project, including `.git`, `node_modules`, `dist` | ✅ filters `git‑ignored` files; substring filter on path keeps short queries relevant |
+
+###### Benchmark of `@`
+
+```
+┌─ smart-at benchmark
+├─ generated 500,000 files in 3.9 s
+├─ FFF scan complete in 664 ms
+│  RSS after FFF index: 408 MB  (+330 MB over baseline)
+├─ accuracy (14 queries)
+│                  top‑1   top‑3   top‑5   false‑pos
+│  smart-at         93%     93%     93%    0
+│  native (fd)      86%     93%     93%    0
+└─ corpus cleaned
+
+name                                            hz      mean
+· smart-at                                      8.10    123 ms
+· native @  (fd subprocess)                     3.12    320 ms
+
+Summary: smart-at is 2.59x faster than native @  (fd subprocess)
+```
 
 #### LSP support
 
