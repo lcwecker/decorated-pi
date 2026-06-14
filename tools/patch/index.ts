@@ -215,8 +215,9 @@ export function registerPatchTool(pi: ExtensionAPI): void {
     ].join("\n"),
     promptSnippet: "Edits a file using exact string replacement, with anchor support.",
     promptGuidelines: [
-      "Always prefer modifying files with patch tool over bash commands or python scripts.",
-      "To prevent hallucinations: 1. Keep each edit batch ≤ 5 changes; 2. Process remaining revisions in sequential steps",
+      "The patch tool is the preferred way to modify files — use it over the write tool (full overwrite) or the bash tool (sed/echo).",
+      "When editing an existing file, use patch instead of write to avoid overwriting changes made since the file was last read.",
+      "To prevent hallucinations: 1. Keep each edit batch ≤ 5 changes; 2. Process remaining revisions in sequential steps.",
       "On repeated failures: read the file first to confirm information accuracy.",
     ],
     parameters: PatchSchema,
