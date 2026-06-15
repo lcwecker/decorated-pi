@@ -35,6 +35,7 @@ Multiple layers of token savings that compound across every session.
 
 **Pi Native Prompt Slimming**
 
+- move the default Pi documentation block out of the system prompt and into a builtin `pi-docs` skill, so the docs reference loads on demand instead of sitting in every turn's prompt
 - unregister the native `write` tool, since `bash` can handle it
 
 ### 2. Smarter Tools
