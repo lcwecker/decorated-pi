@@ -4,6 +4,7 @@
 
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { sortSystemPromptOptions } from "../hooks/skeleton.js";
+import { stripPiDocsBlock, sortSkillsInSystemPrompt, getBuiltinSkillPaths } from "../index.js";
 
 describe("sortSystemPromptOptions", () => {
   it("sorts toolSnippets keys alphabetically", () => {
@@ -152,5 +153,126 @@ describe("Decorated Pi Guidance structure", () => {
     expect(src).toMatch(/REDACT_GUIDANCE/);
     expect(src).toMatch(/INJECT_AGENTS_MD_GUIDANCE/);
     expect(src).toMatch(/buildGuidelines/);
+  });
+
+  it("pi-docs skill contains the exact Pi documentation block", () => {
+    const src = fs.readFileSync(
+      path.join(import.meta.dirname, "../skills/pi-docs/SKILL.md"),
+      "utf-8",
+    );
+    expect(src).toMatch(/name: pi-docs/);
+    expect(src).toMatch(/description: pi docs resources/);
+    expect(src).toMatch(/Pi documentation \(read only when the user asks about pi itself/);
+    expect(src).toMatch(/Main documentation:/);
+    expect(src).toMatch(/Always read pi \.md files completely/);
+  });
+});
+
+describe("stripPiDocsBlock", () => {
+  it("removes the Pi documentation block and its following non-empty lines", () => {
+    const input = [
+      "Some base prompt text.",
+      "",
+      "Pi documentation (read only when ...):",
+      "- Main documentation: /path/to/README.md",
+      "- Additional docs: /path/to/docs",
+      "",
+      "Current date: 2025-01-01",
+    ].join("\n");
+    const result = stripPiDocsBlock(input);
+    expect(result).not.toMatch(/Pi documentation/);
+    expect(result).not.toMatch(/Main documentation/);
+    expect(result).toMatch(/Some base prompt text/);
+    expect(result).toMatch(/Current date:/);
+  });
+
+  it("leaves unrelated content untouched", () => {
+    const input = "Foo\n\nBar\n";
+    expect(stripPiDocsBlock(input)).toBe(input);
+  });
+
+  it("handles a block at the end of the prompt without a trailing blank line", () => {
+    const input = [
+      "Base.",
+      "",
+      "Pi documentation:",
+      "- line one",
+      "- line two",
+    ].join("\n");
+    const result = stripPiDocsBlock(input);
+    expect(result).not.toMatch(/Pi documentation/);
+    expect(result).not.toMatch(/line one/);
+    expect(result).toMatch(/Base\./);
+  });
+});
+
+describe("Builtin skills", () => {
+  it("exposes the plugin's skills/ directory as an absolute path", () => {
+    const paths = getBuiltinSkillPaths();
+    expect(paths).toHaveLength(1);
+    expect(fs.existsSync(paths[0])).toBe(true);
+    expect(fs.existsSync(path.join(paths[0], "pi-docs", "SKILL.md"))).toBe(true);
+  });
+
+  it("registers resources_discover to inject the builtin skill path", () => {
+    const src = fs.readFileSync(
+      path.join(import.meta.dirname, "../index.ts"),
+      "utf-8",
+    );
+    expect(src).toMatch(/resources_discover/);
+    expect(src).toMatch(/skillPaths/);
+    expect(src).toMatch(/getBuiltinSkillPaths/);
+  });
+});
+
+describe("sortSkillsInSystemPrompt", () => {
+  it("sorts skills alphabetically by name", () => {
+    const input = [
+      "Intro text.",
+      "",
+      "<available_skills>",
+      "  <skill>",
+      "    <name>xlsx</name>",
+      "    <description>X</description>",
+      "    <location>/xlsx/SKILL.md</location>",
+      "  </skill>",
+      "  <skill>",
+      "    <name>pi-docs</name>",
+      "    <description>pi docs resources</description>",
+      "    <location>/pi-docs/SKILL.md</location>",
+      "  </skill>",
+      "  <skill>",
+      "    <name>zentao-bug</name>",
+      "    <description>Z</description>",
+      "    <location>/zentao-bug/SKILL.md</location>",
+      "  </skill>",
+      "</available_skills>",
+    ].join("\n");
+    const result = sortSkillsInSystemPrompt(input);
+    const names = Array.from(result.matchAll(/<name>([^<]+)<\/name>/g)).map((m) => m[1]);
+    expect(names).toEqual(["pi-docs", "xlsx", "zentao-bug"]);
+  });
+
+  it("leaves the prompt unchanged when there is no available_skills block", () => {
+    const input = "No skills here.";
+    expect(sortSkillsInSystemPrompt(input)).toBe(input);
+  });
+
+  it("preserves surrounding text and markers", () => {
+    const input = [
+      "Prefix.",
+      "<available_skills>",
+      "  <skill>",
+      "    <name>b</name>",
+      "  </skill>",
+      "  <skill>",
+      "    <name>a</name>",
+      "  </skill>",
+      "</available_skills>",
+      "Suffix.",
+    ].join("\n");
+    const result = sortSkillsInSystemPrompt(input);
+    expect(result.startsWith("Prefix.\n<available_skills>")).toBe(true);
+    expect(result.endsWith("</available_skills>\nSuffix.")).toBe(true);
   });
 });
