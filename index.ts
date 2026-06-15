@@ -16,6 +16,7 @@
  */
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { fileURLToPath } from "node:url";
 
 import { createSkeleton } from "./hooks/skeleton.js";
 
@@ -66,6 +67,71 @@ const BASE_GUIDANCE = [
   "- CAUTION: Do not perform write operations in the following directories unless explicitly instructed: `node_modules`, `venv`, `env`, `__pycache__`, `.git` or any other hidden directories.",
 ].join("\n");
 
+/** Remove the injected Pi documentation block from the base system prompt.
+ *  Matches a line containing "Pi documentation" and deletes it plus all
+ *  following non-empty lines, stopping at the first blank line. */
+export function stripPiDocsBlock(prompt: string): string {
+  const lines = prompt.split("\n");
+  const out: string[] = [];
+  let i = 0;
+  while (i < lines.length) {
+    const line = lines[i];
+    if (line.includes("Pi documentation")) {
+      i++;
+      while (i < lines.length && lines[i].trim() !== "") i++;
+      // Drop the terminating blank line as well so we don't leave orphan whitespace.
+      if (i < lines.length && lines[i].trim() === "") i++;
+      continue;
+    }
+    out.push(line);
+    i++;
+  }
+  return out.join("\n");
+}
+
+/** Sort the <available_skills> block in the system prompt by skill name.
+ *  Pi core appends extension-provided skills after user/project skills and does
+ *  not sort the XML; this makes the final prompt stable and cache-friendly. */
+export function sortSkillsInSystemPrompt(prompt: string): string {
+  const startMarker = "\n<available_skills>";
+  const endMarker = "</available_skills>";
+  const startIdx = prompt.indexOf(startMarker);
+  if (startIdx === -1) return prompt;
+  const endIdx = prompt.indexOf(endMarker, startIdx);
+  if (endIdx === -1) return prompt;
+
+  const before = prompt.slice(0, startIdx + startMarker.length);
+  const after = prompt.slice(endIdx);
+  const inner = prompt.slice(startIdx + startMarker.length, endIdx);
+
+  const chunks: string[][] = [];
+  let current: string[] = [];
+  for (const line of inner.split("\n")) {
+    const trimmed = line.trim();
+    if (trimmed === "<skill>") {
+      current = [line];
+    } else if (trimmed === "</skill>") {
+      current.push(line);
+      chunks.push(current);
+      current = [];
+    } else if (current.length > 0) {
+      current.push(line);
+    }
+  }
+
+  const nameOf = (chunk: string[]) => {
+    const line = chunk.find((l) => l.trim().startsWith("<name>"));
+    if (!line) return "";
+    const t = line.trim();
+    return t.slice(6, t.indexOf("</name>"));
+  };
+
+  chunks.sort((a, b) => nameOf(a).localeCompare(nameOf(b)));
+
+  const sortedInner = "\n" + chunks.map((chunk) => chunk.join("\n")).join("\n") + "\n";
+  return before + sortedInner + after;
+}
+
 /** Build the list of guideline strings to inject, in prompt order.
  *  Always-on rules first, then per-module guidelines. REDACT_GUIDANCE is
  *  gated by the secretRedaction module; CodeGraph guidance follows the MCP
@@ -87,6 +153,20 @@ function canRegisterMcpServer(config: { name: string; command?: string }, deps: 
   return dep ? dep.state === "ok" : true;
 }
 
+/** Absolute path to the plugin's builtin skills directory.
+ *  Used by `resources_discover` so the skill travels with the plugin
+ *  regardless of which project pi is running in. */
+export function getBuiltinSkillPaths(): string[] {
+  return [fileURLToPath(new URL("./skills", import.meta.url))];
+}
+
+/** Register the plugin's builtin skill paths with Pi core. */
+function installBuiltinSkills(pi: ExtensionAPI): void {
+  pi.on("resources_discover", async (_event: any) => ({
+    skillPaths: getBuiltinSkillPaths(),
+  }));
+}
+
 /** Install a single before_agent_start handler that appends every
  *  guideline in order, stripping the volatile "Current date: …" line
  *  for cache stability. Idempotent — re-injection is a no-op via marker. */
@@ -97,7 +177,9 @@ function installGuidelines(pi: ExtensionAPI): void {
 
   pi.on("before_agent_start", async (event: any) => {
     if (!event.systemPrompt) return undefined;
-    let prompt: string = event.systemPrompt.replace(/\nCurrent date: \d{4}-\d{2}-\d{2}/, "");
+    let prompt: string = stripPiDocsBlock(event.systemPrompt);
+    prompt = sortSkillsInSystemPrompt(prompt);
+    prompt = prompt.replace(/\nCurrent date: \d{4}-\d{2}-\d{2}/, "");
     if (prompt.includes(marker)) return undefined; // already injected this turn
     return { systemPrompt: `${prompt}\n\n${joined}` };
   });
@@ -180,6 +262,9 @@ export default async function (pi: ExtensionAPI) {
     }
     registerMcpStatusCommand(pi);
   }
+
+  // ── Builtin skills (travel with the plugin in every project) ─────────────
+  installBuiltinSkills(pi);
 
   // ── System-prompt guidelines (single handler, array order = prompt order) ──
   installGuidelines(pi);

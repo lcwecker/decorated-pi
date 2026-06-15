@@ -9,6 +9,17 @@ import { dirname, resolve, relative, join, normalize } from "node:path";
 import { existsSync, readFileSync } from "node:fs";
 import type { Module } from "./skeleton.js";
 
+function isInsideSkillDir(filePath: string): boolean {
+    let dir = dirname(resolve(filePath));
+    while (true) {
+        if (existsSync(join(dir, "SKILL.md"))) return true;
+        const parent = dirname(dir);
+        if (parent === dir) break;
+        dir = parent;
+    }
+    return false;
+}
+
 const CUSTOM_TYPE = "decorated-pi.subdir-agents";
 const AGENTS_NAMES = ["AGENTS.md", "AGENTS.MD", "CLAUDE.md", "CLAUDE.MD"];
 
@@ -86,7 +97,12 @@ function findNewAgents(
     return results.reverse();
 }
 
-export const __subdirAgentsTest = { restoreFromBranch, findNewAgents };
+export const __subdirAgentsTest = { restoreFromBranch, findNewAgents, isInsideSkillDir };
+
+export const INJECT_AGENTS_MD_GUIDANCE = [
+    "### Context Loading, AGENTS.md / CLAUDE.md are auto-injected",
+    "- DO NOT read any **AGENTS.md** or **CLAUDE.md** files unless you're explicitly asked to, these files will loaded automatically if necessary.",
+].join("\n");
 
 export const injectAgentsMdModule: Module = {
     name: "inject-agents-md",
@@ -111,7 +127,9 @@ export const injectAgentsMdModule: Module = {
                 if (event.toolName !== "read" && event.toolName !== "edit")
                     return;
                 const path = (event.input as { path?: string })?.path;
-                if (path) pendingPaths.set(event.toolCallId, path);
+                if (!path) return;
+                if (isInsideSkillDir(resolve(path))) return;
+                pendingPaths.set(event.toolCallId, path);
             },
         ],
         tool_result: [
@@ -152,13 +170,3 @@ export const injectAgentsMdModule: Module = {
         ],
     },
 };
-
-/**
- * System-prompt guidance for the inject-agents-md hook — tells the
- * LLM not to waste tool calls re-reading AGENTS.md / CLAUDE.md, since
- * this hook already auto-injects them.
- */
-export const INJECT_AGENTS_MD_GUIDANCE = [
-    "### Context Loading, AGENTS.md / CLAUDE.md are auto-injected",
-    "- DO NOT read any **AGENTS.md** or **CLAUDE.md** files unless you're explicitly asked to, these files will loaded automatically if necessary.",
-].join("\n");
