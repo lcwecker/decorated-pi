@@ -5,6 +5,14 @@
  * FFF maintains an in-memory index, scores files by fuzzy match +
  * frecency + git status, and returns ranked results. We create one
  * FileFinder per session and query it directly for every @ prefix.
+ *
+ * KNOWN FFF LIMITATION (v0.9.4):
+ * FFF only returns directories that directly contain files. Intermediate
+ * folders that only hold subdirectories (e.g. product/module/apmanage/ where
+ * all files live in product/module/apmanage/deep/) will not appear in
+ * mixedSearch/directorySearch results, even though the files underneath do.
+ * We intentionally do NOT synthesize these directories on the TypeScript side
+ * to avoid extra complexity/cost; the fix belongs upstream.
  */
 
 import { FileFinder, type MixedItem } from "@ff-labs/fff-node";
