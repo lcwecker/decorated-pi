@@ -14,24 +14,28 @@ pi install /path/to/decorated-pi
 
 ### 1. Token Efficiency
 
-Multiple layers of token savings that compound across every session. **All integrated CLI tools only require installing their respective CLIs — zero config**.
+Multiple layers of token savings that compound across every session. 
 
-**RTK** — integrates [RTK](https://github.com/rtk-ai/rtk) to compress bash output into structured summaries, so the LLM never sees raw noise.
+**RTK** — integrates [RTK](https://github.com/rtk-ai/rtk) to compress bash output into structured summaries, so the LLM never sees raw noise. **Just install the CLI, zero config**.
 
-**Codegraph** — integrates [codegraph](https://github.com/colbymchenry/codegraph) to offer a code map of your project, so the LLM can navigate symbols and call graphs without chaining `ls` → `grep` → `read`.
+**Codegraph** — integrates [codegraph](https://github.com/colbymchenry/codegraph) to offer a code map of your project, so the LLM can navigate symbols and call graphs without chaining `ls` → `grep` → `read`. **You should manage the code source index yourself, see[codegraph doc](https://github.com/colbymchenry/codegraph/blob/main/README.md)**.
 
 **Auxiliary Models** — offloads heavy-but-dumb tasks to cheaper models so your primary model only pays for the hard work:
 
-- **Image read fallback** — detects image type via magic bytes, calls a configured vision-capable model, and injects the analysis text, so your main model never touches image tokens
-- **Compact model** — handles context compaction with a smaller model instead of burning main-model capacity
+- **Image Read Fallback** — detects image type via magic bytes, calls a configured vision-capable model, and injects the analysis text, so your main model never touches image tokens
+- **Compact Model** — handles context compaction with a smaller model instead of burning main-model capacity
 
-Configured via `/dp-model`.
+> Configured via `/dp-model`.
 
-**Cache‑friendly design** — stable system prompt prefix:
+**Cache‑friendly Design** — stable system prompt prefix:
 
 - tool definitions, guidelines, and skills are sorted alphabetically so the system prompt is identical across sessions
 - volatile elements like `Current date: …` are stripped before prompt assembly
 - MCP tool schemas are persisted to a local cache, so the tool list stays stable regardless of network conditions or server availability
+
+**Pi Native Prompt Slimming**
+
+- unregister the native `write` tool, since `bash` can handle it
 
 ### 2. Smarter Tools
 

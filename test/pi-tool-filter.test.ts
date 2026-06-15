@@ -1,12 +1,12 @@
 /**
  * hooks/pi-tool-filter.ts — drops pi native tools that are replaced
- * by our extensions (edit, grep, find, ls).
+ * by our extensions (edit, write, grep, find, ls).
  */
 import { describe, it, expect, vi } from "vitest";
 import { piToolFilterModule, setupPiToolFilter } from "../hooks/pi-tool-filter.js";
 
 describe("pi-tool-filter", () => {
-  it("filters out replaced tools (edit, grep, find, ls)", async () => {
+  it("filters out replaced tools (edit, write, grep, find, ls)", async () => {
     const ctx = {} as any;
     const pi = {
       getActiveTools: () => ["read", "bash", "write", "edit", "grep", "find", "ls", "custom"],
@@ -15,7 +15,7 @@ describe("pi-tool-filter", () => {
     const handler = piToolFilterModule.hooks.session_start![0];
     await handler({ reason: "startup" } as any, ctx, pi as any);
     expect(pi.setActiveTools).toHaveBeenCalledWith([
-      "read", "bash", "write", "custom",
+      "read", "bash", "custom",
     ]);
   });
 
@@ -27,7 +27,7 @@ describe("pi-tool-filter", () => {
     };
     const handler = piToolFilterModule.hooks.session_start![0];
     await handler({ reason: "startup" } as any, ctx, pi as any);
-    expect(pi.setActiveTools).toHaveBeenCalledWith(["read", "bash", "write"]);
+    expect(pi.setActiveTools).toHaveBeenCalledWith(["read", "bash"]);
   });
 
   it("works with an empty tool list", async () => {

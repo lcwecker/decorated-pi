@@ -2,6 +2,7 @@
  * pi-tool-filter — unregister pi native tools that are replaced by our extensions.
  *
  *   edit   → replaced by patch
+ *   write  → replaced by patch
  *   grep   → replaced by bash
  *   find   → replaced by bash
  *   ls     → replaced by bash
@@ -9,7 +10,7 @@
 
 import type { Module, Skeleton } from "./skeleton.js";
 
-const TOOLS_TO_DROP = new Set(["edit", "grep", "find", "ls"]);
+const TOOLS_TO_DROP = new Set(["edit", "write", "grep", "find", "ls"]);
 
 export const piToolFilterModule: Module = {
   name: "pi-tool-filter",
