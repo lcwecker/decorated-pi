@@ -357,7 +357,7 @@ describe("skeleton — inspect()", () => {
       name: "beta",
       hooks: { agent_end: [() => {}], session_start: [() => {}] },
     });
-    sk.declareDependency({ label: "rtk", hint: "install rtk" });
+    sk.declareDependency({ label: "rtk", check: () => false, hint: "install rtk" });
 
     const info = sk.inspect();
     expect(info.modules).toEqual(["alpha", "beta"]);

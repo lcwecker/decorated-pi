@@ -16,7 +16,7 @@ export class McpConnection {
   client: Client;
   transport: StreamableHTTPClientTransport | SSEClientTransport | StdioClientTransport | undefined;
   tools: McpToolSpec[] = [];
-  private connected = false;
+  connected = false;
 
   source: string = "unknown";
 
