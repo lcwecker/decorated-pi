@@ -238,6 +238,7 @@ describe("registerMcpToolsFromCache", () => {
             { name: "web_search", description: "Search", inputSchema: {} },
             { name: "fetch", description: "Fetch", inputSchema: {} },
           ],
+          cachedAt: 0,
         },
       },
     };
@@ -256,7 +257,7 @@ describe("registerMcpToolsFromCache", () => {
     const cache = {
       version: 1,
       servers: {
-        exa: { tools: [{ name: "search", description: "", inputSchema: {} }] },
+        exa: { tools: [{ name: "search", description: "", inputSchema: {} }], cachedAt: 0 },
       },
     };
     const configs = [
@@ -282,7 +283,7 @@ describe("registerMcpToolsFromCache", () => {
     const pi = { registerTool: vi.fn() };
     const cache = {
       version: 1,
-      servers: { exa: { tools: [] } },
+      servers: { exa: { tools: [], cachedAt: 0 } },
     };
     const configs = [
       { name: "exa", url: "x", enabled: true, source: "builtin" as const },
@@ -300,7 +301,7 @@ describe("registerMcpToolsFromCache", () => {
     };
     const cache = {
       version: 1,
-      servers: { exa: { tools: [{ name: "x", description: "", inputSchema: {} }] } },
+      servers: { exa: { tools: [{ name: "x", description: "", inputSchema: {} }], cachedAt: 0 } },
     };
     const configs = [
       { name: "exa", url: "x", enabled: true, source: "builtin" as const },
@@ -319,7 +320,7 @@ describe("registerMcpTools", () => {
       loadMcpCache: vi.fn(() => ({
         version: 1,
         servers: {
-          exa: { tools: [{ name: "web_search", description: "Search", inputSchema: {} }] },
+          exa: { tools: [{ name: "web_search", description: "Search", inputSchema: {} }], cachedAt: 0 },
         },
       })),
     }));
@@ -330,7 +331,7 @@ describe("registerMcpTools", () => {
       isSseUrl: vi.fn(),
     }));
 
-    const { registerMcpTools } = await import("../tools/mcp/index.js?reg1");
+    const { registerMcpTools } = await import("../tools/mcp/index.js");
     const pi = { registerTool: vi.fn() };
     registerMcpTools(pi as any, tmpRoot);
 
@@ -353,7 +354,7 @@ describe("registerMcpTools", () => {
       isSseUrl: vi.fn(),
     }));
 
-    const { registerMcpTools } = await import("../tools/mcp/index.js?reg2");
+    const { registerMcpTools } = await import("../tools/mcp/index.js");
     const pi = { registerTool: vi.fn() };
     registerMcpTools(pi as any, tmpRoot);
 
@@ -368,7 +369,7 @@ describe("registerMcpTools", () => {
     vi.doMock("../tools/mcp/cache.js", () => ({
       loadMcpCache: vi.fn(() => ({
         version: 1,
-        servers: { exa: { tools: [] } },
+        servers: { exa: { tools: [], cachedAt: 0 } },
       })),
     }));
     vi.doMock("../tools/mcp/config.js", () => ({
@@ -378,7 +379,7 @@ describe("registerMcpTools", () => {
       isSseUrl: vi.fn(),
     }));
 
-    const { registerMcpTools } = await import("../tools/mcp/index.js?reg3");
+    const { registerMcpTools } = await import("../tools/mcp/index.js");
     const pi = { registerTool: vi.fn() };
     registerMcpTools(pi as any, tmpRoot);
 

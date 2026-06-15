@@ -264,7 +264,7 @@ describe("/mcp — non-interactive", () => {
       refreshServerCache: vi.fn(),
       updateConfigEnabled: vi.fn(),
     }));
-    const { registerMcpStatusCommand } = await import("../commands/mcp-status.js?empty=1");
+    const { registerMcpStatusCommand } = await import("../commands/mcp-status.js");
     const pi = makePi();
     registerMcpStatusCommand(pi as any);
 
@@ -307,7 +307,7 @@ describe("/mcp — non-interactive", () => {
       refreshServerCache: vi.fn(),
       updateConfigEnabled: vi.fn(),
     }));
-    const { registerMcpStatusCommand } = await import("../commands/mcp-status.js?present=1");
+    const { registerMcpStatusCommand } = await import("../commands/mcp-status.js");
     const pi = makePi();
     registerMcpStatusCommand(pi as any);
 
@@ -344,7 +344,7 @@ describe("/mcp — non-interactive", () => {
       refreshServerCache: vi.fn(),
       updateConfigEnabled: vi.fn(),
     }));
-    const { registerMcpStatusCommand } = await import("../commands/mcp-status.js?connecting=1");
+    const { registerMcpStatusCommand } = await import("../commands/mcp-status.js");
     const pi = makePi();
     registerMcpStatusCommand(pi as any);
 
