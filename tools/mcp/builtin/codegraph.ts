@@ -14,7 +14,7 @@ export const CODEGRAPH_BUILTIN: Omit<McpServerConfig, "source"> = {
     name: "codegraph",
     command: "codegraph",
     args: ["serve", "--mcp"],
-    enabled: false,
+    enabled: true,
     description:
         "Local code knowledge graph (colbymchenry/codegraph). Enable via /mcp.",
     canUseInProject: (cwd: string) => fs.existsSync(path.join(cwd, ".codegraph")),

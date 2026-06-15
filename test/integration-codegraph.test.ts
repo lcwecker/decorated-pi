@@ -92,11 +92,11 @@ describe.sequential("codegraph end-to-end integration", () => {
     expect(codegraph?.enabled).toBe(true);
   });
 
-  it("resolveMcpConfigs returns codegraph disabled by default", () => {
+  it("resolveMcpConfigs returns codegraph enabled by default", () => {
     const resolved = resolveMcpConfigs(PROJECT_CWD);
     const codegraph = resolved.find((s) => s.name === "codegraph");
     expect(codegraph).toBeDefined();
-    expect(codegraph?.enabled).toBe(false);
+    expect(codegraph?.enabled).toBe(true);
   });
 
   it("resolveMcpConfigs returns empty when the mcp master switch is off", () => {

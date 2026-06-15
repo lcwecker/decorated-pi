@@ -160,12 +160,13 @@ export const rtkModule: Module = {
 
 export function setupRtk(sk: Skeleton, pi: ExtensionAPI): void {
   rtkBinary = findSystemRtk();
-  sk.declareDependency({
+  const ready = sk.declareDependency({
     label: "rtk",
+    module: "rtk",
     check: () => findSystemRtk() !== null,
     hint: "Install RTK so bash rewrite/tagging can activate.",
   });
-  if (!rtkBinary) return;
+  if (!ready) return;
 
   // Register a wrapped bash tool that shows [RTK] tag in TUI.
   const shellSettings = loadPiShellSettings(process.cwd());

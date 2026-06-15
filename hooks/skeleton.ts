@@ -2,9 +2,9 @@
  * Skeleton — the only place that calls pi.on(...) for hooks.
  *
  *   sk.register(module)         → installs module's hook handlers
- *   sk.declareDependency({...}) → skeleton checks on session_start
+ *   sk.declareDependency({...}) → check now, report on session_start
  *   sk.declareGuideline("...") → skeleton injects on before_agent_start
- *   sk.install(pi)             → call once, after all setup<X> calls
+ *   sk.install(pi)              → call once, after all setup<X> calls
  *
  * Handlers receive (event, ctx, pi) so they can call pi.* APIs
  * (setSessionName, registerTool, appendEntry, etc.).
@@ -64,6 +64,8 @@ export interface Dependency {
   label: string;
   check: () => boolean;
   hint?: string;
+  /** Display/source tag for inspection and notifications. */
+  module?: string;
 }
 
 /** Collected result shape for a module's declared dependency. Modules
@@ -88,7 +90,8 @@ const COMPOSE_EVENTS = new Set<HookEvent>([
 
 export interface Skeleton {
   register(module: Module): void;
-  declareDependency(dep: Dependency): void;
+  /** Returns whether the dependency check passed right now. */
+  declareDependency(dep: Dependency): boolean;
   install(pi: ExtensionAPI): void;
   inspect(): Inspection;
 }
@@ -96,7 +99,7 @@ export interface Skeleton {
 export interface Inspection {
   modules: string[];
   events: Record<string, Array<{ module: string; order: number }>>;
-  dependencies: Array<{ label: string; hint?: string }>;
+  dependencies: Array<{ label: string; module?: string; hint?: string }>;
 }
 
 export function createSkeleton(): Skeleton {
@@ -124,6 +127,11 @@ export function createSkeleton(): Skeleton {
 
     declareDependency(dep) {
       dependencies.push(dep);
+      try {
+        return dep.check();
+      } catch {
+        return false;
+      }
     },
 
     install(pi) {
@@ -199,7 +207,7 @@ export function createSkeleton(): Skeleton {
       return {
         modules: modules.map((m) => m.name),
         events,
-        dependencies: dependencies.map((d) => ({ label: d.label, hint: d.hint })),
+        dependencies: dependencies.map((d) => ({ label: d.label, module: d.module, hint: d.hint })),
       };
     },
   };

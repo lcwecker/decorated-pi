@@ -81,6 +81,12 @@ function buildGuidelines(): string[] {
   return out;
 }
 
+function canRegisterMcpServer(config: { name: string; command?: string }, deps: Array<{ module: string; state: string }>): boolean {
+  if (!config.command) return true;
+  const dep = deps.find((d) => d.module === `mcp:${config.name}`);
+  return dep ? dep.state === "ok" : true;
+}
+
 /** Install a single before_agent_start handler that appends every
  *  guideline in order, stripping the volatile "Current date: …" line
  *  for cache stability. Idempotent — re-injection is a no-op via marker. */
@@ -132,10 +138,14 @@ export default async function (pi: ExtensionAPI) {
   // ── Tools (conditional on module switches) ────────────────────────────
   if (isModuleEnabled("patchOverrideEdit")) registerPatchTool(pi);
   if (isModuleEnabled("lsp")) {
-    registerLspTools(pi, new LspServerManager());
-    for (const dep of collectLspDependencyStatuses(process.cwd())) {
+    const lspDeps = collectLspDependencyStatuses(process.cwd());
+    if (lspDeps.some((d) => d.state === "ok")) {
+      registerLspTools(pi, new LspServerManager());
+    }
+    for (const dep of lspDeps) {
       sk.declareDependency({
         label: `lsp:${dep.label}`,
+        module: `lsp:${dep.label}`,
         check: () => collectLspDependencyStatuses(process.cwd()).some((s) => s.label === dep.label && s.state === "ok"),
       });
     }
@@ -151,9 +161,11 @@ export default async function (pi: ExtensionAPI) {
     // explicitly here so `loadGlobalMcpConfigs` stays pure.
     migrateLegacyGlobalMcpConfig();
     sk.register(mcpModule);
-    for (const dep of collectMcpDependencyStatuses(process.cwd())) {
+    const mcpDeps = collectMcpDependencyStatuses(process.cwd());
+    for (const dep of mcpDeps) {
       sk.declareDependency({
         label: dep.module,
+        module: dep.module,
         check: () => collectMcpDependencyStatuses(process.cwd()).some((s) => s.module === dep.module && s.state === "ok"),
       });
     }
@@ -161,7 +173,9 @@ export default async function (pi: ExtensionAPI) {
     // Per-server readiness: cache hit → register from cache (fast).
     // Cache miss → connect synchronously, write cache, then register
     // live tools. This blocks startup only for cache-miss servers.
+    // Skip servers whose binary is missing (dependency not met).
     for (const config of configs) {
+      if (!canRegisterMcpServer(config, mcpDeps)) continue;
       await ensureMcpServerReady(pi, config, process.cwd());
     }
     registerMcpStatusCommand(pi);

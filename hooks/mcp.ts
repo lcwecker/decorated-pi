@@ -21,7 +21,7 @@ interface ServerStatus {
   name: string;
   url: string;
   source: string;
-  state: "connecting" | "connected" | "failed" | "disabled" | "waiting_reload";
+  state: "connecting" | "connected" | "failed" | "disabled" | "waiting reload";
   toolCount: number;
   tools: Array<{ name: string; description?: string; inputSchema?: Record<string, unknown> }>;
   error?: string;
@@ -35,6 +35,45 @@ function canUseServer(config: McpServerConfig, cwd?: string): boolean {
   if (!config.canUseInProject) return true;
   return config.canUseInProject(cwd ?? process.cwd());
 }
+
+function markServerFailed(config: McpServerConfig, error: string): void {
+  allServers.set(config.name, {
+    name: config.name,
+    url: config.url ?? config.command ?? "(unknown)",
+    source: config.source,
+    state: "failed",
+    toolCount: 0,
+    tools: [],
+    error,
+  });
+}
+
+function markServerConnected(config: McpServerConfig, tools: McpToolCache[]): void {
+  allServers.set(config.name, {
+    name: config.name,
+    url: config.url ?? config.command ?? "(unknown)",
+    source: config.source,
+    state: "connected",
+    toolCount: tools.length,
+    tools: tools.map((t) => ({ name: t.name, description: t.description, inputSchema: t.inputSchema })),
+  });
+}
+
+function markServerState(
+  name: string,
+  state: "disabled" | "waiting reload" | "connecting",
+  config: { url?: string; command?: string; source: string } | undefined,
+): void {
+  allServers.set(name, {
+    name,
+    url: config?.url ?? config?.command ?? "(unknown)",
+    source: config?.source ?? "unknown",
+    state,
+    toolCount: 0,
+    tools: [],
+  });
+}
+
 
 async function connectAll(
   configs: McpServerConfig[],
@@ -51,7 +90,7 @@ async function connectAll(
   // every caller's updates are visible.
   allServers.clear();
   for (const s of configs) {
-    allServers.set(s.name, { name: s.name, url: s.url ?? s.command ?? "(unknown)", source: s.source, state: "connecting", toolCount: 0, tools: [] });
+    markServerState(s.name, "connecting", s);
   }
 
   // Watchdog: the inner Promise.race in McpConnection.connect() has a
@@ -87,11 +126,7 @@ async function connectAll(
     if (watchdogFired) break; // remaining servers are already failed
 
     if (!canUseServer(server, cachedCwd || undefined)) {
-      allServers.set(server.name, {
-        name: server.name, url: server.url ?? server.command ?? "(unknown)", source: server.source,
-        state: "failed", toolCount: 0, tools: [],
-        error: "Project is missing required artefacts for this server",
-      });
+      markServerFailed(server, "Project is missing required artefacts for this server");
       continue;
     }
 
@@ -108,11 +143,7 @@ async function connectAll(
         // failed state and do NOT write an empty cache, otherwise a
         // subsequent /reload will keep using the empty cache forever.
         try { await conn.disconnect(); } catch { /* ignore */ }
-        allServers.set(server.name, {
-          name: server.name, url: server.url ?? server.command ?? "(unknown)", source: server.source,
-          state: "failed", toolCount: 0, tools: [],
-          error: "Server connected but returned no tools (e.g. codegraph without a .codegraph index)",
-        });
+        markServerFailed(server, "Server connected but returned no tools (e.g. codegraph without a .codegraph index)");
         continue;
       }
       activeConnections.push(conn);
@@ -134,19 +165,13 @@ async function connectAll(
           schemaChanges.push(`${server.name} (${parts.join(', ')})`);
         }
       }
-      allServers.set(server.name, {
-        name: server.name, url: server.url ?? server.command ?? "(unknown)", source: server.source,
-        state: "connected", toolCount: conn.tools.length, tools: actualTools,
-      });
       const tools: McpToolCache[] = conn.tools.map(t => ({ name: t.name, description: t.description, inputSchema: t.inputSchema }));
+      markServerConnected(server, tools);
       updateServerCache(server.name, { tools, cachedAt: Date.now() }, cacheScopeForSource(server.source), cachedCwd || undefined);
     } catch (err) {
       if (watchdogFired) return { schemaChanges, hasNewServer };
       const msg = err instanceof Error ? err.message : String(err);
-      allServers.set(server.name, {
-        name: server.name, url: server.url ?? server.command ?? "(unknown)", source: server.source,
-        state: "failed", toolCount: 0, tools: [], error: msg,
-      });
+      markServerFailed(server, msg);
     }
   }
 
@@ -174,7 +199,7 @@ export function getMcpStatus(): ServerStatus[] {
     // or was toggled enabled after startup and needs /reload.
     result.push({
       name: config.name, url: config.url ?? config.command ?? "(unknown)", source: config.source,
-      state: config.enabled ? "waiting_reload" : "disabled",
+      state: config.enabled ? "waiting reload" : "disabled",
       toolCount: cachedEntry?.tools.length ?? 0, tools: cachedEntry?.tools ?? [],
     });
   }
@@ -194,35 +219,23 @@ export async function updateConfigEnabled(serverName: string, enabled: boolean):
       activeConnections = activeConnections.filter(c => c.serverName !== serverName);
     }
     // Mark the server as disabled in allServers (or add it if absent).
-    allServers.set(serverName, {
-      name: serverName,
-      url: config?.url ?? config?.command ?? "(unknown)",
-      source: config?.source ?? "unknown",
-      state: "disabled",
-      toolCount: 0,
-      tools: [],
-    });
+    markServerState(serverName, "disabled", config ?? undefined);
     return;
   }
 
   // Re-enabling at runtime: the config is now enabled but tools aren't
   // registered until the next session_start. Mark it as waiting_reload
   // so the user sees exactly why the server isn't usable yet.
-  allServers.set(serverName, {
-    name: serverName,
-    url: config?.url ?? config?.command ?? "(unknown)",
-    source: config?.source ?? "unknown",
-    state: "waiting reload",
-    toolCount: 0,
-    tools: [],
-  });
+  markServerState(serverName, "waiting reload", config ?? undefined);
 }
 
 export async function refreshServerCache(serverName: string, registry: any): Promise<{ ok: boolean; error?: string }> {
   const config = resolveMcpConfigs(cachedCwd).find(s => s.name === serverName);
   if (!config) return { ok: false, error: `Server "${serverName}" not found in config.` };
   if (!canUseServer(config, cachedCwd || undefined)) {
-    return { ok: false, error: "Project is missing required artefacts for this server" };
+    const error = "Project is missing required artefacts for this server";
+    markServerFailed(config, error);
+    return { ok: false, error };
   }
   const existing = activeConnections.find(c => c.serverName === serverName);
   if (existing) {
@@ -236,21 +249,17 @@ export async function refreshServerCache(serverName: string, registry: any): Pro
     if (conn.tools.length === 0) {
       try { await conn.disconnect(); } catch { /* ignore */ }
       const error = "Server connected but returned no tools (e.g. codegraph without a .codegraph index)";
-      allServers.set(config.name, { name: config.name, url: config.url ?? config.command ?? "(unknown)", source: config.source, state: "failed", toolCount: 0, tools: [], error });
+      markServerFailed(config, error);
       return { ok: false, error };
     }
     activeConnections.push(conn);
-    allServers.set(config.name, {
-      name: config.name, url: config.url ?? config.command ?? "(unknown)", source: config.source,
-      state: "connected", toolCount: conn.tools.length,
-      tools: conn.tools.map(t => ({ name: t.name, description: t.description, inputSchema: t.inputSchema })),
-    });
     const tools: McpToolCache[] = conn.tools.map(t => ({ name: t.name, description: t.description, inputSchema: t.inputSchema }));
+    markServerConnected(config, tools);
     updateServerCache(config.name, { tools, cachedAt: Date.now() }, cacheScopeForSource(config.source), cachedCwd || undefined);
     return { ok: true };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    allServers.set(config.name, { name: config.name, url: config.url ?? config.command ?? "(unknown)", source: config.source, state: "failed", toolCount: 0, tools: [], error: msg });
+    markServerFailed(config, msg);
     return { ok: false, error: msg };
   }
 }
@@ -277,7 +286,10 @@ export function getCachedMcpConfigs(): McpServerConfig[] {
  * can find it.
  */
 export async function ensureMcpServerReady(pi: ExtensionAPI, config: McpServerConfig, cwd?: string): Promise<void> {
-  if (!canUseServer(config, cwd)) return;
+  if (!canUseServer(config, cwd)) {
+    markServerFailed(config, "Project is missing required artefacts for this server");
+    return;
+  }
 
   const scope = cacheScopeForSource(config.source);
   const cache = loadScopedMcpCache(scope, cwd);
@@ -303,15 +315,7 @@ export async function ensureMcpServerReady(pi: ExtensionAPI, config: McpServerCo
       // Empty tool list means the server is not useful. Disconnect and
       // leave cache untouched so the next /reload retries the connection.
       try { await conn.disconnect(); } catch { /* ignore */ }
-      allServers.set(config.name, {
-        name: config.name,
-        url: config.url ?? config.command ?? "(unknown)",
-        source: config.source,
-        state: "failed",
-        toolCount: 0,
-        tools: [],
-        error: "Server connected but returned no tools (e.g. codegraph without a .codegraph index)",
-      });
+      markServerFailed(config, "Server connected but returned no tools (e.g. codegraph without a .codegraph index)");
       return;
     }
     activeConnections.push(conn);
@@ -320,6 +324,7 @@ export async function ensureMcpServerReady(pi: ExtensionAPI, config: McpServerCo
       description: t.description,
       inputSchema: t.inputSchema,
     }));
+    markServerConnected(config, tools);
     updateServerCache(config.name, { tools, cachedAt: Date.now() }, scope, cwd);
     for (const t of tools) {
       try {
@@ -328,15 +333,7 @@ export async function ensureMcpServerReady(pi: ExtensionAPI, config: McpServerCo
     }
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    allServers.set(config.name, {
-      name: config.name,
-      url: config.url ?? config.command ?? "(unknown)",
-      source: config.source,
-      state: "failed",
-      toolCount: 0,
-      tools: [],
-      error: `No cache and initial connect failed: ${msg}`,
-    });
+    markServerFailed(config, `No cache and initial connect failed: ${msg}`);
   }
 }
 

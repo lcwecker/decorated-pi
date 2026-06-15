@@ -342,12 +342,13 @@ export function setupWakatimeWithApiKey(
 export function setupWakatime(sk: Skeleton, pi: ExtensionAPI): void {
   const apiKey = readWakatimeCfgApiKey();
   const cliPath = findWakatimeCli();
-  sk.declareDependency({
+  const ready = sk.declareDependency({
     label: "wakatime-cli",
+    module: "wakatime",
     check: () => findWakatimeCli() !== null,
     hint: "Install wakatime-cli to track coding activity.",
   });
-  if (!apiKey || !cliPath) return;
+  if (!apiKey || !cliPath || !ready) return;
 
   const sendHeartbeat: HeartbeatSender = (hb, cwd) => sendHeartbeatViaCli(hb, apiKey, cliPath, cwd);
 

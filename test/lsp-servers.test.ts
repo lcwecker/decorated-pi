@@ -6,6 +6,21 @@
  * a real temp directory.
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+const fsState = vi.hoisted(() => ({
+  actual: null as typeof import("node:fs") | null,
+  existsImpl: ((path: Parameters<typeof import("node:fs").existsSync>[0]) => false) as (path: Parameters<typeof import("node:fs").existsSync>[0]) => boolean,
+}));
+
+vi.mock("node:fs", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs")>();
+  fsState.actual = actual;
+  fsState.existsImpl = actual.existsSync;
+  return {
+    ...actual,
+    existsSync: ((...args: Parameters<typeof actual.existsSync>) => fsState.existsImpl(...args)) as typeof actual.existsSync,
+  };
+});
+
 import { mkdtempSync, writeFileSync, mkdirSync, rmSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -14,6 +29,7 @@ let tmpRoot: string;
 
 beforeEach(() => {
   tmpRoot = mkdtempSync(join(tmpdir(), "lsp-servers-"));
+  fsState.existsImpl = fsState.actual?.existsSync ?? (() => false);
 });
 
 afterEach(() => {
@@ -187,6 +203,7 @@ describe("findWorkspaceRoot", () => {
   it("falls back to repo markers when no workspace marker exists", async () => {
     writeFile(".git/HEAD");
     writeFile("src/main.go");
+    fsState.existsImpl = (path) => String(path) === join(tmpRoot, ".git");
     const { findWorkspaceRoot } = await import("../tools/lsp/servers.js");
     const root = findWorkspaceRoot(join(tmpRoot, "src/main.go"), tmpRoot);
     expect(root).toBe(tmpRoot);
@@ -194,9 +211,10 @@ describe("findWorkspaceRoot", () => {
 
   it("returns fallback when no markers exist", async () => {
     writeFile("a.txt");
+    fsState.existsImpl = () => false;
     const { findWorkspaceRoot } = await import("../tools/lsp/servers.js");
-    const root = findWorkspaceRoot(join(tmpRoot, "a.txt"), "/some/fallback");
-    expect(root).toBe("/some/fallback");
+    const root = findWorkspaceRoot(join(tmpRoot, "a.txt"), join(tmpRoot, "fallback-root"));
+    expect(root).toBe(join(tmpRoot, "fallback-root"));
   });
 });
 

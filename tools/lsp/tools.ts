@@ -69,7 +69,6 @@ function severityLabel(s: number): string {
 // ─── Register tools ───────────────────────────────────────────────────────
 
 export function registerLspTools(pi: ExtensionAPI, manager: LspServerManager) {
-
   // ── lsp_diagnostics ────────────────────────────────────────────────────
   pi.registerTool({
     name: "lsp_diagnostics",
