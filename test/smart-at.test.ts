@@ -72,15 +72,15 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 function makeCtxWith(cwd: string) {
-  const widgetUpdates: Array<{ key: string; content: any }> = [];
+  const widgetUpdates: Array<{ key: string; content: any; options?: any }> = [];
   let providerFactory: ((orig: any) => any) | null = null;
 
   const ctx: any = {
     cwd,
     ui: {
       addAutocompleteProvider: (f: any) => { providerFactory = f; },
-      setWidget: (key: string, content: any) => {
-        widgetUpdates.push({ key, content });
+      setWidget: (key: string, content: any, options?: any) => {
+        widgetUpdates.push({ key, content, options });
       },
     },
   };
@@ -156,7 +156,7 @@ describe("autocomplete provider (integration with real FFF)", () => {
     expect(result).toEqual({ items: [], prefix: "" });
   }, 15000);
 
-  it("returns null when FFF yields no results", async () => {
+  it("returns null when FFF yields no results after scan", async () => {
     tmp = mkdtempSync(join(tmpdir(), "smart-at-"));
     writeFileSync(join(tmp, "readme.md"), "");
 
@@ -177,7 +177,12 @@ describe("autocomplete provider (integration with real FFF)", () => {
     );
 
     expect(result).toBeNull();
-    expect(widgetUpdates.length).toBeGreaterThan(0);
+    const scanningWidget = widgetUpdates.find(
+      (w) =>
+        Array.isArray(w.content) &&
+        w.content.some((l: string) => l.includes("scanning")),
+    );
+    expect(scanningWidget).toBeUndefined();
   }, 15000);
 
   it("returns top frecency items for bare @ query", async () => {
@@ -237,7 +242,7 @@ describe("autocomplete provider (integration with real FFF)", () => {
     expect(widgetUpdates.some((w) => w.key === "smart-at")).toBe(true);
   }, 15000);
 
-  it("returns null when query is non-empty but matches no path substring", async () => {
+  it("returns null when query is non-empty but matches no path substring after scan", async () => {
     tmp = mkdtempSync(join(tmpdir(), "smart-at-"));
     mkdirSync(join(tmp, "src"), { recursive: true });
     writeFileSync(join(tmp, "src/index.ts"), "");
@@ -252,7 +257,7 @@ describe("autocomplete provider (integration with real FFF)", () => {
     await new Promise((r) => setTimeout(r, 200));
 
     // A long, unique string that appears in no path; FFF will return 0
-    // results (no fuzzy match) and we return null.
+    // results (no fuzzy match) after scan.
     const result = await provider.getSuggestions(
       ["@zzzqqqxxxnomatch"],
       0,
@@ -261,7 +266,52 @@ describe("autocomplete provider (integration with real FFF)", () => {
     );
 
     expect(result).toBeNull();
-    expect(widgetUpdates.length).toBeGreaterThan(0);
+    const scanningWidget = widgetUpdates.find(
+      (w) =>
+        Array.isArray(w.content) &&
+        w.content.some((l: string) => l.includes("scanning")),
+    );
+    expect(scanningWidget).toBeUndefined();
+  }, 15000);
+
+  it("shows below-editor scanning widget while FFF scan is in progress", async () => {
+    tmp = mkdtempSync(join(tmpdir(), "smart-at-"));
+    writeFileSync(join(tmp, "a.txt"), "");
+
+    const { ctx, getFactory, widgetUpdates } = makeCtxWith(tmp);
+    const startHook = smartAtModule.hooks!.session_start![0] as any;
+    await startHook({ type: "session_start" }, ctx);
+
+    const factory = getFactory()!;
+    const provider = factory(origStub);
+
+    const fffMod = await import("@ff-labs/fff-node");
+    const origMixedSearch = fffMod.FileFinder.prototype.mixedSearch;
+    const origIsScanning = fffMod.FileFinder.prototype.isScanning;
+    fffMod.FileFinder.prototype.mixedSearch = () =>
+      ({ ok: true, value: { items: [], scores: [], totalMatched: 0, totalFiles: 0, totalDirs: 0 } }) as any;
+    fffMod.FileFinder.prototype.isScanning = () => true;
+
+    try {
+      const result = await provider.getSuggestions(
+        ["@a"],
+        0,
+        2,
+        { signal: new AbortController().signal },
+      );
+
+      expect(result).toBeNull();
+      const scanningWidget = widgetUpdates.find(
+        (w) =>
+          Array.isArray(w.content) &&
+          w.content.some((l: string) => l.includes("scanning")),
+      );
+      expect(scanningWidget).toBeTruthy();
+      expect(scanningWidget!.options?.placement).toBe("belowEditor");
+    } finally {
+      fffMod.FileFinder.prototype.mixedSearch = origMixedSearch;
+      fffMod.FileFinder.prototype.isScanning = origIsScanning;
+    }
   }, 15000);
 
   it("returns null and clears widget when FFF errors", async () => {
@@ -413,6 +463,7 @@ describe("autocomplete provider (integration with real FFF)", () => {
     expect(origCalled).toBe(true);
     expect(widgetUpdates.some((w) => w.content === undefined)).toBe(true);
   }, 15000);
+
 
   it("skips registration when FFF create fails", async () => {
     tmp = mkdtempSync(join(tmpdir(), "smart-at-"));
