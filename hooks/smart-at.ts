@@ -93,7 +93,15 @@ export const smartAtModule: Module = {
     session_start: [
       async (_event: any, ctx: ExtensionContext) => {
         const cwd = String(ctx.cwd || "").trim();
-        const created = FileFinder.create({ basePath: cwd || "." });
+        // Always opt in to home/root scanning. These flags are opt-in guards
+        // in FFF — when cwd is a normal project, they're no-ops; when cwd
+        // IS $HOME or /, they let FFF index it. Without them, create() fails
+        // outright when cwd is a home/root, leaving the user without @-search.
+        const created = FileFinder.create({
+          basePath: cwd || ".",
+          enableHomeDirScanning: true,
+          enableFsRootScanning: true,
+        });
         if (!created.ok) {
           // FFF not available on this platform; silently skip.
           return;
@@ -102,11 +110,18 @@ export const smartAtModule: Module = {
         const finder = created.value;
         currentFinder = finder;
 
+        let scanWidgetVisible = false;
+
         // Start the scan in the background. We don't wait for it here so
-        // session_start returns immediately; the provider queries the
-        // (possibly partial) index and FFF returns whatever it has indexed
-        // so far. Full results appear as the scan progresses.
-        void finder.waitForScan(60_000);
+        // session_start returns immediately. If a scanning status was shown,
+        // clear it when the scan finishes even if no new autocomplete request
+        // is triggered afterwards.
+        void finder.waitForScan(60_000).then(() => {
+          if (currentFinder === finder && !finder.isDestroyed && scanWidgetVisible) {
+            scanWidgetVisible = false;
+            ctx.ui.setWidget("smart-at", undefined);
+          }
+        });
 
         ctx.ui.addAutocompleteProvider((orig: any) => ({
           getSuggestions: (
@@ -142,18 +157,47 @@ export const smartAtModule: Module = {
               return null;
             }
 
+            // 0 items during the initial scan means FFF is not ready yet.
+            // Autocomplete has no non-selectable dropdown state: returning an
+            // item would force SelectList to render a selectable "→ ..." row.
+            // So use a static below-editor widget while scanning, and clear it
+            // once the scan completes (see waitForScan above). After scanning,
+            // 0 items just means "no match".
+            if (r.value.items.length === 0) {
+              if (finder.isScanning()) {
+                scanWidgetVisible = true;
+                ctx.ui.setWidget(
+                  "smart-at",
+                  ["⏳ scanning…  (indexing files, please wait)"],
+                  { placement: "belowEditor" },
+                );
+              } else {
+                scanWidgetVisible = false;
+                ctx.ui.setWidget("smart-at", undefined);
+              }
+              return null;
+            }
+
             const result = buildResult(r.value.items, lowerQuery);
             if (!result) {
               ctx.ui.setWidget("smart-at", undefined);
               return null;
             }
 
+            scanWidgetVisible = false;
             ctx.ui.setWidget("smart-at", [WIDGET_FOOTER]);
             return Promise.resolve({ ...result, prefix });
           },
-          applyCompletion: (...args: any[]) => {
+          applyCompletion: (
+            lines: string[],
+            cl: number,
+            cc: number,
+            item: { value: string; label: string },
+            prefix: string,
+          ) => {
+            scanWidgetVisible = false;
             ctx.ui.setWidget("smart-at", undefined);
-            return orig.applyCompletion.apply(orig, args);
+            return orig.applyCompletion(lines, cl, cc, item, prefix);
           },
           shouldTriggerFileCompletion:
             orig.shouldTriggerFileCompletion?.bind(orig),
