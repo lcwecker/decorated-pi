@@ -341,6 +341,99 @@ describe("AskComponent — wizard flow", () => {
     comp.handleInput("\r"); // submit
     expect(result).toEqual([{ id: "langs", value: ["Python"] }]);
   });
+
+  it("text question: bracketed paste inserts content", () => {
+    let result: any = undefined;
+    const questions: AskQuestion[] = [{ id: "q", type: "text", question: "Name?" }];
+    const comp = new AskComponent(mockTui(), mockTheme(), questions, (ans) => { result = ans; });
+    comp.handleInput("\x1b[200~pasted text\x1b[201~");
+    comp.handleInput("\r");
+    comp.handleInput("\r");
+    expect(result).toEqual([{ id: "q", value: "pasted text" }]);
+  });
+
+  it("text question: paste strips newlines and tabs", () => {
+    let result: any = undefined;
+    const questions: AskQuestion[] = [{ id: "q", type: "text", question: "Name?" }];
+    const comp = new AskComponent(mockTui(), mockTheme(), questions, (ans) => { result = ans; });
+    comp.handleInput("\x1b[200~line1\nline2\tend\x1b[201~");
+    comp.handleInput("\r");
+    comp.handleInput("\r");
+    expect(result).toEqual([{ id: "q", value: "line1line2    end" }]);
+  });
+
+  it("text question: paste preserves CJK and unicode characters", () => {
+    let result: any = undefined;
+    const questions: AskQuestion[] = [{ id: "q", type: "text", question: "Name?" }];
+    const comp = new AskComponent(mockTui(), mockTheme(), questions, (ans) => { result = ans; });
+    comp.handleInput("\x1b[200~你好，世界 🌍\x1b[201~");
+    comp.handleInput("\r");
+    comp.handleInput("\r");
+    expect(result).toEqual([{ id: "q", value: "你好，世界 🌍" }]);
+  });
+
+  it("single + allowCustom: paste into Other row inserts custom text", () => {
+    let result: any = undefined;
+    const questions: AskQuestion[] = [{
+      id: "color",
+      type: "single",
+      question: "Color?",
+      options: ["red", "green"],
+      allowCustom: true,
+    }];
+    const comp = new AskComponent(mockTui(), mockTheme(), questions, (ans) => { result = ans; });
+    comp.handleInput("\x1b[B"); // red → green
+    comp.handleInput("\x1b[B"); // green → Other
+    comp.handleInput("\x1b[200~custom value\x1b[201~");
+    comp.handleInput("\r");
+    comp.handleInput("\r");
+    expect(result).toEqual([{ id: "color", value: "custom value" }]);
+  });
+
+  it("single: paste is ignored on regular option rows", () => {
+    let result: any = undefined;
+    const questions: AskQuestion[] = [{
+      id: "color",
+      type: "single",
+      question: "Color?",
+      options: ["red", "green"],
+      allowCustom: true,
+    }];
+    const comp = new AskComponent(mockTui(), mockTheme(), questions, (ans) => { result = ans; });
+    // Cursor starts on "red". Pasting here should not affect anything.
+    comp.handleInput("\x1b[200~should be ignored\x1b[201~");
+    comp.handleInput("\r");
+    comp.handleInput("\r");
+    expect(result).toEqual([{ id: "color", value: "red" }]);
+  });
+
+  it("multi + allowCustom: paste into Other row selects and fills it", () => {
+    let result: any = undefined;
+    const questions: AskQuestion[] = [{
+      id: "langs",
+      type: "multi",
+      question: "Languages?",
+      options: ["TypeScript"],
+      allowCustom: true,
+    }];
+    const comp = new AskComponent(mockTui(), mockTheme(), questions, (ans) => { result = ans; });
+    comp.handleInput("\x1b[B"); // down to Other
+    comp.handleInput("\x1b[200~Rust\x1b[201~");
+    comp.handleInput("\r");
+    comp.handleInput("\r");
+    expect(result).toEqual([{ id: "langs", value: ["Rust"] }]);
+  });
+
+  it("summary mode: bracketed paste is ignored", () => {
+    let result: any = undefined;
+    const questions: AskQuestion[] = [{ id: "q", type: "text", question: "Name?" }];
+    const comp = new AskComponent(mockTui(), mockTheme(), questions, (ans) => { result = ans; });
+    comp.handleInput("hi");
+    comp.handleInput("\r"); // advance to summary
+    comp.handleInput("\x1b[200~injected\x1b[201~");
+    comp.handleInput("\r"); // submit
+    expect(result).toEqual([{ id: "q", value: "hi" }]);
+  });
 });
 
 describe("formatAnswers", () => {
