@@ -238,17 +238,16 @@ describe("AskComponent — wizard flow", () => {
     expect(out).not.toContain("☐");
   });
 
-  it("single + allowCustom: select Other, type, commit", () => {
+  it("single: select Other, type, commit", () => {
     let result: any = undefined;
     const questions: AskQuestion[] = [{
       id: "color",
       type: "single",
       question: "Color?",
       options: ["red", "green", "blue"],
-      allowCustom: true,
     }];
     const comp = new AskComponent(mockTui(), mockTheme(), questions, (ans) => { result = ans; });
-    // Cursor lands on "red" (index 0). Down twice → "blue". Down once → "Other".
+    // Cursor lands on "red" (index 0). Down twice → "blue". Down once → "Other" (index 3).
     comp.handleInput("\x1b[B");
     comp.handleInput("\x1b[B");
     comp.handleInput("\x1b[B");
@@ -260,14 +259,13 @@ describe("AskComponent — wizard flow", () => {
     expect(result).toEqual([{ id: "color", value: "tea" }]);
   });
 
-  it("single + allowCustom: typing only happens on Other row, not on regular options", () => {
+  it("single: typing only happens on Other row, not on regular options", () => {
     let result: any = undefined;
     const questions: AskQuestion[] = [{
       id: "color",
       type: "single",
       question: "Color?",
       options: ["red", "green"],
-      allowCustom: true,
     }];
     const comp = new AskComponent(mockTui(), mockTheme(), questions, (ans) => { result = ans; });
     // Cursor on "red" (index 0). Type "x" — should be ignored on regular option.
@@ -277,17 +275,16 @@ describe("AskComponent — wizard flow", () => {
     expect(result).toEqual([{ id: "color", value: "red" }]);
   });
 
-  it("single + allowCustom: Enter on Other with empty text is invalid", () => {
+  it("single: Enter on Other with empty text is invalid", () => {
     let result: any = "sentinel";
     const questions: AskQuestion[] = [{
       id: "color",
       type: "single",
       question: "Color?",
       options: ["red"],
-      allowCustom: true,
     }];
     const comp = new AskComponent(mockTui(), mockTheme(), questions, (ans) => { result = ans; });
-    comp.handleInput("\x1b[B"); // cursor on Other (only "red" + "Other")
+    comp.handleInput("\x1b[B"); // cursor on Other ("red" + "Other")
     comp.handleInput("\r"); // refused (empty customText)
     expect(result).toBe("sentinel");
     comp.handleInput("o"); // type
@@ -297,20 +294,19 @@ describe("AskComponent — wizard flow", () => {
     expect(result).toEqual([{ id: "color", value: "ok" }]);
   });
 
-  it("multi + allowCustom: toggle Other, type, commit", () => {
+  it("multi: toggle Other, type, commit", () => {
     let result: any = undefined;
     const questions: AskQuestion[] = [{
       id: "langs",
       type: "multi",
       question: "Languages?",
       options: ["TypeScript", "Python"],
-      allowCustom: true,
     }];
     const comp = new AskComponent(mockTui(), mockTheme(), questions, (ans) => { result = ans; });
     comp.handleInput(" "); // toggle TypeScript
     comp.handleInput("\x1b[B"); // down to Python
     comp.handleInput(" "); // toggle Python
-    comp.handleInput("\x1b[B"); // down to Other
+    comp.handleInput("\x1b[B"); // down to Other (index 2)
     comp.handleInput(" "); // toggle Other on
     comp.handleInput("r"); // type custom
     comp.handleInput("u");
@@ -321,14 +317,13 @@ describe("AskComponent — wizard flow", () => {
     expect(result).toEqual([{ id: "langs", value: ["TypeScript", "Python", "rust"] }]);
   });
 
-  it("multi + allowCustom: toggling Other off drops the custom text from answer", () => {
+  it("multi: toggling Other off drops the custom text from answer", () => {
     let result: any = undefined;
     const questions: AskQuestion[] = [{
       id: "langs",
       type: "multi",
       question: "Languages?",
       options: ["Python"],
-      allowCustom: true,
     }];
     const comp = new AskComponent(mockTui(), mockTheme(), questions, (ans) => { result = ans; });
     comp.handleInput(" "); // toggle Python
@@ -372,14 +367,13 @@ describe("AskComponent — wizard flow", () => {
     expect(result).toEqual([{ id: "q", value: "你好，世界 🌍" }]);
   });
 
-  it("single + allowCustom: paste into Other row inserts custom text", () => {
+  it("single: paste into Other row inserts custom text", () => {
     let result: any = undefined;
     const questions: AskQuestion[] = [{
       id: "color",
       type: "single",
       question: "Color?",
       options: ["red", "green"],
-      allowCustom: true,
     }];
     const comp = new AskComponent(mockTui(), mockTheme(), questions, (ans) => { result = ans; });
     comp.handleInput("\x1b[B"); // red → green
@@ -397,7 +391,6 @@ describe("AskComponent — wizard flow", () => {
       type: "single",
       question: "Color?",
       options: ["red", "green"],
-      allowCustom: true,
     }];
     const comp = new AskComponent(mockTui(), mockTheme(), questions, (ans) => { result = ans; });
     // Cursor starts on "red". Pasting here should not affect anything.
@@ -407,14 +400,13 @@ describe("AskComponent — wizard flow", () => {
     expect(result).toEqual([{ id: "color", value: "red" }]);
   });
 
-  it("multi + allowCustom: paste into Other row selects and fills it", () => {
+  it("multi: paste into Other row selects and fills it", () => {
     let result: any = undefined;
     const questions: AskQuestion[] = [{
       id: "langs",
       type: "multi",
       question: "Languages?",
       options: ["TypeScript"],
-      allowCustom: true,
     }];
     const comp = new AskComponent(mockTui(), mockTheme(), questions, (ans) => { result = ans; });
     comp.handleInput("\x1b[B"); // down to Other
