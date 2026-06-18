@@ -68,6 +68,29 @@ function effectiveOptionCount(q: AskQuestion): number {
   return (q.options?.length ?? 0) + (q.allowCustom ? 1 : 0);
 }
 
+const BRACKETED_PASTE_START = "\x1b[200~";
+const BRACKETED_PASTE_END = "\x1b[201~";
+
+/** Extract content from a bracketed-paste sequence. Returns undefined if the
+ *  data is not a complete paste. Any trailing input after the end marker is
+ *  returned as `remaining` so it can be processed recursively. */
+function extractBracketedPaste(data: string): { content: string; remaining: string } | undefined {
+  if (!data.startsWith(BRACKETED_PASTE_START)) return undefined;
+  const afterStart = data.slice(BRACKETED_PASTE_START.length);
+  const endIndex = afterStart.indexOf(BRACKETED_PASTE_END);
+  if (endIndex === -1) return undefined;
+  return {
+    content: afterStart.slice(0, endIndex),
+    remaining: afterStart.slice(endIndex + BRACKETED_PASTE_END.length),
+  };
+}
+
+/** Normalize pasted text for a single-line input: strip line breaks and
+ *  expand tabs to spaces (matches pi-tui's built-in Input behavior). */
+function cleanPastedText(text: string): string {
+  return text.replace(/\r\n/g, "").replace(/\r/g, "").replace(/\n/g, "").replace(/\t/g, "    ");
+}
+
 class DynamicBorder implements Component {
   private colorFn: (str: string) => string;
   constructor(theme: Theme) { this.colorFn = (str: string) => theme.fg("border", str); }
@@ -208,6 +231,35 @@ export class AskComponent extends Container {
 
   handleInput(data: string): void {
     const kb = getKeybindings();
+
+    // ── Bracketed paste ─────────────────────────────────────────────
+    // Terminals that support bracketed paste mode wrap pasted content in
+    // \x1b[200~ ... \x1b[201~. Without handling this, the leading ESC is
+    // rejected as a control character and nothing is inserted.
+    const paste = extractBracketedPaste(data);
+    if (paste) {
+      if (!this.summaryMode) {
+        const text = cleanPastedText(paste.content);
+        const q = this.currentQuestion();
+        const state = this.currentState();
+        if (q.type === "text") {
+          state.value = (state.value as string) + text;
+        } else if (q.allowCustom) {
+          const opts = q.options ?? [];
+          if (state.cursor === opts.length) {
+            state.customText += text;
+            if (q.type === "multi") {
+              state.customSelected = true;
+            }
+          }
+        }
+        this.renderView();
+      }
+      if (paste.remaining) {
+        this.handleInput(paste.remaining);
+      }
+      return;
+    }
 
     // ── Summary mode ────────────────────────────────────────────────
     if (this.summaryMode) {
