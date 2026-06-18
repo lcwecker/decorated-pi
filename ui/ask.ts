@@ -28,10 +28,6 @@ export interface AskQuestion {
   question: string;
   options?: string[];
   default?: string;
-  /** When true on single/multi, an "Other" row is appended after the
-   *  regular options. Picking it switches the row into an inline text
-   *  input — lets the user type a custom answer not in the preset list. */
-  allowCustom?: boolean;
 }
 
 export interface AskAnswer {
@@ -41,7 +37,7 @@ export interface AskAnswer {
 
 interface QuestionState {
   value: string | string[];
-  cursor: number; // option cursor; for allowCustom, opts.length = "Other" row
+  cursor: number; // option cursor; opts.length maps to the "Other" row
   /** Typed text when the cursor sits on the "Other" row (single or multi). */
   customText: string;
   /** Multi only: whether "Other" is currently toggled into the selection. */
@@ -62,10 +58,16 @@ function parseDefault(type: AskQuestionType, options: string[] | undefined, defa
   return { value: selected, cursor: 0, customText: "", customSelected: false };
 }
 
-/** For single/multi with allowCustom, returns the effective option count
+/** Returns true for single/multi choice questions, which always get an
+ *  "Other" row for entering a custom answer not in the preset list. */
+function hasOtherRow(q: AskQuestion): boolean {
+  return q.type === "single" || q.type === "multi";
+}
+
+/** For single/multi questions, returns the effective option count
  *  (regular options plus the "Other" row). */
 function effectiveOptionCount(q: AskQuestion): number {
-  return (q.options?.length ?? 0) + (q.allowCustom ? 1 : 0);
+  return (q.options?.length ?? 0) + (hasOtherRow(q) ? 1 : 0);
 }
 
 const BRACKETED_PASTE_START = "\x1b[200~";
@@ -156,31 +158,31 @@ export class AskComponent extends Container {
     const state = this.currentState();
     if (q.type === "text") return (state.value as string).trim() !== "";
     if (q.type === "single") {
-      if (q.allowCustom && state.cursor === (q.options?.length ?? 0)) {
+      if (state.cursor === (q.options?.length ?? 0)) {
         return state.customText.trim() !== "";
       }
       return (state.value as string) !== "";
     }
     // multi: valid if any regular option is selected, or "Other" is
     // toggled AND has non-empty custom text.
-    if (q.allowCustom && state.customSelected) {
+    if (state.customSelected) {
       return state.customText.trim() !== "" || (state.value as string[]).length > 0;
     }
     return (state.value as string[]).length > 0;
   }
 
   /** The answer that will actually be submitted for this question. Differs
-   *  from state.value when allowCustom is in play and "Other" is chosen. */
+   *  from state.value when the cursor is on the "Other" row. */
   private committedValue(q: AskQuestion, state: QuestionState): string | string[] {
     if (q.type === "single") {
-      if (q.allowCustom && state.cursor === (q.options?.length ?? 0)) {
+      if (state.cursor === (q.options?.length ?? 0)) {
         return state.customText.trim();
       }
       return state.value as string;
     }
     if (q.type === "multi") {
       const base = state.value as string[];
-      if (q.allowCustom && state.customSelected && state.customText.trim() !== "") {
+      if (state.customSelected && state.customText.trim() !== "") {
         return [...base, state.customText.trim()];
       }
       return base;
@@ -244,7 +246,7 @@ export class AskComponent extends Container {
         const state = this.currentState();
         if (q.type === "text") {
           state.value = (state.value as string) + text;
-        } else if (q.allowCustom) {
+        } else if (hasOtherRow(q)) {
           const opts = q.options ?? [];
           if (state.cursor === opts.length) {
             state.customText += text;
@@ -316,7 +318,7 @@ export class AskComponent extends Container {
     } else if (q.type === "single" && q.options) {
       const opts = q.options;
       const totalLen = effectiveOptionCount(q);
-      const onCustomRow = q.allowCustom === true && state.cursor === opts.length;
+      const onCustomRow = state.cursor === opts.length;
 
       if (kb.matches(data, "tui.select.up")) {
         const next = (state.cursor - 1 + totalLen) % totalLen;
@@ -342,7 +344,7 @@ export class AskComponent extends Container {
     } else if (q.type === "multi" && q.options) {
       const opts = q.options;
       const totalLen = effectiveOptionCount(q);
-      const onCustomRow = q.allowCustom === true && state.cursor === opts.length;
+      const onCustomRow = state.cursor === opts.length;
 
       if (kb.matches(data, "tui.select.up")) {
         state.cursor = (state.cursor - 1 + totalLen) % totalLen;
@@ -419,7 +421,7 @@ export class AskComponent extends Container {
       const opts = q.options;
       const totalLen = effectiveOptionCount(q);
       for (let j = 0; j < totalLen; j++) {
-        const isCustomRow = q.allowCustom === true && j === opts.length;
+        const isCustomRow = j === opts.length;
         const optLabel = isCustomRow ? "Other" : opts[j];
         const selected = isCustomRow ? false : optLabel === state.value;
         const atCursor = j === state.cursor;
@@ -441,7 +443,7 @@ export class AskComponent extends Container {
       const opts = q.options;
       const totalLen = effectiveOptionCount(q);
       for (let j = 0; j < totalLen; j++) {
-        const isCustomRow = q.allowCustom === true && j === opts.length;
+        const isCustomRow = j === opts.length;
         const optLabel = isCustomRow ? "Other" : opts[j];
         const inValue = !isCustomRow && (state.value as string[]).includes(optLabel);
         const customOn = isCustomRow && state.customSelected;
@@ -465,13 +467,9 @@ export class AskComponent extends Container {
     if (q.type === "text") {
       hint = "Enter next · Esc cancel";
     } else if (q.type === "single") {
-      hint = q.allowCustom
-        ? "↑↓ move · Enter next · Esc cancel"
-        : "↑↓ move · Enter next · Esc cancel";
+      hint = "↑↓ move · Enter next · Esc cancel";
     } else {
-      hint = q.allowCustom
-        ? "↑↓ move · Space toggle · Enter next · Esc cancel"
-        : "↑↓ move · Space toggle · Enter next · Esc cancel";
+      hint = "↑↓ move · Space toggle · Enter next · Esc cancel";
     }
     this.hintComponent.setText(this.theme.fg("dim", "  " + hint));
   }

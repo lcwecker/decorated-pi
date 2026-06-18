@@ -19,9 +19,6 @@ const askQuestionSchema = Type.Object({
   question: Type.String({ description: "Question text shown to the user." }),
   options: Type.Optional(Type.Array(Type.String(), { description: "Options for single or multi choice." })),
   default: Type.Optional(Type.String({ description: "Default answer. For multi, comma-separated values." })),
-  allowCustom: Type.Optional(Type.Boolean({
-    description: "For single/multi: append an \"Other\" row that toggles into a free-text input. Lets the user enter a custom answer not in the preset list.",
-  })),
 });
 
 function formatAnswer(q: AskQuestion, value: string | string[]): string {
