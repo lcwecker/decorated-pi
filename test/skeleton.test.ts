@@ -115,6 +115,73 @@ describe("skeleton — module hook dispatch", () => {
     expect(result).toBeUndefined();
   });
 
+  it("propagates session_before_compact return value (last non-undefined wins)", async () => {
+    // Mirrors runner.emit()'s `session_before_*` contract: each handler
+    // sees the original event, the last truthy return becomes the result
+    // (consumed by pi's compact() as `{ cancel?, compaction? }`).
+    const sk = createSkeleton();
+    sk.register({
+      name: "compaction",
+      hooks: {
+        session_before_compact: [(_e, _ctx, _pi) => ({
+          compaction: { summary: "first", firstKeptEntryId: "x", tokensBefore: 100 },
+        })],
+      },
+    });
+    sk.register({
+      name: "another-compaction",
+      hooks: {
+        session_before_compact: [(_e, _ctx, _pi) => ({
+          compaction: { summary: "second", firstKeptEntryId: "y", tokensBefore: 200 },
+        })],
+      },
+    });
+    sk.install(pi as any);
+
+    const handler = pi.handlers.get("session_before_compact")![0];
+    const result = await handler({ preparation: {} }, makeCtx() as any);
+    expect(result).toEqual({
+      compaction: { summary: "second", firstKeptEntryId: "y", tokensBefore: 200 },
+    });
+  });
+
+  it("propagates session_before_compact cancel to abort compaction", async () => {
+    const sk = createSkeleton();
+    sk.register({
+      name: "cancel",
+      hooks: {
+        session_before_compact: [() => ({ cancel: true })],
+      },
+    });
+    sk.install(pi as any);
+
+    const handler = pi.handlers.get("session_before_compact")![0];
+    const result = await handler({ preparation: {} }, makeCtx() as any);
+    expect(result).toEqual({ cancel: true });
+  });
+
+  it("session_before_compact: undefined returns propagate as undefined (fallthrough)", async () => {
+    // Returning undefined = "step aside, let pi run its default compaction".
+    const sk = createSkeleton();
+    sk.register({
+      name: "no-op",
+      hooks: {
+        session_before_compact: [() => undefined],
+      },
+    });
+    sk.register({
+      name: "also-no-op",
+      hooks: {
+        session_before_compact: [() => undefined],
+      },
+    });
+    sk.install(pi as any);
+
+    const handler = pi.handlers.get("session_before_compact")![0];
+    const result = await handler({ preparation: {} }, makeCtx() as any);
+    expect(result).toBeUndefined();
+  });
+
   it("invokes parallel handlers with (event, ctx, pi)", async () => {
     const seen: any[] = [];
     const sk = createSkeleton();

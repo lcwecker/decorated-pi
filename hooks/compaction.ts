@@ -1,13 +1,18 @@
 /**
  * compaction — custom compaction model + auto-resume.
  *
- * Uses the configured compact model (from settings.ts) to summarize messages
- * on session_before_compact. After auto-compaction, sends a "continue" message
- * to resume the agent loop.
+ * On `session_before_compact`, runs pi-coding-agent's `compact()` against
+ * the model configured in settings (rather than the agent's current model)
+ * and returns the result so pi uses our summary instead of running its
+ * default. If the configured model is missing, auth fails, or the call
+ * throws, we fall through (return undefined) and pi runs its own compaction.
+ *
+ * On `session_compact`, if the compaction was auto-triggered, sends a
+ * "continue" message to resume the agent loop.
  */
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { generateSummary, convertToLlm, serializeConversation } from "@earendil-works/pi-coding-agent";
+import { compact } from "@earendil-works/pi-coding-agent";
 import type { Model } from "@earendil-works/pi-ai";
 import { isContextOverflow } from "@earendil-works/pi-ai";
 import * as fs from "node:fs";
@@ -19,7 +24,6 @@ import type { Module, Skeleton } from "./skeleton.js";
 
 interface PiCompactionSettings {
   enabled: boolean;
-  reserveTokens: number;
 }
 
 interface AutoCompactionCandidate {
@@ -29,7 +33,6 @@ interface AutoCompactionCandidate {
 
 const DEFAULT_PI_COMPACTION_SETTINGS: PiCompactionSettings = {
   enabled: true,
-  reserveTokens: 16_384,
 };
 
 function readJsonObject(filePath: string): any | undefined {
@@ -52,7 +55,6 @@ function loadPiCompactionSettings(cwd: string): PiCompactionSettings {
   };
   return {
     enabled: merged.enabled !== false,
-    reserveTokens: typeof merged.reserveTokens === "number" ? merged.reserveTokens : DEFAULT_PI_COMPACTION_SETTINGS.reserveTokens,
   };
 }
 
@@ -63,30 +65,24 @@ function getLastAssistantMessage(messages: any[]): any | undefined {
   return undefined;
 }
 
-function shouldExpectAutoCompaction(
-  messages: any[],
-  usage: { tokens: number | null; contextWindow: number } | undefined,
-  settings: PiCompactionSettings,
-): boolean {
-  if (!settings.enabled) return false;
-  const lastAssistant = getLastAssistantMessage(messages);
-  if (!lastAssistant) return false;
-  const contextWindow = usage?.contextWindow ?? 0;
-  if (contextWindow > 0 && isContextOverflow(lastAssistant, contextWindow)) return true;
-  if (!usage || usage.tokens === null) return false;
-  return usage.tokens > usage.contextWindow - settings.reserveTokens;
-}
-
+/** Mirror pi's _runAutoCompaction(reason, willRetry) decision:
+ *   - overflow → willRetry=true → auto-resume the agent
+ *   - threshold → willRetry=false → no auto-resume (user continues manually)
+ *   - manual /compact → no resume
+ * Detected from the post-agent-end candidate: overflow shows up as a
+ * context-overflow error on the last assistant message; threshold is a
+ * pre-emptive compaction and we intentionally skip auto-resume for it. */
 function shouldAutoResumeCompaction(
-  prePromptCompactionPending: boolean,
-  postAgentEndCandidate: AutoCompactionCandidate | null,
+  candidate: AutoCompactionCandidate | null,
   settings: PiCompactionSettings,
   customInstructions?: string,
 ): boolean {
   if (customInstructions !== undefined) return false;
-  if (prePromptCompactionPending) return true;
-  if (!postAgentEndCandidate) return false;
-  return shouldExpectAutoCompaction(postAgentEndCandidate.messages, postAgentEndCandidate.usage, settings);
+  if (!candidate || !settings.enabled) return false;
+  const lastAssistant = getLastAssistantMessage(candidate.messages);
+  if (!lastAssistant) return false;
+  const contextWindow = candidate.usage?.contextWindow ?? 0;
+  return contextWindow > 0 && isContextOverflow(lastAssistant, contextWindow);
 }
 
 function getConfiguredCompactModel(registry: any): Model<any> | null {
@@ -97,92 +93,127 @@ function getConfiguredCompactModel(registry: any): Model<any> | null {
   return registry.find(parsed.provider, parsed.modelId) ?? null;
 }
 
-const TURN_PREFIX_PROMPT = `Summarize this turn prefix to provide context for the retained suffix. Be concise. Focus on what's needed to understand the kept suffix.`;
-
-async function generateTurnPrefixSummary(
-  messages: any[], model: Model<any>, reserveTokens: number,
-  apiKey: string, headers: Record<string, string> | undefined, signal: AbortSignal,
-): Promise<string> {
-  const { complete } = await import("@earendil-works/pi-ai");
-  const ct = serializeConversation(convertToLlm(messages));
-  const resp = await complete(model, {
-    systemPrompt: "You are a context summarization assistant. Produce a structured summary only.",
-    messages: [{ role: "user" as const, content: [{ type: "text" as const, text: `<conversation>\n${ct}\n</conversation>\n\n${TURN_PREFIX_PROMPT}` }], timestamp: Date.now() }],
-  }, { maxTokens: Math.floor(0.5 * reserveTokens), signal, apiKey, headers });
-  if (resp.stopReason === "error") throw new Error(resp.errorMessage ?? "Turn prefix summarization failed");
-  return resp.content.filter((c): c is { type: "text"; text: string } => c.type === "text").map(c => c.text).join("\n");
+/** Per-session state. Indexed by sessionId (from ctx.sessionManager) so
+ *  two concurrent pi sessions don't trample each other's flags. */
+interface SessionState {
+  postAgentEndCandidate: AutoCompactionCandidate | null;
+  currentCompactionIsAuto: boolean;
 }
 
-let prePromptCompactionPending = false;
-let postAgentEndCandidate: AutoCompactionCandidate | null = null;
-let currentCompactionIsAuto = false;
+const sessionStates = new Map<string, SessionState>();
+
+function getSessionState(sessionId: string): SessionState {
+  let s = sessionStates.get(sessionId);
+  if (!s) {
+    s = { postAgentEndCandidate: null, currentCompactionIsAuto: false };
+    sessionStates.set(sessionId, s);
+  }
+  return s;
+}
 
 export const compactionModule: Module = {
   name: "compaction",
   hooks: {
-    input: [() => { prePromptCompactionPending = true; postAgentEndCandidate = null; }],
-    before_agent_start: [() => { prePromptCompactionPending = false; postAgentEndCandidate = null; }],
-    agent_start: [() => { prePromptCompactionPending = false; postAgentEndCandidate = null; }],
+    session_shutdown: [
+      (_event, ctx) => {
+        // Clean up state when the session ends so the Map doesn't grow.
+        sessionStates.delete(ctx.sessionManager.getSessionId());
+      },
+    ],
+    input: [
+      (_event, ctx) => {
+        getSessionState(ctx.sessionManager.getSessionId()).postAgentEndCandidate = null;
+      },
+    ],
+    before_agent_start: [
+      (_event, ctx) => {
+        getSessionState(ctx.sessionManager.getSessionId()).postAgentEndCandidate = null;
+      },
+    ],
+    agent_start: [
+      (_event, ctx) => {
+        getSessionState(ctx.sessionManager.getSessionId()).postAgentEndCandidate = null;
+      },
+    ],
     agent_end: [
       (event, ctx) => {
-        prePromptCompactionPending = false;
-        postAgentEndCandidate = { messages: event.messages, usage: ctx.getContextUsage() };
+        getSessionState(ctx.sessionManager.getSessionId()).postAgentEndCandidate = {
+          messages: event.messages,
+          usage: ctx.getContextUsage(),
+        };
       },
     ],
     session_before_compact: [
-      async (event, ctx) => {
+      async (event, ctx, pi) => {
+        const sessionState = getSessionState(ctx.sessionManager.getSessionId());
         const compactionSettings = loadPiCompactionSettings(ctx.cwd);
-        const { isContextOverflow } = await import("@earendil-works/pi-ai");
-        const isAuto = shouldExpectAutoCompaction(
-          postAgentEndCandidate?.messages ?? [],
-          postAgentEndCandidate?.usage,
+        // Pi only auto-compacts after agent_end (see _checkCompaction in
+        // agent-session.js), so we detect "auto" via the post-agent-end
+        // overflow heuristic. Manual /compact carries customInstructions
+        // and skips auto-resume.
+        const isAutoResume = shouldAutoResumeCompaction(
+          sessionState.postAgentEndCandidate,
           compactionSettings,
+          event.customInstructions,
         );
-        // For simplicity, treat session_before_compact as auto if recent agent_end was likely-overflow
-        // and no custom instructions given.
-        const isAutoResume = isAuto && !event.customInstructions;
-        currentCompactionIsAuto = isAutoResume;
-        prePromptCompactionPending = false;
-        postAgentEndCandidate = null;
+        sessionState.postAgentEndCandidate = null;
 
         const model = getConfiguredCompactModel(ctx.modelRegistry);
-        if (!model) return;
+        if (!model) return; // No custom compact model configured → let pi run its default compaction.
         const auth = await ctx.modelRegistry.getApiKeyAndHeaders(model);
         if (!auth.ok) {
           if (ctx.hasUI) ctx.ui.notify(`Compact model auth failed: ${auth.error}`, "warning");
-          return;
+          return; // Auth failed → fall through to default compaction; pi handles its own resume.
         }
         const { preparation, customInstructions, signal } = event;
-        const { messagesToSummarize, turnPrefixMessages, isSplitTurn, tokensBefore, firstKeptEntryId, previousSummary, settings } = preparation;
-        if (ctx.hasUI) ctx.ui.notify(`🗜️ Compacting with ${model.id} (${tokensBefore.toLocaleString()} tokens)...`, "info");
+        if (ctx.hasUI) {
+          ctx.ui.notify(
+            `🗜️ Compacting with ${model.id} (${preparation.tokensBefore.toLocaleString()} tokens)...`,
+            "info",
+          );
+        }
+        // Mirror pi's native behavior: compact() uses the agent session's
+        // current thinking level (agent-session.js passes this.thinkingLevel
+        // to compact() in both manual and auto compaction paths).
+        const thinkingLevel = pi.getThinkingLevel();
         try {
-          let summary: string;
-          if (isSplitTurn && turnPrefixMessages.length > 0) {
-            const [hs, ps] = await Promise.all([
-              messagesToSummarize.length > 0
-                ? generateSummary(messagesToSummarize, model, settings.reserveTokens, auth.apiKey ?? "", auth.headers, signal, customInstructions, previousSummary)
-                : Promise.resolve("No prior history."),
-              generateTurnPrefixSummary(turnPrefixMessages, model, settings.reserveTokens, auth.apiKey ?? "", auth.headers, signal),
-            ]);
-            summary = `${hs}\n\n---\n\n**Turn Context (split turn):**\n\n${ps}`;
-          } else {
-            summary = await generateSummary(messagesToSummarize, model, settings.reserveTokens, auth.apiKey ?? "", auth.headers, signal, customInstructions, previousSummary);
-          }
-          // session_before_compact is a parallel event — handlers may not
-          // return a value (skeleton discards compose returns for
-          // non-compose events). The summary is intentionally lost; the
-          // session_compact handler below only reads the
-          // currentCompactionIsAuto flag and does not consume the summary.
+          // Delegate to pi-coding-agent's compact() — it does both
+          // summarization (using our model) and file-op extraction, and
+          // returns the exact CompactionResult shape pi's runner expects.
+          const result = await compact(
+            preparation,
+            model,
+            auth.apiKey ?? "",
+            auth.headers,
+            customInstructions,
+            signal,
+            thinkingLevel,
+          );
+          // Only mark as auto-resumed if OUR hook did the compaction. If we
+          // had fallen through to pi's default path above, pi's own
+          // _runAutoCompaction would call agent.continue() on overflow;
+          // marking here would cause a duplicate resume message on top.
+          sessionState.currentCompactionIsAuto = isAutoResume;
+          return { compaction: result };
         } catch (err) {
           if (signal.aborted) return;
-          if (ctx.hasUI) ctx.ui.notify(`Compact failed: ${err instanceof Error ? err.message : err}`, "error");
+          // Returning undefined lets pi run its default compaction with the
+          // active agent model. Surface the failure so the user knows their
+          // custom model didn't take effect.
+          if (ctx.hasUI) {
+            ctx.ui.notify(
+              `Custom compact failed (${err instanceof Error ? err.message : err}); using default model.`,
+              "warning",
+            );
+          }
         }
       },
     ],
     session_compact: [
-      (_event, _ctx, pi) => {
-        const shouldResume = currentCompactionIsAuto;
-        currentCompactionIsAuto = false;
+      (_event, ctx, pi) => {
+        const sessionState = getSessionState(ctx.sessionManager.getSessionId());
+        const shouldResume = sessionState.currentCompactionIsAuto;
+        sessionState.currentCompactionIsAuto = false;
         if (!shouldResume) return;
         pi.sendMessage({
           customType: "auto_compact_resume",
@@ -199,6 +230,5 @@ export function setupCompaction(sk: Skeleton): void {
 }
 
 export const __modelIntegrationTest = {
-  shouldExpectAutoCompaction,
   shouldAutoResumeCompaction,
 };
