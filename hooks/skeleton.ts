@@ -42,13 +42,24 @@ export type ComposeHandler<E extends HookEvent> = (
   pi: ExtensionAPI,
 ) => any | Promise<any>;
 
+/** Result: each handler sees the original event; the last non-undefined
+ *  return value wins. Matches runner.emit()'s behavior for `session_before_*`
+ *  events, where the runner collects a single `{ cancel?, compaction? }`
+ *  result from all extensions. Use for events whose contract is "the
+ *  extension either overrides or steps aside". */
+export type ResultHandler<E extends HookEvent> = (
+  event: any,
+  ctx: ExtensionContext,
+  pi: ExtensionAPI,
+) => any | Promise<any>;
+
 export interface Module {
   readonly name: string;
   readonly hooks: {
     session_start?: ParallelHandler<"session_start">[];
     session_shutdown?: ParallelHandler<"session_shutdown">[];
     session_compact?: ParallelHandler<"session_compact">[];
-    session_before_compact?: ParallelHandler<"session_before_compact">[];
+    session_before_compact?: ResultHandler<"session_before_compact">[];
     before_agent_start?: ComposeHandler<"before_agent_start">[];
     agent_start?: ParallelHandler<"agent_start">[];
     agent_end?: ParallelHandler<"agent_end">[];
@@ -86,6 +97,15 @@ const COMPOSE_EVENTS = new Set<HookEvent>([
   "before_agent_start",
   "tool_call",
   "tool_result",
+]);
+
+/** Events whose handler return value is propagated to the extension runner
+ *  (no chaining — each handler sees the original event, last non-undefined
+ *  return wins). Required for `session_before_compact`, whose contract is
+ *  `{ cancel?, compaction? }`; without this, hooks can't override pi's
+ *  default compaction. */
+const RESULT_EVENTS = new Set<HookEvent>([
+  "session_before_compact",
 ]);
 
 export interface Skeleton {
@@ -146,6 +166,15 @@ export function createSkeleton(): Skeleton {
               if (result !== undefined) current = result;
             }
             return current === event ? undefined : current;
+          });
+        } else if (RESULT_EVENTS.has(event)) {
+          pi.on(event as any, async (event: any, ctx: ExtensionContext) => {
+            let result;
+            for (const { handler } of handlers) {
+              const r = await handler(event, ctx, pi);
+              if (r !== undefined) result = r;
+            }
+            return result;
           });
         } else {
           pi.on(event as any, async (event: any, ctx: ExtensionContext) => {
