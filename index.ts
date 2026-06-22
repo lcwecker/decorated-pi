@@ -214,7 +214,7 @@ export default async function (pi: ExtensionAPI) {
 
   // Compaction + RTK (these also install their own pi.on via setup<>()).
   setupCompaction(sk);
-  if (isModuleEnabled("rtk")) setupRtk(sk, pi);
+  if (isModuleEnabled("rtk")) setupRtk(sk);
   if (isModuleEnabled("wakatime")) setupWakatime(sk, pi);
 
   // ── Tools (conditional on module switches) ────────────────────────────
