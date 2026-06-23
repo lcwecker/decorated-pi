@@ -9,10 +9,10 @@
  * The LSP dep gate is checked against whether at least one LSP server
  * is available.
  *
- * `vi.mock("node:child_process")` is hoisted, so we declare a shared
- * factory that returns spawnSync failures for the entire test file —
- * both the LSP and MCP dep paths consult child_process to find a
- * binary, so a single fail-all mock is enough to exercise both.
+ * Both gates consult `utils/which.ts`, which uses `fs.accessSync(X_OK)`
+ * to stat candidates on $PATH. We mock `node:fs.accessSync` to throw
+ * ENOENT so every binary looks missing, and keep `node:child_process`'s
+ * `spawnSync` failing too as a defensive belt-and-suspenders.
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
@@ -25,6 +25,20 @@ vi.mock("node:child_process", async (importOriginal) => {
   return {
     ...actual,
     spawnSync: () => ({ status: 1, stdout: "", stderr: "" }),
+  };
+});
+
+vi.mock("node:fs", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs")>();
+  return {
+    ...actual,
+    // Simulate "binary not on PATH" for the dep gate. `which()` checks
+    // executability via accessSync(X_OK); throwing ENOENT here makes
+    // every binary look missing. existsSync stays real so test setup
+    // (reading ~/.pi/agent/decorated-pi.json) still works.
+    accessSync: () => {
+      throw Object.assign(new Error("ENOENT"), { code: "ENOENT" });
+    },
   };
 });
 

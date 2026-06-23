@@ -15,10 +15,10 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { spawnSync } from "node:child_process";
-import { isModuleEnabled } from "../../settings.js";
+import { isModuleEnabled, resolveDependency } from "../../settings.js";
 import type { DependencyStatus } from "../../hooks/skeleton.js";
 import { BUILTIN_MCP_SERVERS } from "./builtin/index.js";
+
 
 export { BUILTIN_MCP_SERVERS } from "./builtin/index.js";
 
@@ -33,6 +33,8 @@ export interface McpServerConfig {
   source: "builtin" | "global" | "project";
   /** Optional predicate: return false if this server cannot be used in the given project. */
   canUseInProject?: (cwd: string) => boolean;
+  /** Binary/config key before dependency path resolution. */
+  dependencyName?: string;
 }
 
 function globalMcpJsonPath(): string {
@@ -217,33 +219,50 @@ export function resolveMcpConfigs(cwd: string): McpServerConfig[] {
     }
   }
 
-  return [...byName.values()].filter((s) => s.url || s.command);
+  return [...byName.values()]
+    .filter((s) => s.url || s.command)
+    .map((s) => {
+      // Apply user-configured binary path override (dependencies[cmd].path)
+      // last, so it wins over builtin/global/project configs. Only applies
+      // to servers that use a command (not URL-based servers).
+      if (!s.command) return s;
+      const dependencyName = s.command;
+      const resolved = resolveMcpBinary(dependencyName);
+      return { ...s, dependencyName, command: resolved ?? s.command };
+    });
+}
+
+/** Unique binary names used by builtin MCP servers that have a `command`
+ *  (URL-based servers are excluded — they don't need a binary). */
+export function listMcpBinaryNames(): string[] {
+  const seen = new Set<string>();
+  for (const s of BUILTIN_MCP_SERVERS) {
+    if (s.command) seen.add(s.command);
+  }
+  return [...seen].sort();
 }
 
 export function collectMcpDependencyStatuses(cwd: string): DependencyStatus[] {
   const seen = new Set<string>();
   const statuses: DependencyStatus[] = [];
   for (const cfg of resolveMcpConfigs(cwd)) {
-    if (!cfg.enabled || !cfg.command || seen.has(cfg.command)) continue;
-    seen.add(cfg.command);
+    const depName = cfg.dependencyName ?? cfg.command;
+    if (!cfg.enabled || !cfg.command || !depName || seen.has(depName)) continue;
+    seen.add(depName);
+    const resolved = resolveMcpBinary(depName);
     statuses.push({
       module: `mcp:${cfg.name}`,
-      label: cfg.command,
-      state: commandExists(cfg.command) ? "ok" : "missing",
+      label: depName,
+      state: resolved ? "ok" : "missing",
       detail: `Install the MCP server command for \"${cfg.name}\" or update its config.`,
+      path: resolved ?? undefined,
     });
   }
   return statuses;
 }
 
-function commandExists(command: string): boolean {
-  if (path.isAbsolute(command) || command.includes("/") || command.includes("\\")) {
-    return fs.existsSync(command);
-  }
-  const result = process.platform === "win32"
-    ? spawnSync("where", [command], { encoding: "utf-8" })
-    : spawnSync(process.env.SHELL || "sh", ["-lc", `command -v '${command.replace(/'/g, `'"'"'`)}'`], { encoding: "utf-8" });
-  return result.status === 0;
+export function resolveMcpBinary(command: string): string | null {
+  return resolveDependency(command);
 }
 
 function readMcpJsonSafe(filePath: string): Record<string, any> | null {

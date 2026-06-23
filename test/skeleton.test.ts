@@ -232,7 +232,7 @@ describe("skeleton — dependency check", () => {
 
   it("fires on session_start with reason='startup'", async () => {
     const sk = createSkeleton();
-    sk.declareDependency({ label: "rtk", check: () => false });
+    sk.declareMissing({ name: "rtk", hint: "install rtk" });
     sk.install(pi as any);
 
     const ctx = makeCtx();
@@ -240,28 +240,32 @@ describe("skeleton — dependency check", () => {
     expect(ctx.ui.notify).not.toHaveBeenCalled(); // not yet — setTimeout is pending
     await vi.advanceTimersByTimeAsync(0);
     expect(ctx.ui.notify).toHaveBeenCalledWith(
-      "[decorated-pi] missing dependencies: rtk",
+      expect.stringContaining("dependencies are missing"),
+      "info",
+    );
+    expect(ctx.ui.notify).toHaveBeenCalledWith(
+      expect.stringContaining("/dp-settings"),
       "info",
     );
   });
 
   it("fires on session_start with reason='reload'", async () => {
     const sk = createSkeleton();
-    sk.declareDependency({ label: "wakatime-cli", check: () => false });
+    sk.declareMissing({ name: "wakatime-cli" });
     sk.install(pi as any);
 
     const ctx = makeCtx();
     await pi.handlers.get("session_start")![0]({ reason: "reload" }, ctx as any);
     await vi.advanceTimersByTimeAsync(0);
     expect(ctx.ui.notify).toHaveBeenCalledWith(
-      "[decorated-pi] missing dependencies: wakatime-cli",
+      expect.stringContaining("dependencies are missing"),
       "info",
     );
   });
 
   it("skips session_start with reason='new' / 'resume' / 'fork'", async () => {
     const sk = createSkeleton();
-    sk.declareDependency({ label: "rtk", check: () => false });
+    sk.declareMissing({ name: "rtk" });
     sk.install(pi as any);
 
     for (const reason of ["new", "resume", "fork"] as const) {
@@ -274,7 +278,7 @@ describe("skeleton — dependency check", () => {
 
   it("defers notification with setTimeout(0) so it survives UI rebuild", async () => {
     const sk = createSkeleton();
-    sk.declareDependency({ label: "rtk", check: () => false });
+    sk.declareMissing({ name: "rtk" });
     sk.install(pi as any);
 
     const ctx = makeCtx();
@@ -286,10 +290,8 @@ describe("skeleton — dependency check", () => {
     expect(ctx.ui.notify).toHaveBeenCalledTimes(1);
   });
 
-  it("does nothing when all dependencies are satisfied", async () => {
+  it("does nothing when no dependencies are missing", async () => {
     const sk = createSkeleton();
-    sk.declareDependency({ label: "rtk", check: () => true });
-    sk.declareDependency({ label: "wakatime-cli", check: () => true });
     sk.install(pi as any);
 
     const ctx = makeCtx();
@@ -298,40 +300,68 @@ describe("skeleton — dependency check", () => {
     expect(ctx.ui.notify).not.toHaveBeenCalled();
   });
 
-  it("joins multiple missing labels with commas", async () => {
+  it("counts total missing, not listing each name", async () => {
     const sk = createSkeleton();
-    sk.declareDependency({ label: "lsp:gopls", check: () => false });
-    sk.declareDependency({ label: "lsp:jdtls", check: () => false });
-    sk.declareDependency({ label: "mcp:exa", check: () => false });
-    sk.declareDependency({ label: "typescript-language-server", check: () => true });
+    sk.declareMissing({ name: "missing-test-a" });
+    sk.declareMissing({ name: "missing-test-b" });
+    sk.declareMissing({ name: "missing-test-c" });
     sk.install(pi as any);
 
     const ctx = makeCtx();
     await pi.handlers.get("session_start")![0]({ reason: "startup" }, ctx as any);
     await vi.advanceTimersByTimeAsync(0);
     expect(ctx.ui.notify).toHaveBeenCalledWith(
-      "[decorated-pi] missing dependencies: lsp:gopls, lsp:jdtls, mcp:exa",
+      expect.stringContaining("(3)"),
+      "info",
+    );
+    expect(ctx.ui.notify).not.toHaveBeenCalledWith(
+      expect.stringContaining("missing-test-a"),
       "info",
     );
   });
 
-  it("treats a throwing check() as missing (no crash)", async () => {
+  it("dedupes by binary name (multiple modules can declare the same)", async () => {
     const sk = createSkeleton();
-    sk.declareDependency({ label: "boom", check: () => { throw new Error("nope"); } });
+    sk.declareMissing({ name: "delta", module: "rtk" });
+    sk.declareMissing({ name: "delta", module: "diff-command" });
     sk.install(pi as any);
 
     const ctx = makeCtx();
     await pi.handlers.get("session_start")![0]({ reason: "startup" }, ctx as any);
     await vi.advanceTimersByTimeAsync(0);
+    // Should count delta once, not twice
     expect(ctx.ui.notify).toHaveBeenCalledWith(
-      "[decorated-pi] missing dependencies: boom",
+      expect.stringContaining("(1)"),
       "info",
     );
+  });
+
+  it("skips dontBother binaries", async () => {
+    // Mock settings.js so isDontBother returns true only for wakatime-cli.
+    vi.resetModules();
+    vi.doMock("../settings.js", () => ({
+      isDontBother: (name: string) => name === "wakatime-cli",
+    }));
+    const skeletonMod = await import("../hooks/skeleton.js");
+    const sk = skeletonMod.createSkeleton();
+    sk.declareMissing({ name: "rtk" });
+    sk.declareMissing({ name: "wakatime-cli" });
+    sk.install(pi as any);
+
+    const ctx = makeCtx();
+    await pi.handlers.get("session_start")![0]({ reason: "startup" }, ctx as any);
+    await vi.advanceTimersByTimeAsync(0);
+    // Only rtk counts (wakatime-cli silenced)
+    expect(ctx.ui.notify).toHaveBeenCalledWith(
+      expect.stringContaining("(1)"),
+      "info",
+    );
+    vi.doUnmock("../settings.js");
   });
 
   it("swallows notify() throws (stale ctx after reload race)", async () => {
     const sk = createSkeleton();
-    sk.declareDependency({ label: "rtk", check: () => false });
+    sk.declareMissing({ name: "rtk" });
     sk.install(pi as any);
 
     const ctx = makeCtx({ ui: { notify: vi.fn(() => { throw new Error("ctx stale"); }) } });
@@ -343,7 +373,7 @@ describe("skeleton — dependency check", () => {
 
   it("skips notification when ctx.hasUI is false", async () => {
     const sk = createSkeleton();
-    sk.declareDependency({ label: "rtk", check: () => false });
+    sk.declareMissing({ name: "rtk" });
     sk.install(pi as any);
 
     const ctx = makeCtx({ hasUI: false });
@@ -354,7 +384,7 @@ describe("skeleton — dependency check", () => {
 
   it("clears a pending notify timer on session_shutdown", async () => {
     const sk = createSkeleton();
-    sk.declareDependency({ label: "rtk", check: () => false });
+    sk.declareMissing({ name: "rtk" });
     sk.install(pi as any);
 
     const ctx = makeCtx();
@@ -385,11 +415,10 @@ describe("skeleton — dependency check re-runs per session_start", () => {
     vi.useRealTimers();
   });
 
-  it("re-evaluates check() on each session_start (install → install → install)", async () => {
-    // Simulate /reload: new skeleton instance, fresh dep state.
+  it("re-evaluates missing set on each session_start (reload cycle)", async () => {
+    // First session: rtk is missing.
     const sk1 = createSkeleton();
-    let depOk = false;
-    sk1.declareDependency({ label: "rtk", check: () => depOk });
+    sk1.declareMissing({ name: "rtk" });
     sk1.install(pi as any);
 
     const ctx1 = makeCtx();
@@ -397,11 +426,10 @@ describe("skeleton — dependency check re-runs per session_start", () => {
     await vi.advanceTimersByTimeAsync(0);
     expect(ctx1.ui.notify).toHaveBeenCalled();
 
-    // Second "reload" — user installed rtk, now dep is satisfied.
+    // Second "reload" — user installed rtk, no declareMissing called.
     pi = makePi();
     const sk2 = createSkeleton();
-    depOk = true;
-    sk2.declareDependency({ label: "rtk", check: () => depOk });
+    // No declareMissing this time — rtk is now found.
     sk2.install(pi as any);
 
     const ctx2 = makeCtx();
@@ -424,7 +452,7 @@ describe("skeleton — inspect()", () => {
       name: "beta",
       hooks: { agent_end: [() => {}], session_start: [() => {}] },
     });
-    sk.declareDependency({ label: "rtk", check: () => false, hint: "install rtk" });
+    sk.declareMissing({ name: "rtk", hint: "install rtk" });
 
     const info = sk.inspect();
     expect(info.modules).toEqual(["alpha", "beta"]);
@@ -433,7 +461,7 @@ describe("skeleton — inspect()", () => {
       { module: "beta", order: 1 },
     ]);
     expect(info.events.agent_end).toEqual([{ module: "beta", order: 0 }]);
-    expect(info.dependencies).toEqual([{ label: "rtk", hint: "install rtk" }]);
+    expect(info.dependencies).toEqual([{ name: "rtk", module: undefined, hint: "install rtk" }]);
   });
 
   it("returns empty inspection for a fresh skeleton", () => {

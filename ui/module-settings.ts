@@ -6,9 +6,11 @@
  * category so the user can toggle each one.
  */
 
-import type { Theme as PiTheme } from "@earendil-works/pi-coding-agent";
+import type { Theme as PiTheme, ExtensionUIContext } from "@earendil-works/pi-coding-agent";
 import { Container, SettingsList, type TUI, type SettingsListTheme, type SettingItem, type Component } from "@earendil-works/pi-tui";
-import { getAllModuleSettings, setModuleEnabled, type ModuleSettings } from "../settings.js";
+import { getAllModuleSettings, setModuleEnabled, type ModuleSettings, getDependencyPath, setDependencyPath, isDontBother, setDontBother, getDependencyView, listDependencyViewNames } from "../settings.js";
+import { listLspBinaryNames } from "../tools/lsp/servers.js";
+import { listMcpBinaryNames } from "../tools/mcp/config.js";
 
 type ModuleName =
   | "patchOverrideEdit"
@@ -135,10 +137,126 @@ class CategorySubmenu extends Container {
       (id: string, newValue: string) => {
         setModuleEnabled(id, newValue === "on");
         this.list.updateValue(id, newValue);
-        // Stay open so the user can toggle multiple items; the parent
-        // summary updates when the submenu is closed with Esc.
       },
       () => done(summaryFor(getAllModuleSettings(), category.modules)),
+    );
+    this.addChild(this.list);
+  }
+
+  handleInput(data: string) {
+    this.list.handleInput(data);
+  }
+
+  render(width: number): string[] {
+    return this.list.render(width);
+  }
+}
+
+/** Submenu for configuring binary path overrides. Each row is a binary
+ *  that decorated-pi looks up at startup; Enter opens an input dialog
+ *  where the user can type an absolute path (or clear it). */
+function dependencyDisplayValue(name: string): string {
+  const view = getDependencyView(name);
+  if (view.path) return view.path;
+  if (view.resolvedPath) return view.resolvedPath;
+  if (view.resolvedState === undefined) return view.dontBother ? "(not checked, silenced)" : "(not checked)";
+  return view.dontBother ? "(not found, silenced)" : "(not found)";
+}
+
+class DependencyBinarySubmenu extends Container {
+  private list: SettingsList;
+  private name: string;
+  private ui: ExtensionUIContext;
+
+  constructor(name: string, theme: PiTheme, ui: ExtensionUIContext, done: (summary?: string) => void) {
+    super();
+    this.name = name;
+    this.ui = ui;
+
+    const items: SettingItem[] = [
+      {
+        id: "path",
+        label: "Path override",
+        description: "Enter to edit; empty to clear override",
+        currentValue: dependencyDisplayValue(name),
+        values: ["edit"],
+      },
+      {
+        id: "dontBother",
+        label: "dontBother",
+        description: "Silence missing-dependency notification for this binary",
+        currentValue: isDontBother(name) ? "on" : "off",
+        values: ["off", "on"],
+      },
+    ];
+
+    this.list = new SettingsList(
+      items,
+      10,
+      getSettingsListTheme(theme),
+      (id: string, newValue: string) => {
+        if (id === "dontBother") {
+          setDontBother(this.name, newValue === "on");
+          this.list.updateValue("dontBother", newValue);
+          this.list.updateValue("path", dependencyDisplayValue(this.name));
+          return;
+        }
+        this.list.updateValue("path", dependencyDisplayValue(this.name));
+        void this.promptForPath();
+      },
+      () => done(dependencyDisplayValue(this.name)),
+    );
+    this.addChild(this.list);
+  }
+
+  handleInput(data: string) {
+    this.list.handleInput(data);
+  }
+
+  private async promptForPath(): Promise<void> {
+    const current = getDependencyPath(this.name) ?? "";
+    const input = await this.ui.input(
+      `Path for ${this.name} (empty to clear)`,
+      current || `/absolute/path/to/${this.name}`,
+    );
+    if (input === undefined) return;
+    setDependencyPath(this.name, input.trim() === "" ? null : input.trim());
+    this.list.updateValue("path", dependencyDisplayValue(this.name));
+  }
+
+  render(width: number): string[] {
+    return this.list.render(width);
+  }
+}
+
+class DependenciesSubmenu extends Container {
+  private list: SettingsList;
+  private binaryNames: string[];
+
+  constructor(theme: PiTheme, ui: ExtensionUIContext, done: (summary?: string) => void) {
+    super();
+    // Builtins we know about plus entries already present in config/shadow.
+    this.binaryNames = listDependencyViewNames([
+      "rtk",
+      "wakatime-cli",
+      ...listLspBinaryNames(),
+      ...listMcpBinaryNames(),
+    ]);
+
+    const items: SettingItem[] = this.binaryNames.map((name) => ({
+      id: name,
+      label: name,
+      description: "Enter to configure path override and dontBother",
+      currentValue: dependencyDisplayValue(name),
+      submenu: (_currentValue, submenuDone) => new DependencyBinarySubmenu(name, theme, ui, submenuDone),
+    }));
+
+    this.list = new SettingsList(
+      items,
+      10,
+      getSettingsListTheme(theme),
+      () => {},
+      () => done(summaryForDependencies()),
     );
     this.addChild(this.list);
   }
@@ -155,7 +273,7 @@ class CategorySubmenu extends Container {
 export class ModuleSettingsComponent extends Container {
   private settingsList: SettingsList;
 
-  constructor(tui: TUI, theme: PiTheme, onDone: () => void) {
+  constructor(tui: TUI, theme: PiTheme, ui: ExtensionUIContext, onDone: () => void) {
     super();
     const modules = getAllModuleSettings();
 
@@ -166,6 +284,17 @@ export class ModuleSettingsComponent extends Container {
       currentValue: summaryFor(modules, CATEGORIES[id].modules),
       submenu: (_currentValue, done) => new CategorySubmenu(id, theme, done),
     }));
+
+    // Dependencies is a separate top-level category — it doesn't fit
+    // ModuleSettings' on/off toggle model. Enter opens a list of
+    // known binaries where the user can type an absolute path for each.
+    categoryItems.push({
+      id: "dependencies",
+      label: "Dependencies",
+      description: "Override binary paths (rtk, wakatime-cli, LSP/MCP servers)",
+      currentValue: summaryForDependencies(),
+      submenu: (_currentValue, done) => new DependenciesSubmenu(theme, ui, done),
+    });
 
     this.addChild(new DynamicBorder(theme));
 
@@ -185,4 +314,21 @@ export class ModuleSettingsComponent extends Container {
   handleInput(data: string) {
     this.settingsList.handleInput(data);
   }
+}
+
+/** Count how many binaries have an explicit override. */
+function summaryForDependencies(): string {
+  // Builtins we know about: rtk, wakatime-cli, LSP servers, MCP servers.
+  const known = listDependencyViewNames([
+    "rtk",
+    "wakatime-cli",
+    ...listLspBinaryNames(),
+    ...listMcpBinaryNames(),
+  ]);
+  const overridden = known.filter((n) => getDependencyPath(n) !== null).length;
+  const silenced = known.filter((n) => isDontBother(n)).length;
+  const parts: string[] = [];
+  if (overridden) parts.push(`${overridden} overridden`);
+  if (silenced) parts.push(`${silenced} silenced`);
+  return parts.length ? parts.join(", ") : "default";
 }

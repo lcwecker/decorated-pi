@@ -6,10 +6,11 @@
  */
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { execFile, execFileSync } from "node:child_process";
+import { execFile } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { resolveDependency } from "../settings.js";
 import { fileURLToPath } from "node:url";
 import type { Module, Skeleton } from "./skeleton.js";
 
@@ -122,36 +123,21 @@ export function buildPluginString(version = PACKAGE_VERSION): string {
   return `pi/${version} pi/${version}`;
 }
 
+export function wakatimeDependencyExtendPath(): string[] {
+  return [path.join(os.homedir(), ".wakatime")];
+}
+
 function findWakatimeCliOnPath(): string | null {
-  try {
-    if (process.platform === "win32") {
-      const output = execFileSync("where", ["wakatime-cli"], { encoding: "utf-8" }).trim();
-      const first = output.split(/\r?\n/)[0]?.trim();
-      return first ? path.resolve(first) : null;
-    }
-    const shell = process.env.SHELL || "sh";
-    const output = execFileSync(shell, ["-lc", "command -v wakatime-cli"], { encoding: "utf-8" }).trim();
-    return output ? path.resolve(output) : null;
-  } catch {
-    return null;
-  }
+  return resolveDependency("wakatime-cli", { extendPath: wakatimeDependencyExtendPath() });
 }
 
 export function findWakatimeCli(options: {
   probePath?: () => string | null;
-  exists?: (candidate: string) => boolean;
-  fallbackPath?: string;
 } = {}): string | null {
   if (cachedWakatimeCliPath !== undefined) return cachedWakatimeCliPath;
   const probePath = options.probePath ?? findWakatimeCliOnPath;
-  const exists = options.exists ?? fs.existsSync;
-  const fromPath = probePath();
-  if (fromPath) {
-    cachedWakatimeCliPath = path.resolve(fromPath);
-    return cachedWakatimeCliPath;
-  }
-  const fallback = path.resolve(options.fallbackPath ?? WAKATIME_CLI_FALLBACK);
-  cachedWakatimeCliPath = exists(fallback) ? fallback : null;
+  const found = probePath();
+  cachedWakatimeCliPath = found ? path.resolve(found) : null;
   return cachedWakatimeCliPath;
 }
 
@@ -342,13 +328,14 @@ export function setupWakatimeWithApiKey(
 export function setupWakatime(sk: Skeleton, pi: ExtensionAPI): void {
   const apiKey = readWakatimeCfgApiKey();
   const cliPath = findWakatimeCli();
-  const ready = sk.declareDependency({
-    label: "wakatime-cli",
-    module: "wakatime",
-    check: () => findWakatimeCli() !== null,
-    hint: "Install wakatime-cli to track coding activity.",
-  });
-  if (!apiKey || !cliPath || !ready) return;
+  if (!cliPath) {
+    sk.declareMissing({
+      name: "wakatime-cli",
+      module: "wakatime",
+      hint: "Install wakatime-cli to track coding activity.",
+    });
+  }
+  if (!apiKey || !cliPath) return;
 
   const sendHeartbeat: HeartbeatSender = (hb, cwd) => sendHeartbeatViaCli(hb, apiKey, cliPath, cwd);
 

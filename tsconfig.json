@@ -19,6 +19,7 @@
     "commands/**/*.ts",
     "providers/**/*.ts",
     "ui/**/*.ts",
+    "utils/**/*.ts",
     "test/**/*.ts"
   ],
   "exclude": ["node_modules", "dist"]

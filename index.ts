@@ -225,11 +225,13 @@ export default async function (pi: ExtensionAPI) {
       registerLspTools(pi, new LspServerManager());
     }
     for (const dep of lspDeps) {
-      sk.declareDependency({
-        label: `lsp:${dep.label}`,
-        module: `lsp:${dep.label}`,
-        check: () => collectLspDependencyStatuses(process.cwd()).some((s) => s.label === dep.label && s.state === "ok"),
-      });
+      if (dep.state !== "ok") {
+        sk.declareMissing({
+          name: dep.label,
+          module: "lsp",
+          hint: dep.detail,
+        });
+      }
     }
   }
   if (isModuleEnabled("ask")) registerAskTool(pi);
@@ -245,11 +247,13 @@ export default async function (pi: ExtensionAPI) {
     sk.register(mcpModule);
     const mcpDeps = collectMcpDependencyStatuses(process.cwd());
     for (const dep of mcpDeps) {
-      sk.declareDependency({
-        label: dep.module,
-        module: dep.module,
-        check: () => collectMcpDependencyStatuses(process.cwd()).some((s) => s.module === dep.module && s.state === "ok"),
-      });
+      if (dep.state !== "ok") {
+        sk.declareMissing({
+          name: dep.label,  // binary name (e.g. "codegraph")
+          module: "mcp",
+          hint: dep.detail,
+        });
+      }
     }
     const configs = resolveMcpConfigs(process.cwd()).filter(s => s.enabled);
     // Per-server readiness: cache hit → register from cache (fast).
