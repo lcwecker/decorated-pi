@@ -53,7 +53,6 @@ decorated-pi/
 **Rules**:
 - Registration order = execution order.
 - Two handler modes: **parallel** (return values ignored) for lifecycle events; **compose** (next handler sees previous return) for transformation chains (`before_agent_start` mutates `systemPrompt`, `tool_call` mutates `input.command`, `tool_result` mutates `content`).
-- The skeleton also owns dependency checking and system-prompt guideline injection — hooks declare them, skeleton enforces them at the right event.
 
 ### `dp-settings`
 
