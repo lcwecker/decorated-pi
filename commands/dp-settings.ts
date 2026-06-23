@@ -1,5 +1,5 @@
 /**
- * /dp-settings — toggle module on/off.
+ * /dp-settings — settings for decorated-pi.
  */
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
@@ -8,7 +8,7 @@ import { ModuleSettingsComponent } from "../ui/module-settings.js";
 
 export function registerDpSettingsCommand(pi: ExtensionAPI): void {
   pi.registerCommand("dp-settings", {
-    description: "Toggle decorated-pi modules on/off",
+    description: "Settings for decorated-pi",
     handler: async (_args, ctx) => {
       if (ctx.hasUI) {
         await ctx.ui.custom<void>(

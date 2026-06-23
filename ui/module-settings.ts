@@ -50,7 +50,7 @@ const MODULE_DESCS: Record<ModuleName, string> = {
   usage: "/usage command for token stats",
 };
 
-type CategoryId = "tools" | "hooks" | "commands";
+type CategoryId = "commands" | "hooks" | "tools";
 
 interface CategoryDef {
   label: string;
@@ -59,22 +59,26 @@ interface CategoryDef {
 }
 
 const CATEGORIES: Record<CategoryId, CategoryDef> = {
-  tools: {
-    label: "Tools",
-    description: "LLM-callable tools",
-    modules: ["patchOverrideEdit", "ask", "lsp", "mcp"],
-  },
-  hooks: {
-    label: "Hooks",
-    description: "Agent-loop event handlers",
-    modules: ["secretRedaction", "rtk", "wakatime"],
-  },
   commands: {
     label: "Commands",
     description: "Slash commands",
     modules: ["atOverride", "retry", "usage"],
   },
+  hooks: {
+    label: "Hooks",
+    description: "Agent-loop event handlers",
+    modules: ["rtk", "secretRedaction", "wakatime"],
+  },
+  tools: {
+    label: "Tools",
+    description: "LLM-callable tools",
+    modules: ["ask", "lsp", "mcp", "patchOverrideEdit"],
+  },
 };
+
+// Hard-coded display order, alphabetized by visible label. Dependencies is
+// inserted between Commands and Hooks in ModuleSettingsComponent below.
+const CATEGORY_ORDER: CategoryId[] = ["commands", "hooks", "tools"];
 
 class DynamicBorder implements Component {
   private colorFn: (str: string) => string;
@@ -277,7 +281,7 @@ export class ModuleSettingsComponent extends Container {
     super();
     const modules = getAllModuleSettings();
 
-    const categoryItems: SettingItem[] = (Object.keys(CATEGORIES) as CategoryId[]).map((id) => ({
+    const categoryItems: SettingItem[] = CATEGORY_ORDER.map((id) => ({
       id,
       label: CATEGORIES[id].label,
       description: CATEGORIES[id].description,
@@ -286,9 +290,9 @@ export class ModuleSettingsComponent extends Container {
     }));
 
     // Dependencies is a separate top-level category — it doesn't fit
-    // ModuleSettings' on/off toggle model. Enter opens a list of
-    // known binaries where the user can type an absolute path for each.
-    categoryItems.push({
+    // ModuleSettings' on/off toggle model. Insert it alphabetically between
+    // Commands and Hooks.
+    categoryItems.splice(1, 0, {
       id: "dependencies",
       label: "Dependencies",
       description: "Override binary paths (rtk, wakatime-cli, LSP/MCP servers)",
