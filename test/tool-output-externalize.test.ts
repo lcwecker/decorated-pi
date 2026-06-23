@@ -85,9 +85,8 @@ describe("maybeExternalizeToolResult", () => {
     const result = maybeExternalizeToolResult(event);
     expect(result).toBeDefined();
     const outText = result!.content![0].text as string;
-    expect(outText).toContain("[Output truncated: 40,000 chars.");
-    expect(outText).toContain("Full output:");
-    expect(outText.length).toBeLessThan(200); // single-line placeholder
+    expect(outText).toMatch(/^\[Output too long, saved to .+\.]$/);
+    expect(outText.length).toBeLessThan(200); // single-line pointer
     expect(outText).toContain("decorated-pi-results");
   });
 
@@ -97,8 +96,8 @@ describe("maybeExternalizeToolResult", () => {
     const result = maybeExternalizeToolResult(event);
     expect(result).toBeDefined();
     const outText = result!.content![0].text;
-    expect(outText).toContain("[Output truncated:");
-    expect(outText).toContain("chars. Full output:");
+    expect(outText).toMatch(/^\[Output too long, saved to .+\.]$/);
+    expect(outText).toContain("decorated-pi-results");
   });
 
   it("saves full content to temp file", () => {
@@ -109,8 +108,8 @@ describe("maybeExternalizeToolResult", () => {
 
     // Extract path from placeholder text
     const outText = result!.content![0].text as string;
-    // Placeholder format: [Output truncated: N chars. Full output: /path]
-    const filePath = outText.match(/Full output: (.+?)\]/)?.[1];
+    // Pointer format: [Output too long, saved to /path.]
+    const filePath = outText.match(/saved to (.+?)\.\]/)?.[1];
     expect(filePath).toBeDefined();
     expect(fs.existsSync(filePath!)).toBe(true);
     expect(fs.readFileSync(filePath!, "utf-8")).toBe(text);
