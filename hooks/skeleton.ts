@@ -11,6 +11,7 @@
  */
 
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { isDontBother } from "../settings.js";
 
 // ─── Event union ───────────────────────────────────────────────────────────
 
@@ -72,10 +73,8 @@ export interface Module {
 // ─── Declarations ──────────────────────────────────────────────────────────
 
 export interface Dependency {
-  label: string;
-  check: () => boolean;
+  name: string;
   hint?: string;
-  /** Display/source tag for inspection and notifications. */
   module?: string;
 }
 
@@ -86,9 +85,12 @@ export interface Dependency {
  *  uses `Dependency.check` directly rather than collecting statuses. */
 export interface DependencyStatus {
   module: string;
+  /** Binary/config key, not necessarily the resolved absolute path. */
   label: string;
   state: "ok" | "missing";
   detail: string;
+  /** Resolved executable path when state is ok. */
+  path?: string;
 }
 
 // ─── Skeleton ──────────────────────────────────────────────────────────────
@@ -111,7 +113,11 @@ const RESULT_EVENTS = new Set<HookEvent>([
 export interface Skeleton {
   register(module: Module): void;
   /** Returns whether the dependency check passed right now. */
-  declareDependency(dep: Dependency): boolean;
+  /** Declare that a binary dependency is missing. Module calls this
+   *   after its own which() lookup failed. Skeleton dedupes by name,
+   *   honors `dependencies[name].dontBother`, and shows a single
+   *   "run /dp-settings" notification on session_start. */
+  declareMissing(dep: Omit<Dependency, "module"> & { module?: string }): void;
   install(pi: ExtensionAPI): void;
   inspect(): Inspection;
 }
@@ -119,7 +125,7 @@ export interface Skeleton {
 export interface Inspection {
   modules: string[];
   events: Record<string, Array<{ module: string; order: number }>>;
-  dependencies: Array<{ label: string; module?: string; hint?: string }>;
+  dependencies: Array<{ name: string; module?: string; hint?: string }>;
 }
 
 export function createSkeleton(): Skeleton {
@@ -145,13 +151,10 @@ export function createSkeleton(): Skeleton {
       collect(mod);
     },
 
-    declareDependency(dep) {
-      dependencies.push(dep);
-      try {
-        return dep.check();
-      } catch {
-        return false;
-      }
+    declareMissing(dep) {
+      // Dedupe by name — multiple modules may depend on the same binary.
+      if (dependencies.some((d) => d.name === dep.name)) return;
+      dependencies.push(dep as Dependency);
     },
 
     install(pi) {
@@ -194,13 +197,16 @@ export function createSkeleton(): Skeleton {
           dependencyNotifyTimer = undefined;
           const missing: string[] = [];
           for (const dep of dependencies) {
-            let ok = false;
-            try { ok = dep.check(); } catch { ok = false; }
-            if (!ok) missing.push(dep.label);
+            // dontBother flag silences the notification per-binary.
+            if (isDontBother(dep.name)) continue;
+            missing.push(dep.name);
           }
           if (missing.length) {
             try {
-              ctx.ui.notify(`[decorated-pi] missing dependencies: ${missing.join(", ")}`, "info");
+              ctx.ui.notify(
+                `[decorated-pi] Some dependencies are missing (${missing.length}). Run /dp-settings → Dependencies to configure.`,
+                "info",
+              );
             } catch {
               // Extension context may be stale if another reload/session switch happened.
             }
@@ -236,7 +242,7 @@ export function createSkeleton(): Skeleton {
       return {
         modules: modules.map((m) => m.name),
         events,
-        dependencies: dependencies.map((d) => ({ label: d.label, module: d.module, hint: d.hint })),
+        dependencies: dependencies.map((d) => ({ name: d.name, module: d.module, hint: d.hint })),
       };
     },
   };

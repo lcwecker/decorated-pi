@@ -12,23 +12,15 @@
  */
 
 import { createLocalBashOperations } from "@earendil-works/pi-coding-agent";
-import { execFileSync, spawnSync } from "node:child_process";
+import { spawnSync } from "node:child_process";
 import * as path from "node:path";
 import type { Module, Skeleton } from "./skeleton.js";
+import { resolveDependency } from "../settings.js";
 
 // ─── Locating RTK ─────────────────────────────────────────────────────────
 
 export function findSystemRtk(): string | null {
-  try {
-    if (process.platform === "win32") {
-      const output = execFileSync("where", ["rtk"], { encoding: "utf-8" }).trim();
-      return output.split(/\r?\n/)[0] || null;
-    }
-    const shell = process.env.SHELL || "sh";
-    return execFileSync(shell, ["-lc", "command -v rtk"], { encoding: "utf-8" }).trim() || null;
-  } catch {
-    return null;
-  }
+  return resolveDependency("rtk");
 }
 
 export function shellQuote(value: string): string {
@@ -125,13 +117,14 @@ export const rtkModule: Module = {
 
 export function setupRtk(sk: Skeleton): void {
   rtkBinary = findSystemRtk();
-  const ready = sk.declareDependency({
-    label: "rtk",
-    module: "rtk",
-    check: () => findSystemRtk() !== null,
-    hint: "Install RTK so bash rewrite can activate.",
-  });
-  if (!ready) return;
+  if (!rtkBinary) {
+    sk.declareMissing({
+      name: "rtk",
+      module: "rtk",
+      hint: "Install RTK so bash rewrite can activate.",
+    });
+    return;
+  }
 
   // Hook pi's built-in bash tool via tool_call/tool_result. We deliberately do
   // not call pi.registerTool — that would shadow pi's bash and conflict with

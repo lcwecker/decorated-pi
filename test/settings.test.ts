@@ -25,6 +25,12 @@ import {
   setImageModelKey,
   getCompactModelKey,
   setCompactModelKey,
+  getDependencyPath,
+  setDependencyPath,
+  isDontBother,
+  setDontBother,
+  getDependencyView,
+  resolveDependency,
   captureModuleSnapshot,
   moduleSnapshotChanged,
   type DecoratedPiConfig,
@@ -304,6 +310,115 @@ describe("moduleSnapshot", () => {
     expect(moduleSnapshotChanged()).toBe(true);
     captureModuleSnapshot();
     expect(moduleSnapshotChanged()).toBe(false);
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// dependencies (binary path overrides)
+// ═══════════════════════════════════════════════════════════════════════════
+
+describe("dependencies", () => {
+  beforeEach(() => {
+    backupConfig();
+    try {
+      if (fs.existsSync(CONFIG_FILE)) fs.unlinkSync(CONFIG_FILE);
+    } catch {}
+  });
+
+  afterEach(() => {
+    restoreConfig();
+  });
+
+  it("getDependencyPath returns null when not configured", () => {
+    expect(getDependencyPath("rtk")).toBe(null);
+  });
+
+  it("setDependencyPath persists and getDependencyPath reads back", () => {
+    setDependencyPath("rtk", "/custom/rtk");
+    expect(getDependencyPath("rtk")).toBe("/custom/rtk");
+  });
+
+  it("setDependencyPath null clears the override", () => {
+    setDependencyPath("rtk", "/custom/rtk");
+    expect(getDependencyPath("rtk")).toBe("/custom/rtk");
+    setDependencyPath("rtk", null);
+    expect(getDependencyPath("rtk")).toBe(null);
+  });
+
+  it("dependencies are independent per binary name", () => {
+    setDependencyPath("rtk", "/a/rtk");
+    setDependencyPath("wakatime-cli", "/b/wakatime-cli");
+    expect(getDependencyPath("rtk")).toBe("/a/rtk");
+    expect(getDependencyPath("wakatime-cli")).toBe("/b/wakatime-cli");
+  });
+
+  it("moduleSnapshotChanged returns true after dependency path changes", () => {
+    captureModuleSnapshot();
+    expect(moduleSnapshotChanged()).toBe(false);
+    setDependencyPath("rtk", "/custom/rtk");
+    expect(moduleSnapshotChanged()).toBe(true);
+  });
+
+  it("moduleSnapshotChanged returns false after dependency cleared back to baseline", () => {
+    setDependencyPath("rtk", "/custom/rtk");
+    captureModuleSnapshot();
+    setDependencyPath("rtk", null);
+    expect(moduleSnapshotChanged()).toBe(true);
+    setDependencyPath("rtk", "/custom/rtk");
+    expect(moduleSnapshotChanged()).toBe(false);
+  });
+
+  it("setDependencyPath doesn't clobber other dependencies", () => {
+    setDependencyPath("rtk", "/a/rtk");
+    setDependencyPath("gopls", "/b/gopls");
+    setDependencyPath("wakatime-cli", "/c/wakatime-cli");
+    expect(getDependencyPath("rtk")).toBe("/a/rtk");
+    expect(getDependencyPath("gopls")).toBe("/b/gopls");
+    expect(getDependencyPath("wakatime-cli")).toBe("/c/wakatime-cli");
+  });
+
+  it("setDontBother preserves path override", () => {
+    setDependencyPath("rtk", "/custom/rtk");
+    setDontBother("rtk", true);
+    expect(getDependencyPath("rtk")).toBe("/custom/rtk");
+    expect(isDontBother("rtk")).toBe(true);
+    setDontBother("rtk", false);
+    expect(getDependencyPath("rtk")).toBe("/custom/rtk");
+    expect(isDontBother("rtk")).toBe(false);
+  });
+
+  it("resolveDependency records runtime shadow without persisting it", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "settings-dep-"));
+    try {
+      const bin = path.join(dir, "shadow-bin");
+      fs.writeFileSync(bin, "#!/bin/sh\necho ok\n");
+      fs.chmodSync(bin, 0o755);
+
+      expect(resolveDependency("shadow-bin", { extendPath: [dir] })).toBe(bin);
+      expect(getDependencyView("shadow-bin")).toMatchObject({
+        resolvedPath: bin,
+        resolvedState: "ok",
+      });
+      expect(loadConfig().dependencies?.["shadow-bin"]).toBeUndefined();
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("setDependencyPath invalidates stale runtime shadow for that binary", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "settings-dep-"));
+    try {
+      const bin = path.join(dir, "clear-shadow-bin");
+      fs.writeFileSync(bin, "#!/bin/sh\necho ok\n");
+      fs.chmodSync(bin, 0o755);
+
+      expect(resolveDependency("clear-shadow-bin", { extendPath: [dir] })).toBe(bin);
+      expect(getDependencyView("clear-shadow-bin").resolvedPath).toBe(bin);
+      setDependencyPath("clear-shadow-bin", "/custom/clear-shadow-bin");
+      expect(getDependencyView("clear-shadow-bin")).toEqual({ path: "/custom/clear-shadow-bin" });
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
 

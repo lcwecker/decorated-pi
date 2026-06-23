@@ -7,6 +7,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
 import type { Model } from "@earendil-works/pi-ai";
+import { which } from "./utils/which.js";
 
 const CONFIG_DIR = path.join(os.homedir(), ".pi", "agent");
 const CONFIG_FILE = path.join(CONFIG_DIR, "decorated-pi.json");
@@ -69,13 +70,44 @@ export interface UsageIndexEntry {
   mtime: number;
 }
 
+/** Per-binary dependency override.
+ *
+ *  Keyed by binary name (e.g. "rtk", "wakatime-cli", "gopls",
+ *  "codegraph"). `path` injects an extra search location into which();
+ *  `dontBother` silences missing-dependency notifications for this binary. */
+export interface DependencySettings {
+  /** Absolute path to the binary (file) or a directory to search. Injected
+   *  into which()'s extendPath, so it's tried before $PATH. */
+  path?: string;
+  /** When true, skeleton's missing-dependency notification skips this
+   *  binary. Use for binaries the user doesn't care about. */
+  dontBother?: boolean;
+}
+
+export interface DependencyView extends DependencySettings {
+  /** Runtime-only shadow value: what the resolver actually found.
+   *  Not persisted to decorated-pi.json and not written by /dp-settings. */
+  resolvedPath?: string;
+  /** Runtime-only shadow value: whether the resolver checked/found it. */
+  resolvedState?: "ok" | "missing";
+}
+
 export interface DecoratedPiConfig {
   imageModelKey?: string | null;
   compactModelKey?: string | null;
+  dependencies?: Record<string, DependencySettings>;
   providers?: Record<string, ProviderCache>;
   modules?: ModuleSettings;
   mcpServers?: Record<string, McpServerEntry>;
   usageIndex?: Record<string, UsageIndexEntry>;
+}
+
+/** Runtime view = real config plus in-memory shadow fields. The shadow has
+ *  the same top-level shape as config, but may enrich selected leaves with
+ *  runtime-only data. It is never persisted and /dp-settings writes only the
+ *  real config through setter functions. */
+export interface DecoratedPiConfigView extends Omit<DecoratedPiConfig, "dependencies"> {
+  dependencies?: Record<string, DependencyView>;
 }
 
 export function loadConfig(): DecoratedPiConfig {
@@ -98,6 +130,11 @@ export function saveConfig(config: Partial<DecoratedPiConfig>) {
   const current = loadConfig();
   fs.writeFileSync(CONFIG_FILE, JSON.stringify({ ...current, ...config }, null, 2), "utf-8");
 }
+
+// Runtime-only shadow for the whole config. It mirrors DecoratedPiConfig's
+// top-level shape but is never persisted; runtime modules update it, and
+// /dp-settings reads the merged view for display only.
+const configShadow: DecoratedPiConfigView = {};
 
 // ─── 辅助 ──────────────────────────────────────────────────────────────────
 
@@ -165,6 +202,77 @@ export function getCompactModelKey(): string | null {
   return loadConfig().compactModelKey ?? null;
 }
 
+/** Look up a binary's configured path override. Returns null when not set. */
+export function getDependencyPath(name: string): string | null {
+  return loadConfig().dependencies?.[name]?.path ?? null;
+}
+
+/** Whether missing-dependency notifications are silenced for this binary. */
+export function isDontBother(name: string): boolean {
+  return loadConfig().dependencies?.[name]?.dontBother === true;
+}
+
+export function getConfigView(): DecoratedPiConfigView {
+  const real = loadConfig();
+  const dependencyNames = new Set([
+    ...Object.keys(real.dependencies ?? {}),
+    ...Object.keys(configShadow.dependencies ?? {}),
+  ]);
+  const dependencies: Record<string, DependencyView> = {};
+  for (const name of dependencyNames) {
+    dependencies[name] = {
+      ...(real.dependencies?.[name] ?? {}),
+      ...(configShadow.dependencies?.[name] ?? {}),
+    };
+  }
+  return {
+    ...real,
+    ...configShadow,
+    dependencies: Object.keys(dependencies).length ? dependencies : undefined,
+  };
+}
+
+export function getDependencyView(name: string): DependencyView {
+  return getConfigView().dependencies?.[name] ?? {};
+}
+
+export function listDependencyViewNames(extraNames: string[] = []): string[] {
+  return [...new Set([
+    ...extraNames,
+    ...Object.keys(getConfigView().dependencies ?? {}),
+  ])].sort();
+}
+
+export function recordDependencyResolution(name: string, resolvedPath: string | null): void {
+  if (!configShadow.dependencies) configShadow.dependencies = {};
+  configShadow.dependencies[name] = {
+    ...(configShadow.dependencies[name] ?? {}),
+    ...(resolvedPath
+      ? { resolvedState: "ok" as const, resolvedPath }
+      : { resolvedState: "missing" as const, resolvedPath: undefined }),
+  };
+}
+
+/** Resolve a binary using dependency config plus caller-specific search
+ *  locations. Modules call this at startup/runtime; it records a shadow
+ *  view for /dp-settings but does not persist anything.
+ *
+ *  Order:
+ *    1. dependencies[name].path (file or directory)
+ *    2. opts.extendPath entries (file or directory)
+ *    3. $PATH
+ */
+export function resolveDependency(name: string, opts?: { extendPath?: string[] }): string | null {
+  const override = getDependencyPath(name);
+  const extendPath = [
+    ...(override ? [override] : []),
+    ...(opts?.extendPath ?? []),
+  ];
+  const resolved = which(name, { extendPath });
+  recordDependencyResolution(name, resolved);
+  return resolved;
+}
+
 // ─── Setter ─────────────────────────────────────────────────────────────────
 
 export function setImageModelKey(key: string | null) {
@@ -173,6 +281,47 @@ export function setImageModelKey(key: string | null) {
 
 export function setCompactModelKey(key: string | null) {
   saveConfig({ compactModelKey: key });
+}
+
+/** Set or clear a binary's path override. Pass null to remove the path.
+ *  Preserves any dontBother flag on the same entry (精准修改不覆盖). */
+export function setDependencyPath(name: string, path: string | null) {
+  const current = loadConfig();
+  const deps = { ...(current.dependencies ?? {}) };
+  const existing = deps[name] ?? {};
+  if (path === null) {
+    const { path: _drop, ...rest } = existing;
+    if (Object.keys(rest).length === 0) {
+      delete deps[name];
+    } else {
+      deps[name] = rest;
+    }
+  } else {
+    deps[name] = { ...existing, path };
+  }
+  // Path edits are config writes; invalidate runtime-only resolution for
+  // this binary so /dp-settings never shows a stale pre-edit shadow path.
+  if (configShadow.dependencies?.[name]) delete configShadow.dependencies[name];
+  saveConfig({ dependencies: deps });
+}
+
+/** Set or clear a binary's dontBother flag. Pass false to re-enable
+ *  missing-dependency notifications. Preserves any path override. */
+export function setDontBother(name: string, dontBother: boolean) {
+  const current = loadConfig();
+  const deps = { ...(current.dependencies ?? {}) };
+  const existing = deps[name] ?? {};
+  if (dontBother) {
+    deps[name] = { ...existing, dontBother: true };
+  } else {
+    const { dontBother: _drop, ...rest } = existing;
+    if (Object.keys(rest).length === 0) {
+      delete deps[name];
+    } else {
+      deps[name] = rest;
+    }
+  }
+  saveConfig({ dependencies: deps });
 }
 
 // ─── Module Switches ──────────────────────────────────────────────────────────
@@ -321,14 +470,23 @@ export function getAllModuleSettings(): Required<ModuleSettings> {
  * reload is actually necessary.
  */
 let loadedModuleSnapshot: Required<ModuleSettings> | null = null;
+let loadedDependenciesSnapshot: Record<string, DependencySettings> | null = null;
 
 export function captureModuleSnapshot(): void {
   loadedModuleSnapshot = getAllModuleSettings();
+  loadedDependenciesSnapshot = loadConfig().dependencies ?? {};
 }
 
 export function moduleSnapshotChanged(): boolean {
   if (!loadedModuleSnapshot) return true;
-  return JSON.stringify(loadedModuleSnapshot) !== JSON.stringify(getAllModuleSettings());
+  if (JSON.stringify(loadedModuleSnapshot) !== JSON.stringify(getAllModuleSettings())) return true;
+  // Dependencies changes don't strictly require reload (which() reads the
+  // config file on every call), but prompt for consistency — the user
+  // might be mid-session and expect the new path to be picked up by hooks
+  // that captured the binary path at startup (rtk/wakatime).
+  const currentDeps = loadConfig().dependencies ?? {};
+  if (JSON.stringify(loadedDependenciesSnapshot) !== JSON.stringify(currentDeps)) return true;
+  return false;
 }
 
 // ─── Usage index (增量同步元数据) ─────────────────────────────────────────────

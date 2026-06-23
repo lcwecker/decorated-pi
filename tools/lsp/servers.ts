@@ -2,9 +2,9 @@
  * LSP Server Config — language detection, server commands, workspace roots.
  */
 import { existsSync, readdirSync, type Dirent } from "node:fs";
-import { spawnSync } from "node:child_process";
 import { dirname, extname, isAbsolute, join, resolve } from "node:path";
 import type { DependencyStatus } from "../../hooks/skeleton.js";
+import { getDependencyPath, resolveDependency } from "../../settings.js";
 
 // ─── File extension → language mapping ────────────────────────────────────
 
@@ -97,12 +97,28 @@ export function listSupportedLanguages(): string[] {
   return Object.keys(LANGUAGE_SERVERS).sort();
 }
 
+/** Unique binary names used by builtin LSP servers. Used by the
+ *  /dp-settings Dependencies UI to know which binaries are configurable. */
+export function listLspBinaryNames(): string[] {
+  const seen = new Set<string>();
+  for (const lang of Object.keys(LANGUAGE_SERVERS)) {
+    seen.add(LANGUAGE_SERVERS[lang].command);
+  }
+  return [...seen].sort();
+}
+
 export function getServerConfig(
   language: string,
   cwd = process.cwd(),
 ): LanguageConfig | undefined {
   const base = LANGUAGE_SERVERS[language];
   if (!base) return undefined;
+
+  const override = getDependencyPath(base.command);
+  if (override) {
+    const resolvedOverride = resolveDependency(base.command, { extendPath: [] });
+    return { ...base, command: resolvedOverride ?? override, is_project_local: false };
+  }
 
   const resolved = resolveLocalBinary(base.command, cwd);
   return { ...base, command: resolved.command, is_project_local: resolved.is_project_local };
@@ -147,14 +163,16 @@ export function collectLspDependencyStatuses(cwd: string): DependencyStatus[] {
   const statuses: DependencyStatus[] = [];
   const seen = new Set<string>();
   for (const language of listSupportedLanguages()) {
-    const cfg = getServerConfig(language, cwd);
-    if (!cfg || seen.has(cfg.command)) continue;
-    seen.add(cfg.command);
+    const base = LANGUAGE_SERVERS[language];
+    if (!base || seen.has(base.command)) continue;
+    seen.add(base.command);
+    const path = resolveLspBinary(base.command, cwd);
     statuses.push({
       module: "lsp",
-      label: cfg.command,
-      state: commandExists(cfg.command) ? "ok" : "missing",
-      detail: cfg.install_hint,
+      label: base.command,
+      state: path ? "ok" : "missing",
+      detail: base.install_hint,
+      path: path ?? undefined,
     });
   }
   return statuses;
@@ -174,14 +192,12 @@ export function findWorkspaceRoot(
 
 // ─── Internal helpers ─────────────────────────────────────────────────────
 
-function commandExists(command: string): boolean {
-  if (isAbsolute(command) || command.includes("/") || command.includes("\\")) {
-    return existsSync(command);
-  }
-  const result = process.platform === "win32"
-    ? spawnSync("where", [command], { encoding: "utf-8" })
-    : spawnSync(process.env.SHELL || "sh", ["-lc", `command -v '${command.replace(/'/g, `'"'"'`)}'`], { encoding: "utf-8" });
-  return result.status === 0;
+export function lspDependencyExtendPath(cwd = process.cwd()): string[] {
+  return [...ancestorDirs(cwd)].map((dir) => join(dir, "node_modules", ".bin"));
+}
+
+export function resolveLspBinary(command: string, cwd = process.cwd()): string | null {
+  return resolveDependency(command, { extendPath: lspDependencyExtendPath(cwd) });
 }
 
 function resolveLocalBinary(

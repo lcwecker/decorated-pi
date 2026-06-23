@@ -150,23 +150,18 @@ describe("wakatime", () => {
   describe("findWakatimeCli", () => {
     it("prefers PATH and caches the absolute path", () => {
       const probePath = vi.fn(() => "bin/wakatime-cli");
-      const exists = vi.fn(() => false);
 
-      expect(findWakatimeCli({ probePath, exists })).toBe(path.resolve("bin/wakatime-cli"));
-      expect(findWakatimeCli({ probePath, exists })).toBe(path.resolve("bin/wakatime-cli"));
+      expect(findWakatimeCli({ probePath })).toBe(path.resolve("bin/wakatime-cli"));
+      expect(findWakatimeCli({ probePath })).toBe(path.resolve("bin/wakatime-cli"));
       expect(probePath).toHaveBeenCalledTimes(1);
-      expect(exists).not.toHaveBeenCalled();
     });
 
-    it("falls back to ~/.wakatime/wakatime-cli and caches it", () => {
+    it("returns null when probePath finds nothing and caches it", () => {
       const probePath = vi.fn(() => null);
-      const fallback = path.resolve(path.join(os.homedir(), ".wakatime", "wakatime-cli"));
-      const exists = vi.fn((candidate: string) => candidate === fallback);
 
-      expect(findWakatimeCli({ probePath, exists, fallbackPath: fallback })).toBe(fallback);
-      expect(findWakatimeCli({ probePath, exists, fallbackPath: fallback })).toBe(fallback);
+      expect(findWakatimeCli({ probePath })).toBe(null);
+      expect(findWakatimeCli({ probePath })).toBe(null);
       expect(probePath).toHaveBeenCalledTimes(1);
-      expect(exists).toHaveBeenCalledTimes(1);
     });
   });
 
