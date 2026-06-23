@@ -18,7 +18,7 @@ Multiple layers of token savings that compound across every session.
 
 **RTK** — integrates [RTK](https://github.com/rtk-ai/rtk) to compress bash output into structured summaries, so the LLM never sees raw noise. **Just install the CLI, zero config**.
 
-**Codegraph** — integrates [codegraph](https://github.com/colbymchenry/codegraph) to offer a code map of your project, so the LLM can navigate symbols and call graphs without chaining `ls` → `grep` → `read`. **You should manage the code source index yourself, see[codegraph doc](https://github.com/colbymchenry/codegraph/blob/main/README.md)**.
+**Codegraph** — integrates [codegraph](https://github.com/colbymchenry/codegraph) to offer a code map of your project, so the LLM can navigate symbols and call graphs without chaining `ls` → `grep` → `read`. **You should manage the code source index yourself, see [codegraph doc](https://github.com/colbymchenry/codegraph/blob/main/README.md)**.
 
 **Auxiliary Models** — offloads heavy-but-dumb tasks to cheaper models so your primary model only pays for the hard work:
 
@@ -37,6 +37,10 @@ Multiple layers of token savings that compound across every session.
 
 - move the default Pi documentation block out of the system prompt and into a builtin `pi-docs` skill, so the docs reference loads on demand instead of sitting in every turn's prompt
 - unregister the native `write` tool, since `bash` can handle it
+
+**Large Result Externalization**
+
+- a `tool_result` hook that catches ANY tool output (bash, read, MCP, etc.) exceeding 30 KB and saves the full content to `/tmp/decorated-pi-results/<tool>-<callId>.txt`. Pi's native truncation still keeps a chunk of the original content in the prompt; this replaces it entirely with a one‑line pointer (`[Output too long, saved to /tmp/…]`) so the LLM knows where the result is and reads it on demand — strictly fewer tokens per turn
 
 ### 2. Smarter Tools
 
@@ -150,7 +154,7 @@ Example redaction on a `read` / `bash` output:
 
 ## Configuration
 
-Runtime settings in `~/.pi/agent/decorated-pi.json`. Modules can be toggled via `/dp-settings` (changes take effect after `/reload`).
+Runtime settings in `~/.pi/agent/decorated-pi.json`. run `/dp-settings` to configure it.
 
 ```json
 {
@@ -171,9 +175,21 @@ Runtime settings in `~/.pi/agent/decorated-pi.json`. Modules can be toggled via 
       "retry": true,
       "usage": true
     }
+  },
+  "dependencies": {
+    "rtk": {
+      "path": "/custom/bin/rtk",
+      "dontBother": false
+    },
+    "wakatime-cli": {
+      "dontBother": true
+    }
   }
 }
 ```
+
+- `modules` can be toggled on/off to enable/disable features. All are enabled by default.
+- `dependencies[binaryName].path` overrides the lookup location for a binary (file or directory). `dependencies[binaryName].dontBother` silences missing-dependency notifications for that binary. Both are optional
 
 ## License
 
