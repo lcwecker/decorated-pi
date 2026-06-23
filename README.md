@@ -14,7 +14,9 @@ pi install /path/to/decorated-pi
 
 ### 1. Token Efficiency
 
-Multiple layers of token savings that compound across every session. 
+Multiple layers of token savings that compound across every session.
+
+**Talk Normal Prompt** — injects a compact response-style prompt adapted from [talk-normal](https://github.com/hexiecs/talk-normal), trimming filler, summary stamps, conditional follow-up menus, and verbose framing. This reduces assistant output tokens and keeps visible reasoning / explanation blocks tighter.
 
 **RTK** — integrates [RTK](https://github.com/rtk-ai/rtk) to compress bash output into structured summaries, so the LLM never sees raw noise. **Just install the CLI, zero config**.
 

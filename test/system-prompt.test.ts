@@ -152,7 +152,19 @@ describe("Decorated Pi Guidance structure", () => {
     );
     expect(src).toMatch(/REDACT_GUIDANCE/);
     expect(src).toMatch(/INJECT_AGENTS_MD_GUIDANCE/);
+    expect(src).toMatch(/TALK_NORMAL_GUIDANCE/);
     expect(src).toMatch(/buildGuidelines/);
+  });
+
+  it("TALK_NORMAL_GUIDANCE adapts talk-normal prompt rules", () => {
+    const src = fs.readFileSync(
+      path.join(import.meta.dirname, "../index.ts"),
+      "utf-8",
+    );
+    expect(src).toMatch(/hexiecs\/talk-normal/);
+    expect(src).toMatch(/Be direct and informative/);
+    expect(src).toMatch(/Never restate the question/);
+    expect(src).toMatch(/summary-stamp closings/);
   });
 
   it("pi-docs skill contains the exact Pi documentation block", () => {
