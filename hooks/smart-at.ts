@@ -6,6 +6,10 @@
  * frecency + git status, and returns ranked results. We create one
  * FileFinder per session and query it directly for every @ prefix.
  *
+ * Result handling trusts FFF's native score: re-sort by score
+ * descending (shorter path breaks ties), no substring or git-ignore
+ * post-filtering.
+ *
  * KNOWN FFF LIMITATION (v0.9.4):
  * FFF only returns directories that directly contain files. Intermediate
  * folders that only hold subdirectories (e.g. product/module/apmanage/ where
@@ -24,7 +28,6 @@ import type { Module, Skeleton } from "./skeleton.js";
 const AT_BOUNDARY = new Set<string>([" ", "\t", "(", "["]);
 
 const AUTOCOMPLETE_LIMIT = 20;
-const FFF_SUPERSET = 100;
 const WIDGET_FOOTER = "\x1b[2mpowered by fff\x1b[0m";
 
 interface AutocompleteItem {
@@ -45,10 +48,6 @@ function atPrefix(text: string): string | null {
   return null;
 }
 
-function isGitIgnored(item: MixedItem): boolean {
-  return item.type === "file" && item.item.gitStatus === "ignored";
-}
-
 function toAutocompleteItem(item: MixedItem): AutocompleteItem {
   const path = item.item.relativePath;
   const label = item.type === "file"
@@ -65,23 +64,20 @@ interface BuiltResult {
   items: AutocompleteItem[];
 }
 
-/** Take FFF's ranked results, drop git-ignored files, and for non-empty
- *  queries keep only paths that contain the query as a substring. This
- *  stops FFF's loose fuzzy matching from ranking every file in a directory
- *  that happens to share a few letters (e.g. "mm/" for query "mmc"). */
-function buildResult(items: MixedItem[], lowerQuery: string): BuiltResult | null {
-  const filtered = items
-    .filter((it) => !isGitIgnored(it))
-    .filter(
-      (it) =>
-        !lowerQuery || it.item.relativePath.toLowerCase().includes(lowerQuery),
-    )
+/** Take FFF's mixed-search results and re-sort by native score descending
+ *  (score ties broken by shorter path first), then map to autocomplete
+ *  items. Trust FFF's fuzzy+frecency score; no substring or git-ignore
+ *  post-filtering. */
+function buildResult(items: MixedItem[], scores: { total: number }[]): BuiltResult | null {
+  const ranked = items
+    .map((item, index) => ({ item, score: scores[index]?.total ?? 0 }))
+    .sort((a, b) => b.score - a.score || a.item.item.relativePath.length - b.item.item.relativePath.length)
     .slice(0, AUTOCOMPLETE_LIMIT)
-    .map(toAutocompleteItem);
-  return filtered.length ? { items: filtered } : null;
+    .map((entry) => toAutocompleteItem(entry.item));
+  return ranked.length ? { items: ranked } : null;
 }
 
-export const __smartAtTest = { atPrefix };
+export const __smartAtTest = { atPrefix, buildResult };
 
 /** Active FileFinder for the current session; freed in session_shutdown
  *  to avoid leaking FFF's native handle + LMDB mmap regions. */
@@ -148,9 +144,8 @@ export const smartAtModule: Module = {
             }
 
             const query = prefix.slice(1);
-            const lowerQuery = query.toLowerCase();
-            const r = finder.mixedSearch(lowerQuery, {
-              pageSize: lowerQuery ? FFF_SUPERSET : AUTOCOMPLETE_LIMIT,
+            const r = finder.mixedSearch(query.toLowerCase(), {
+              pageSize: AUTOCOMPLETE_LIMIT,
             });
             if (!r.ok) {
               ctx.ui.setWidget("smart-at", undefined);
@@ -178,7 +173,7 @@ export const smartAtModule: Module = {
               return null;
             }
 
-            const result = buildResult(r.value.items, lowerQuery);
+            const result = buildResult(r.value.items, r.value.scores);
             if (!result) {
               ctx.ui.setWidget("smart-at", undefined);
               return null;

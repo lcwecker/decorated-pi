@@ -63,6 +63,36 @@ describe("setupSmartAt", () => {
   });
 });
 
+describe("buildResult score re-sorting", () => {
+  const { buildResult } = __smartAtTest;
+
+  it("sorts by score descending, shorter path breaks ties", () => {
+    const items = [
+      { type: "file" as const, item: { relativePath: "src/longer-path/index.ts", fileName: "index.ts" } },
+      { type: "file" as const, item: { relativePath: "src/index.ts", fileName: "index.ts" } },
+    ];
+    const scores = [{ total: 100 }, { total: 200 }];
+    const result = buildResult(items as any, scores as any);
+    expect(result).not.toBeNull();
+    expect(result!.items[0].value).toBe("@src/index.ts");
+    expect(result!.items[1].value).toBe("@src/longer-path/index.ts");
+  });
+
+  it("does not filter git-ignored files (trusts FFF)", () => {
+    const items = [
+      { type: "file" as const, item: { relativePath: "node_modules/pkg/index.js", fileName: "index.js", gitStatus: "ignored" } },
+      { type: "file" as const, item: { relativePath: "src/index.ts", fileName: "index.ts", gitStatus: "untracked" } },
+    ];
+    const scores = [{ total: 100 }, { total: 200 }];
+    const result = buildResult(items as any, scores as any);
+    expect(result!.items).toHaveLength(2);
+  });
+
+  it("returns null for empty input", () => {
+    expect(buildResult([], [])).toBeNull();
+  });
+});
+
 // ═══════════════════════════════════════════════════════════
 // Runtime hooks (integration with real FFF)
 // ═══════════════════════════════════════════════════════════
