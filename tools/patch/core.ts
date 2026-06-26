@@ -11,7 +11,12 @@
 
 import * as fs from "node:fs";
 import * as path from "node:path";
-import * as fsPromises from "node:fs/promises";
+import {
+  detectFileEncoding,
+  readFileDecoded,
+  writeFileEncoded,
+  type FileEncoding,
+} from "./encoding.js";
 
 // ═══════════════════════════════════════════════════════════════════════════
 // Types
@@ -63,6 +68,12 @@ export interface ReplacementInfo {
   oldLines: string[];
   /** The new lines that replaced them */
   newLines: string[];
+  /** Verbatim normalized replacement text (for byte-faithful writeback). */
+  newStr?: string;
+  /** Offset in normalized content where the matched region starts (writeback). */
+  normStart?: number;
+  /** Offset one past the matched region in normalized content (writeback). */
+  normEnd?: number;
   /** Optional anchor text (first line only, for hunk display) */
   anchor?: string;
   /** Anchor was provided but not found, and patch fell back to global old_str search */
@@ -156,13 +167,20 @@ function applyOverwrite(
   content: string,
   result: PatchResult,
 ): void {
-  const oldContent = fs.existsSync(absPath) ? fs.readFileSync(absPath, "utf8") : "";
+  // Detect encoding from the existing file so we round-trip in the same
+  // bytes. New files default to UTF-8 (no BOM).
+  const enc: FileEncoding | null = fs.existsSync(absPath)
+    ? detectFileEncoding(absPath)
+    : null;
+  const oldContent = enc ? readFileDecoded(absPath, enc) : "";
 
   // Write to temp file in the same directory (same filesystem → mv is atomic)
   ensureParentDir(absPath);
   const dir = path.dirname(absPath);
   const tmpName = path.join(dir, `.pi-patch-${randomId()}.tmp`);
-  fs.writeFileSync(tmpName, content, "utf8");
+  // Overwrite semantics: write exactly what the caller passed, in the
+  // detected encoding (UTF-8 for new files).
+  writeFileEncoded(tmpName, content, enc ?? { encoding: "utf-8", hasBOM: false, isUtf8: true });
   fs.renameSync(tmpName, absPath);
 
   if (oldContent) {
@@ -287,8 +305,8 @@ async function applyEdits(
     throw new ApplyError(`Cannot patch directory: ${displayPath}`);
   }
 
-  const rawContent = fs.readFileSync(absPath, "utf8");
-  const lineEnding = detectLineEnding(rawContent);
+  const enc = detectFileEncoding(absPath);
+  const rawContent = readFileDecoded(absPath, enc);
   const originalContent = normalizeLineEndings(rawContent);
 
   // Precompute line offsets for the original file (used throughout)
@@ -349,6 +367,8 @@ async function applyEdits(
 
       const oldStartLine = lineAtOffset(lineOffsets, matchIdx - cumulativeOffset);
       const oldEndLine = lineAtOffset(lineOffsets, matchIdx - cumulativeOffset + oldNorm.length - 1);
+      const normStart = matchIdx - cumulativeOffset;
+      const normEnd = normStart + oldNorm.length;
 
       content =
         content.substring(0, matchIdx) +
@@ -364,6 +384,9 @@ async function applyEdits(
         newEndLine: 0,
         oldLines: oldNorm.split("\n").filter((l, i, arr) => !(i === arr.length - 1 && l === "")),
         newLines: newNorm.split("\n").filter((l, i, arr) => !(i === arr.length - 1 && l === "")),
+        newStr: newNorm,
+        normStart,
+        normEnd,
         anchor: displayAnchor ? displayAnchor.split("\n")[0] : undefined,
         anchorMissing,
       });
@@ -392,12 +415,18 @@ async function applyEdits(
       result.diff = fileDiff;
     }
 
-    const finalContent = restoreLineEndings(content, lineEnding);
-    if (lineEnding === "\r\n" && rawContent.includes("\r\n")) {
-      result.warnings.push(`${displayPath}: CRLF line endings were normalized to LF during editing.`);
-    }
+    const finalContent = spliceOntoRaw(
+      rawContent,
+      cleanReplacements
+        .map((r) => ({
+          normStart: r.normStart ?? 0,
+          normEnd: r.normEnd ?? 0,
+          newStr: r.newStr ?? r.newLines.join("\n"),
+        }))
+        .sort((a, b) => a.normStart - b.normStart),
+    );
 
-    fs.writeFileSync(absPath, finalContent, "utf8");
+    writeFileEncoded(absPath, finalContent, enc);
     result.modified.push(displayPath);
     result.replacements.set(displayPath, cleanReplacements);
     return;
@@ -495,14 +524,16 @@ async function applyEdits(
     result.diff = fileDiff;
   }
 
-  // Restore line endings
-  const finalContent = restoreLineEndings(content, lineEnding);
+  const finalContent = spliceOntoRaw(
+    rawContent,
+    sorted.map((p) => ({
+      normStart: p.matchIdx,
+      normEnd: p.matchIdx + p.oldNorm.length,
+      newStr: p.newNorm,
+    })),
+  );
 
-  if (lineEnding === "\r\n" && rawContent.includes("\r\n")) {
-    result.warnings.push(`${displayPath}: CRLF line endings were normalized to LF during editing.`);
-  }
-
-  fs.writeFileSync(absPath, finalContent, "utf8");
+  writeFileEncoded(absPath, finalContent, enc);
   result.modified.push(displayPath);
   result.replacements.set(displayPath, replacements);
 }
@@ -541,7 +572,8 @@ export async function computePatchPreview(
         return { error: "File not found" };
       }
 
-      const rawContent = await fsPromises.readFile(absPath, "utf8");
+      const enc = detectFileEncoding(absPath);
+      const rawContent = readFileDecoded(absPath, enc);
     const lineOffsets = buildLineOffsets(rawContent);
     const totalLines = lineOffsets.length - 1;
     let content = normalizeLineEndings(rawContent);
@@ -1053,16 +1085,68 @@ function ensureParentDir(absPath: string): void {
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
 }
 
-function detectLineEnding(content: string): string {
-  return content.includes("\r\n") ? "\r\n" : "\n";
-}
-
 function normalizeLineEndings(text: string): string {
   return text.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
 }
 
-function restoreLineEndings(text: string, ending: string): string {
-  return ending === "\r\n" ? text.replace(/\n/g, "\r\n") : text;
+/** A replacement expressed in coordinates of the normalized (\n-only) content,
+ *  paired with the exact new_str to drop in. Used by spliceOntoRaw to rebuild
+ *  the file byte-for-byte on the original rawContent. */
+interface RawSplice {
+  /** Offset in the normalized content where the matched text starts. */
+  normStart: number;
+  /** Offset in the normalized content one past the matched text. */
+  normEnd: number;
+  /** Verbatim replacement text (already normalized to \n). */
+  newStr: string;
+}
+
+/** Map every index of the normalized content to its offset in rawContent.
+ *  The two strings differ only by `\r` bytes (CRLF→LF normalization removed
+ *  them), so we walk both in lockstep. O(n). */
+function buildNormToRawMap(raw: string, norm: string): Int32Array {
+  const map = new Int32Array(norm.length + 1);
+  let ri = 0;
+  for (let ni = 0; ni <= norm.length; ni++) {
+    // Skip any `\r` in raw that the normalization folded into `\n`.
+    // norm[ni] corresponds to raw[ri]; when norm advances past a `\n` that
+    // came from `\r\n`, raw must skip the `\r` first.
+    if (ni < norm.length) {
+      map[ni] = ri;
+      const ch = norm.charCodeAt(ni);
+      const rawCh = raw.charCodeAt(ri);
+      if (ch === 10 /* \n */ && rawCh === 13 /* \r */) {
+        // raw had \r\n; advance past \r then \n
+        ri += 2;
+      } else {
+        ri += 1;
+      }
+    } else {
+      map[ni] = raw.length;
+    }
+  }
+  return map;
+}
+
+/** Rebuild the file on top of the original rawContent: untouched regions keep
+ *  their original bytes (including CRLF / mixed endings), edited regions get
+ *  the verbatim newStr the caller supplied. Splices must be sorted by
+ *  normStart and non-overlapping. */
+function spliceOntoRaw(rawContent: string, splices: RawSplice[]): string {
+  if (splices.length === 0) return rawContent;
+  const norm = normalizeLineEndings(rawContent);
+  const map = buildNormToRawMap(rawContent, norm);
+  let out = "";
+  let rawCursor = 0;
+  for (const s of splices) {
+    const rawStart = map[s.normStart] ?? 0;
+    const rawEnd = map[s.normEnd] ?? rawContent.length;
+    if (rawStart > rawCursor) out += rawContent.substring(rawCursor, rawStart);
+    out += s.newStr;
+    rawCursor = rawEnd;
+  }
+  if (rawCursor < rawContent.length) out += rawContent.substring(rawCursor);
+  return out;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -1203,6 +1287,9 @@ function collapseSequentialReplacements(
         newEndLine: merged.oldStartLine + next.newLines.length - 1,
         oldLines: merged.oldLines,
         newLines: next.newLines,
+        newStr: next.newStr,
+        normStart: merged.normStart,
+        normEnd: merged.normEnd,
         anchor: undefined,
         anchorMissing: merged.anchorMissing || next.anchorMissing,
       };
@@ -1530,4 +1617,6 @@ export const __patchCoreTest = {
   truncate,
   collapseSequentialReplacements,
   generateReplacementDiff,
+  spliceOntoRaw,
+  buildNormToRawMap,
 };
