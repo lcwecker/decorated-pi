@@ -26,7 +26,9 @@
     "dependencies": {
         "@ff-labs/fff-node": "^0.9.4",
         "@modelcontextprotocol/sdk": "^1.29.0",
+        "chardet": "^2.2.0",
         "file-type": "^21.3.4",
+        "iconv-lite": "^0.7.2",
         "openai": "^6.37.0"
     },
     "peerDependencies": {

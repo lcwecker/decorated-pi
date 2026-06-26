@@ -15,7 +15,9 @@ import {
   computePatchPreview,
   diagnoseOldStrMismatch,
   diagnoseOldStrNotUnique,
+  __patchCoreTest,
 } from "../tools/patch/core.js";
+import { detectFileEncoding, readFileDecoded, writeFileEncoded } from "../tools/patch/encoding.js";
 import { preparePatchArguments } from "../tools/patch/index.js";
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -1724,5 +1726,248 @@ describe("generateReplacementDiff", () => {
     } finally {
       fs.rmSync(tmpDir, { recursive: true, force: true });
     }
+  });
+});
+
+// ─── line-ending preservation (byte-faithful writeback) ───────────────────
+
+describe("patch line-ending preservation", () => {
+  let tmp: string;
+  beforeEach(() => { tmp = fs.mkdtempSync(path.join(os.tmpdir(), "patch-le2-")); });
+  afterEach(() => { fs.rmSync(tmp, { recursive: true, force: true }); });
+
+  function writeBin(name: string, buf: Buffer) {
+    const p = path.join(tmp, name);
+    fs.mkdirSync(path.dirname(p), { recursive: true });
+    fs.writeFileSync(p, buf);
+    return p;
+  }
+  function readBin(name: string): Buffer {
+    return fs.readFileSync(path.join(tmp, name));
+  }
+
+  it("keeps CRLF on untouched lines, writes LF from new_str verbatim", async () => {
+    // CRLF file; the edit replaces a CRLF line with an LF-only new_str.
+    // Untouched lines must keep CRLF; the replaced line carries LF as given.
+    writeBin("crlf.bin", Buffer.from("a\r\nb\r\nc\r\n", "latin1"));
+    await applyPatch({
+      path: "crlf.bin",
+      edits: [{ old_str: "b", new_str: "B1\nB2" }],
+    }, tmp);
+    const out = readBin("crlf.bin").toString("latin1");
+    expect(out).toBe("a\r\nB1\nB2\r\nc\r\n");
+  });
+
+  it("does not unify mixed line endings", async () => {
+    // Mix of CRLF and LF in the same file; only the edited line changes,
+    // every other line keeps its original ending byte-for-byte.
+    writeBin("mix.bin", Buffer.from("lf\ncrlf\r\nlf2\n", "latin1"));
+    await applyPatch({
+      path: "mix.bin",
+      edits: [{ old_str: "crlf", new_str: "CRLF" }],
+    }, tmp);
+    const out = readBin("mix.bin").toString("latin1");
+    expect(out).toBe("lf\nCRLF\r\nlf2\n");
+  });
+
+  it("spliceOntoRaw leaves untouched bytes identical", () => {
+    const { spliceOntoRaw } = __patchCoreTest;
+    // raw has CRLF; normalized match happens on LF view; untouched CRLF survives.
+    const raw = "x\r\ny\r\nz\r\n";
+    const splices = [{ normStart: 2, normEnd: 3, newStr: "Y" }]; // "y" at norm offset 2
+    expect(spliceOntoRaw(raw, splices)).toBe("x\r\nY\r\nz\r\n");
+  });
+
+  it("buildNormToRawMap maps LF offsets back to CRLF offsets", () => {
+    const { buildNormToRawMap } = __patchCoreTest;
+    const raw = "a\r\nb\r\n"; // offsets: a=0, \r=1, \n=2, b=3, \r=4, \n=5
+    const norm = "a\nb\n";   // offsets: a=0, \n=1, b=2, \n=3
+    const map = buildNormToRawMap(raw, norm);
+    // norm[0]='a' -> raw 0; norm[1]='\n' came from \r\n -> raw skips to 3? No:
+    // map[ni] is recorded BEFORE advancing. map[0]=0, map[1]=1, map[2]=3, map[3]=4, map[4]=6
+    expect(map[0]).toBe(0);
+    expect(map[1]).toBe(1); // start of \r\n pair
+    expect(map[2]).toBe(3); // 'b' in raw
+    expect(map[3]).toBe(4); // start of second \r\n
+    expect(map[4]).toBe(6); // end of raw
+  });
+});
+
+// ─── encoding round-trip ──────────────────────────────────────────────────
+
+import * as iconv from "iconv-lite";
+
+describe("patch encoding round-trip", () => {
+  let tmp: string;
+  beforeEach(() => { tmp = fs.mkdtempSync(path.join(os.tmpdir(), "patch-enc-")); });
+  afterEach(() => { fs.rmSync(tmp, { recursive: true, force: true }); });
+
+  function writeBin(name: string, buf: Buffer) {
+    const p = path.join(tmp, name);
+    fs.mkdirSync(path.dirname(p), { recursive: true });
+    fs.writeFileSync(p, buf);
+    return p;
+  }
+  function readBin(name: string): Buffer {
+    return fs.readFileSync(path.join(tmp, name));
+  }
+
+  it("edits a GBK file and writes back as GBK", async () => {
+    // "你好world" in GBK: 你好 = c4 e3 ba c3, then "world" ASCII
+    const original = Buffer.concat([
+      iconv.encode("你好", "gbk"),
+      Buffer.from("world"),
+    ]);
+    writeBin("gbk.txt", original);
+    const decoded = iconv.decode(original, "gbk");
+    await applyPatch({
+      path: "gbk.txt",
+      edits: [{ old_str: "world", new_str: decoded.slice(0, 2) + "!" }],
+    }, tmp);
+    const outBuf = readBin("gbk.txt");
+    const out = iconv.decode(outBuf, "gbk");
+    expect(out).toBe("你好你好!");
+    // And the bytes must be GBK, not UTF-8 (你 in UTF-8 is e4 bd a0, not c4 e3)
+    expect(outBuf.includes(Buffer.from([0xc4, 0xe3]))).toBe(true);
+  });
+
+  it("preserves UTF-8 BOM across edits", async () => {
+    const bom = Buffer.from([0xef, 0xbb, 0xbf]);
+    const body = Buffer.from("hello\nworld\n", "utf8");
+    writeBin("bom.txt", Buffer.concat([bom, body]));
+    await applyPatch({
+      path: "bom.txt",
+      edits: [{ old_str: "hello", new_str: "HELLO" }],
+    }, tmp);
+    const out = readBin("bom.txt");
+    expect(out[0]).toBe(0xef);
+    expect(out[1]).toBe(0xbb);
+    expect(out[2]).toBe(0xbf);
+    expect(out.subarray(3).toString("utf8")).toBe("HELLO\nworld\n");
+  });
+
+  it("preserves UTF-16LE with BOM across edits", async () => {
+    const bom = Buffer.from([0xff, 0xfe]);
+    const body = iconv.encode("alpha\nbeta\n", "utf-16le");
+    writeBin("u16.txt", Buffer.concat([bom, body]));
+    await applyPatch({
+      path: "u16.txt",
+      edits: [{ old_str: "alpha", new_str: "ALPHA" }],
+    }, tmp);
+    const out = readBin("u16.txt");
+    expect(out[0]).toBe(0xff);
+    expect(out[1]).toBe(0xfe);
+    expect(iconv.decode(out, "utf-16le")).toBe("ALPHA\nbeta\n");
+  });
+
+  it("overwrite detects existing GBK encoding and writes back in GBK", async () => {
+    const original = iconv.encode("旧内容", "gbk");
+    writeBin("gbk2.txt", original);
+    await applyPatch({
+      path: "gbk2.txt",
+      overwrite: true,
+      new_str: "新内容",
+    }, tmp);
+    const out = readBin("gbk2.txt");
+    expect(iconv.decode(out, "gbk")).toBe("新内容");
+    // UTF-8 of 新 is e6 96 b0 — must NOT appear if we stayed in GBK
+    expect(out.includes(Buffer.from([0xe6, 0x96, 0xb0]))).toBe(false);
+  });
+
+  it("computePatchPreview decodes a GBK file for diff", async () => {
+    const original = iconv.encode("你好world", "gbk");
+    writeBin("gbk3.txt", original);
+    const p = await computePatchPreview(
+      { path: "gbk3.txt", edits: [{ old_str: "world", new_str: "WORLD" }] },
+      tmp,
+    );
+    expect(p.diff).toContain("WORLD");
+    expect(p.diff).toContain("world");
+  });
+});
+
+// ─── encoding edge cases ──────────────────────────────────────────────────
+
+describe("patch encoding edge cases", () => {
+  let tmp: string;
+  beforeEach(() => { tmp = fs.mkdtempSync(path.join(os.tmpdir(), "patch-enc2-")); });
+  afterEach(() => { fs.rmSync(tmp, { recursive: true, force: true }); });
+
+  it("treats pure ASCII short file as UTF-8 (no chardet exotic misfire)", () => {
+    const p = path.join(tmp, "short.txt");
+    fs.writeFileSync(p, "x\n", "utf8");
+    const enc = detectFileEncoding(p);
+    expect(enc.isUtf8).toBe(true);
+    expect(enc.encoding).toBe("utf-8");
+    expect(enc.hasBOM).toBe(false);
+  });
+
+  it("edits a Big5 file and writes back as Big5", async () => {
+    const original = iconv.encode("歡迎world", "big5");
+    fs.writeFileSync(path.join(tmp, "big5.txt"), original);
+    await applyPatch({
+      path: "big5.txt",
+      edits: [{ old_str: "world", new_str: "WORLD" }],
+    }, tmp);
+    const out = fs.readFileSync(path.join(tmp, "big5.txt"));
+    // Big5 "歡迎" must round-trip; if we had mis-encoded as UTF-8 the bytes
+    // for 歡 (a6 77) would be gone.
+    expect(iconv.decode(out, "big5")).toBe("歡迎WORLD");
+  });
+
+  it("edits a Latin-1 file with high bytes", async () => {
+    // "café" in latin1: 63 61 66 e9
+    fs.writeFileSync(path.join(tmp, "lat1.txt"), Buffer.from([0x63, 0x61, 0x66, 0xe9, 0x21]));
+    // '!' is ASCII-safe; editing it must keep é (e9) byte-identical.
+    await applyPatch({
+      path: "lat1.txt",
+      edits: [{ old_str: "!", new_str: "?" }],
+    }, tmp);
+    const out = fs.readFileSync(path.join(tmp, "lat1.txt"));
+    expect(Array.from(out)).toEqual([0x63, 0x61, 0x66, 0xe9, 0x3f]);
+  });
+});
+
+// ─── encoding safety-net branches ─────────────────────────────────────────
+
+describe("patch encoding safety nets", () => {
+  let tmp: string;
+  beforeEach(() => { tmp = fs.mkdtempSync(path.join(os.tmpdir(), "patch-enc3-")); });
+  afterEach(() => { fs.rmSync(tmp, { recursive: true, force: true }); });
+
+  it("detects UTF-16BE with BOM", () => {
+    // UTF-16BE BOM = FE FF, then "AB" = 00 41 00 42
+    const buf = Buffer.from([0xfe, 0xff, 0x00, 0x41, 0x00, 0x42]);
+    fs.writeFileSync(path.join(tmp, "be.txt"), buf);
+    const enc = detectFileEncoding(path.join(tmp, "be.txt"));
+    expect(enc.encoding).toBe("utf-16be");
+    expect(enc.hasBOM).toBe(true);
+  });
+
+  it("falls back to a single-byte encoding when UTF-8 is invalid", async () => {
+    // Craft bytes that are not valid UTF-8. A lone 0x80 continuation byte is
+    // illegal UTF-8; the detector must route to a single-byte legacy encoding
+    // (ISO-8859-1 / windows-1252) that round-trips byte-identically, never
+    // introducing U+FFFD.
+    const buf = Buffer.from([0x80, 0x41]);
+    fs.writeFileSync(path.join(tmp, "bad.txt"), buf);
+    const enc = detectFileEncoding(path.join(tmp, "bad.txt"));
+    expect(enc.isUtf8).toBe(false);
+    expect(["iso-8859-1", "windows-1252"]).toContain(enc.encoding);
+    // Round-trip must be byte-identical and produce no U+FFFD.
+    const s = readFileDecoded(path.join(tmp, "bad.txt"), enc);
+    expect(s.includes("\uFFFD")).toBe(false);
+    writeFileEncoded(path.join(tmp, "out.txt"), s, enc);
+    expect(fs.readFileSync(path.join(tmp, "out.txt"))).toEqual(buf);
+  });
+
+  it("buildNormToRawMap handles trailing CR without LF", () => {
+    const { buildNormToRawMap } = __patchCoreTest;
+    // raw ends with a lone \r (no following \n). normalize turns it into \n.
+    const raw = "a\r";
+    const norm = "a\n";
+    const map = buildNormToRawMap(raw, norm);
+    // map[norm.length] must clamp to raw.length, not leave a stale value.
+    expect(map[norm.length]).toBe(raw.length);
   });
 });
