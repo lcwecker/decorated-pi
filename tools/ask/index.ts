@@ -17,7 +17,7 @@ const askQuestionSchema = Type.Object({
     { description: "text = free input, single = one option, multi = many options" },
   ),
   question: Type.String({ description: "Question text shown to the user." }),
-  options: Type.Optional(Type.Array(Type.String(), { description: "Options for single or multi choice." })),
+  options: Type.Optional(Type.Array(Type.String(), { description: "Options for single or multi choice. Each option MUST be a plain string (not an object). Example: [\"选项A\", \"选项B\", \"选项C\"]. The user picks by index; do NOT pass {id,text} objects." })),
   default: Type.Optional(Type.String({ description: "Default answer. For multi, comma-separated values." })),
 });
 
