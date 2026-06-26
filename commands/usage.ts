@@ -401,7 +401,11 @@ export function formatCost(c: number): string {
 
 export function formatHitRate(hitRate: number, turns: number): string {
   if (turns === 0) return "—";
-  return `${hitRate.toFixed(1)}%`;
+  // Truncate (not round) beyond 1 decimal place: 99.97 → "99.9%", not
+  // "100.0%". A true 100.0 (every input-side token served from cache) is
+  // the only way to reach "100.0%".
+  const truncated = Math.floor(hitRate * 10) / 10;
+  return `${truncated.toFixed(1)}%`;
 }
 
 export type ColumnId = "input" | "output" | "cacheRead" | "cacheWrite" | "hitRate" | "cost";
