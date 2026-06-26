@@ -91,6 +91,16 @@ describe("formatHitRate", () => {
     expect(formatHitRate(77.34, 10)).toBe("77.3%");
     expect(formatHitRate(0, 1)).toBe("0.0%");
   });
+
+  it("truncates beyond 1 decimal — never rounds 99.9x up to 100.0", () => {
+    // 99.92 and 99.97 both display as 99.9%; only an exact 100 shows 100.0%.
+    expect(formatHitRate(99.92, 10)).toBe("99.9%");
+    expect(formatHitRate(99.95, 10)).toBe("99.9%");
+    expect(formatHitRate(99.97, 10)).toBe("99.9%");
+    expect(formatHitRate(99.997, 10)).toBe("99.9%");
+    // true 100 (input=0, cacheWrite=0, cacheRead>0) is the only path to 100.0%
+    expect(formatHitRate(100, 10)).toBe("100.0%");
+  });
 });
 
 // ─── pickColumns ────────────────────────────────────────────────────────────
