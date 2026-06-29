@@ -23,6 +23,7 @@ import { createSkeleton } from "./hooks/skeleton.js";
 import { setupRedact, REDACT_GUIDANCE } from "./hooks/redact.js";
 import { externalizeModule } from "./hooks/externalize.js";
 import { normalizeCodeblocksModule } from "./hooks/normalize-codeblocks.js";
+import { thinkingLabelStripModule } from "./hooks/thinking-label-strip.js";
 import { trackMtimeModule } from "./hooks/track-mtime.js";
 import {
     injectAgentsMdModule,
@@ -228,6 +229,7 @@ export default async function (pi: ExtensionAPI) {
     // The first module registered for a given event runs first (compose chain).
     if (isModuleEnabled("secretRedaction")) setupRedact(sk);
     sk.register(normalizeCodeblocksModule);
+    sk.register(thinkingLabelStripModule);
     sk.register(externalizeModule);
     sk.register(trackMtimeModule);
     sk.register(injectAgentsMdModule);

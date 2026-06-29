@@ -25,7 +25,8 @@ export type HookEvent =
   | "agent_end"
   | "input"
   | "tool_call"
-  | "tool_result";
+  | "tool_result"
+  | "message_end";
 
 // ─── Handler modes ─────────────────────────────────────────────────────────
 
@@ -67,6 +68,7 @@ export interface Module {
     input?: ParallelHandler<"input">[];
     tool_call?: ComposeHandler<"tool_call">[];
     tool_result?: ComposeHandler<"tool_result">[];
+    message_end?: ComposeHandler<"message_end">[];
   };
 }
 
@@ -99,6 +101,7 @@ const COMPOSE_EVENTS = new Set<HookEvent>([
   "before_agent_start",
   "tool_call",
   "tool_result",
+  "message_end",
 ]);
 
 /** Events whose handler return value is propagated to the extension runner
