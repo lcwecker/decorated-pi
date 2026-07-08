@@ -162,13 +162,17 @@ function createSingleLineComponent(text: string) {
     };
 }
 
-function formatPatchMetaLine(line: string, theme: any): string {
-    const missingSuffix = " (missing)";
-    if (line.endsWith(missingSuffix)) {
-        return (
-            theme.fg("accent", line.slice(0, -missingSuffix.length)) +
-            theme.fg("warning", missingSuffix)
-        );
+export function formatPatchMetaLine(line: string, theme: any): string {
+    // Anchor status suffixes share the same warning color so a degraded
+    // anchor (missing or not-unique) stands out from the diff body.
+    const suffixes = [" (missing)", " (not unique)"];
+    for (const suffix of suffixes) {
+        if (line.endsWith(suffix)) {
+            return (
+                theme.fg("accent", line.slice(0, -suffix.length)) +
+                theme.fg("warning", suffix)
+            );
+        }
     }
     return theme.fg("accent", line);
 }

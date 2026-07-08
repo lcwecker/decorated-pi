@@ -18,7 +18,7 @@ import {
   __patchCoreTest,
 } from "../tools/patch/core.js";
 import { detectFileEncoding, readFileDecoded, writeFileEncoded } from "../tools/patch/encoding.js";
-import { preparePatchArguments } from "../tools/patch/index.js";
+import { preparePatchArguments, formatPatchMetaLine } from "../tools/patch/index.js";
 
 // ═══════════════════════════════════════════════════════════════════════════
 // applyPatches Tests
@@ -1712,8 +1712,8 @@ describe("generateReplacementDiff", () => {
         {
           path: "f.txt",
           edits: [
-            { old_str: "line2", new_str: "LINE2" },
-            { old_str: "line18", new_str: "LINE18" },
+            { old_str: "line2\n", new_str: "LINE2\n" },
+            { old_str: "line18\n", new_str: "LINE18\n" },
           ],
         },
         tmpDir,
@@ -1969,5 +1969,84 @@ describe("patch encoding safety nets", () => {
     const map = buildNormToRawMap(raw, norm);
     // map[norm.length] must clamp to raw.length, not leave a stale value.
     expect(map[norm.length]).toBe(raw.length);
+  });
+});
+
+// ─── formatPatchMetaLine: anchor status suffix coloring ──────────────────
+
+describe("formatPatchMetaLine", () => {
+  // Minimal theme stub: fg(name, text) wraps text so we can assert which
+  // color bucket each segment landed in.
+  function mockTheme() {
+    return {
+      fg: (name: string, text: string) => `[${name}]${text}[/${name}]`,
+    };
+  }
+
+  it("paints the whole line accent when no status suffix", () => {
+    const out = formatPatchMetaLine("@@ lines 1 @@ anchor: foo", mockTheme() as any);
+    expect(out).toBe("[accent]@@ lines 1 @@ anchor: foo[/accent]");
+  });
+
+  it("paints ' (missing)' suffix in warning, rest in accent", () => {
+    const out = formatPatchMetaLine("  - foo (missing)", mockTheme() as any);
+    expect(out).toBe("[accent]  - foo[/accent][warning] (missing)[/warning]");
+  });
+
+  it("paints ' (not unique)' suffix in warning, rest in accent — same as missing", () => {
+    const out = formatPatchMetaLine("  - foo (not unique)", mockTheme() as any);
+    expect(out).toBe("[accent]  - foo[/accent][warning] (not unique)[/warning]");
+  });
+
+  it("both status suffixes use the same coloring (consistency)", () => {
+    const t = mockTheme();
+    const missingOut = formatPatchMetaLine("foo (missing)", t as any);
+    const notUniqueOut = formatPatchMetaLine("foo (not unique)", t as any);
+    // Same shape: accent prefix + warning suffix; only the suffix text differs.
+    expect(missingOut.replace(" (missing)", " (X)"))
+      .toBe(notUniqueOut.replace(" (not unique)", " (X)"));
+  });
+});
+
+// ─── anchor not-unique diff labeling (end-to-end) ────────────────────────
+
+describe("anchor not-unique diff labeling", () => {
+  let tmp: string;
+  beforeEach(() => { tmp = fs.mkdtempSync(path.join(os.tmpdir(), "patch-nu-")); });
+  afterEach(() => { fs.rmSync(tmp, { recursive: true, force: true }); });
+
+  it("labels a not-unique anchor as ' (not unique)', not ' (missing)'", async () => {
+    // anchor "marker" appears twice → not-unique → fallback global match
+    // of old_str "line1" (unique) succeeds. The diff header must say
+    // "(not unique)", not "(missing)".
+    fs.writeFileSync(path.join(tmp, "f.txt"), "marker\nline1\nmarker\nline2\n");
+    const result = await applyPatch({
+      path: "f.txt",
+      edits: [{ anchor: "marker", old_str: "line1", new_str: "LINE1" }],
+    }, tmp);
+    const diff = generatePatchDiff(result);
+    expect(diff).toContain("(not unique)");
+    expect(diff).not.toContain("(missing)");
+  });
+});
+
+// ─── computePatchPreview: uniqueness parity with apply ────────────────────
+
+describe("computePatchPreview — uniqueness parity with apply", () => {
+  let tmp: string;
+  beforeEach(() => { tmp = fs.mkdtempSync(path.join(os.tmpdir(), "patch-prev-uniq-")); });
+  afterEach(() => { fs.rmSync(tmp, { recursive: true, force: true }); });
+
+  it("reports 'not unique' error when old_str appears more than once", async () => {
+    // "line2" is a substring of "line20" → not unique.
+    fs.writeFileSync(path.join(tmp, "f.txt"),
+      Array.from({ length: 20 }, (_, i) => `line${i + 1}`).join("\n") + "\n");
+    const p = await computePatchPreview(
+      { path: "f.txt", edits: [{ old_str: "line2", new_str: "LINE2" }] },
+      tmp,
+    );
+    expect(p.error).toBeDefined();
+    expect(p.error).toMatch(/appears|times|unique/i);
+    expect(p.diff).toBeUndefined();
   });
 });

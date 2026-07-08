@@ -74,6 +74,8 @@ export interface ReplacementInfo {
   normStart?: number;
   /** Offset one past the matched region in normalized content (writeback). */
   normEnd?: number;
+  /** Anchor was provided but appeared multiple times; matcher fell back to a global old_str search. */
+  anchorNotUnique?: boolean;
   /** Optional anchor text (first line only, for hunk display) */
   anchor?: string;
   /** Anchor was provided but not found, and patch fell back to global old_str search */
@@ -202,6 +204,7 @@ type LocateEditResult =
       matchIdx: number;
       displayAnchor?: string;
       anchorMissing: boolean;
+      anchorNotUnique: boolean;
     }
   | {
       found: false;
@@ -225,6 +228,7 @@ function locateEdit(
   let searchFrom = 0;
   let displayAnchor: string | undefined;
   let anchorMissing = false;
+  let anchorNotUnique = false;
   let anchorState: "ok" | "missing" | "not_unique" = "ok";
   let anchorMessage: string | undefined;
 
@@ -253,7 +257,11 @@ function locateEdit(
   // ── Global exact match fallback (when anchor was missing/unusable) ──
   if (matchIdx === -1 && anchorMessage) {
     displayAnchor = edit.anchor;
-    anchorMissing = true;
+    // Distinguish the two degradation modes: a not-unique anchor still
+    // appeared in the file (just more than once), whereas a missing anchor
+    // did not appear at all. The diff label differs accordingly.
+    if (anchorState === "not_unique") anchorNotUnique = true;
+    else anchorMissing = true;
     matchIdx = content.indexOf(oldNorm, 0);
     if (matchIdx !== -1) {
       const secondGlobalMatch = content.indexOf(oldNorm, matchIdx + 1);
@@ -288,7 +296,7 @@ function locateEdit(
     }
   }
 
-  return { found: true, oldNorm, newNorm, matchIdx, displayAnchor, anchorMissing };
+  return { found: true, oldNorm, newNorm, matchIdx, displayAnchor, anchorMissing, anchorNotUnique };
 }
 
 async function applyEdits(
@@ -363,7 +371,7 @@ async function applyEdits(
         );
       }
 
-      const { oldNorm, newNorm, matchIdx, displayAnchor, anchorMissing } = located;
+      const { oldNorm, newNorm, matchIdx, displayAnchor, anchorMissing, anchorNotUnique } = located;
 
       const oldStartLine = lineAtOffset(lineOffsets, matchIdx - cumulativeOffset);
       const oldEndLine = lineAtOffset(lineOffsets, matchIdx - cumulativeOffset + oldNorm.length - 1);
@@ -389,6 +397,7 @@ async function applyEdits(
         normEnd,
         anchor: displayAnchor ? displayAnchor.split("\n")[0] : undefined,
         anchorMissing,
+        anchorNotUnique,
       });
     }
 
@@ -490,6 +499,7 @@ async function applyEdits(
       newLines: p.newNorm.split("\n").filter((l, i, arr) => !(i === arr.length - 1 && l === "")),
       anchor: p.displayAnchor ? p.displayAnchor.split("\n")[0] : undefined,
       anchorMissing: p.anchorMissing,
+      anchorNotUnique: p.anchorNotUnique,
     });
 
     neededRanges.push({
@@ -588,59 +598,25 @@ export async function computePatchPreview(
 
       for (const edit of patch.edits) {
         if (!edit.old_str) continue;
-        let oldNorm = normalizeLineEndings(edit.old_str);
-        let newNorm = normalizeLineEndings(edit.new_str);
 
-        let searchFrom = 0;
-        let displayAnchor: string | undefined;
-        let anchorMissing = false;
-        let anchorNotFoundMessage: string | undefined;
-        if (edit.anchor) {
-          const anchorNorm = normalizeLineEndings(edit.anchor);
-          const idx = content.indexOf(anchorNorm);
-          if (idx === -1) {
-            anchorNotFoundMessage = `Anchor not found: "${truncate(edit.anchor)}"`;
-          } else {
-            const secondAnchor = content.indexOf(anchorNorm, idx + 1);
-            if (secondAnchor !== -1) {
-              anchorNotFoundMessage = `Anchor is not unique: "${truncate(edit.anchor)}"`;
-            } else {
-              searchFrom = Math.max(0, idx - (oldNorm.length - 1));
-              displayAnchor = edit.anchor;
-              anchorMissing = false;
-            }
+        // Reuse the shared locator so preview and apply can never drift
+        // apart on anchor / fuzzy / uniqueness semantics. The only
+        // difference is error reporting: apply throws, preview returns.
+        let located: LocateEditResult;
+        try {
+          located = locateEdit(edit, content, patch.path);
+        } catch (e) {
+          return { error: e instanceof Error ? e.message : String(e) };
+        }
+        if (!located.found) {
+          const diag = diagnoseOldStrMismatch(located.oldNorm, content);
+          if (located.anchorState === "missing" || located.anchorState === "not_unique") {
+            return { error: `${located.anchorMessage}\nold_str not found: "${truncate(edit.old_str)}"\n${diag}` };
           }
+          return { error: `old_str not found: "${truncate(edit.old_str)}".${edit.anchor ? ` after anchor "${truncate(edit.anchor)}"` : ""}\n${diag}` };
         }
 
-        let matchIdx = anchorNotFoundMessage ? -1 : content.indexOf(oldNorm, searchFrom);
-        if (matchIdx === -1 && anchorNotFoundMessage) {
-          displayAnchor = edit.anchor;
-          anchorMissing = true;
-          matchIdx = content.indexOf(oldNorm, 0);
-          if (matchIdx !== -1) {
-            const secondGlobalMatch = content.indexOf(oldNorm, matchIdx + 1);
-            if (secondGlobalMatch !== -1) {
-              const dupDiag = diagnoseOldStrNotUnique(oldNorm, content);
-              return { error: `${anchorNotFoundMessage}\n${dupDiag}` };
-            }
-          }
-        }
-
-        if (matchIdx === -1) {
-          const searchLine = 0;
-          const fuzzy = tryFuzzyLineMatch(oldNorm, content, searchLine);
-          if (fuzzy) {
-            oldNorm = fuzzy.matched;
-            matchIdx = fuzzy.idx;
-            newNorm = normalizeIndentForFuzzy(fuzzy.matched.split("\n")[0] ?? "", newNorm);
-          } else if (anchorNotFoundMessage) {
-            const diag = diagnoseOldStrMismatch(oldNorm, content);
-            return { error: `${anchorNotFoundMessage}\nold_str not found: "${truncate(edit.old_str)}"\n${diag}` };
-          } else {
-            const diag = diagnoseOldStrMismatch(oldNorm, content);
-            return { error: `old_str not found: "${truncate(edit.old_str)}".\n${diag}` };
-          }
-        }
+        const { oldNorm, newNorm, matchIdx, displayAnchor, anchorMissing, anchorNotUnique } = located;
 
         const origMatchIdx = matchIdx - cumulativeOffset;
         const oldStartLine = lineAtOffset(lineOffsets, origMatchIdx);
@@ -655,7 +631,7 @@ export async function computePatchPreview(
           startLine: Math.max(1, oldStartLine - CONTEXT_LINES),
           endLine: Math.min(totalLines, oldEndLine + CONTEXT_LINES),
         });
-        allReplacements.push({ oldStartLine, oldEndLine, newStartLine, newEndLine, oldLines, newLines, anchor: displayAnchor ? displayAnchor.split("\n")[0] : undefined, anchorMissing });
+        allReplacements.push({ oldStartLine, oldEndLine, newStartLine, newEndLine, oldLines, newLines, anchor: displayAnchor ? displayAnchor.split("\n")[0] : undefined, anchorMissing, anchorNotUnique });
         cumulativeOffset += newNorm.length - oldNorm.length;
       }
 
@@ -744,6 +720,7 @@ function buildReplacementChunks(
 interface ChunkAnchor {
   text: string;
   missing: boolean;
+  notUnique?: boolean;
 }
 
 function getChunkAnchors(chunk: ReplacementChunk): ChunkAnchor[] {
@@ -756,9 +733,13 @@ function getChunkAnchors(chunk: ReplacementChunk): ChunkAnchor[] {
     for (const text of texts) {
       const existing = byText.get(text);
       if (!existing) {
-        byText.set(text, { text, missing: Boolean(rep.anchorMissing) });
-      } else if (!rep.anchorMissing) {
-        existing.missing = false;
+        byText.set(text, { text, missing: Boolean(rep.anchorMissing), notUnique: Boolean(rep.anchorNotUnique) });
+      } else {
+        // A later rep with the same anchor text that did NOT degrade clears
+        // the stale flag — the anchor is usable in at least one rep, so
+        // don't keep a stale warning for the other.
+        if (!rep.anchorMissing) existing.missing = false;
+        if (!rep.anchorNotUnique) existing.notUnique = false;
       }
     }
   }
@@ -766,7 +747,9 @@ function getChunkAnchors(chunk: ReplacementChunk): ChunkAnchor[] {
 }
 
 function formatAnchorLabel(anchor: ChunkAnchor): string {
-  return anchor.text + (anchor.missing ? " (missing)" : "");
+  if (anchor.notUnique) return anchor.text + " (not unique)";
+  if (anchor.missing) return anchor.text + " (missing)";
+  return anchor.text;
 }
 
 function formatChunkHeader(chunk: ReplacementChunk): string {
@@ -1292,6 +1275,7 @@ function collapseSequentialReplacements(
         normEnd: merged.normEnd,
         anchor: undefined,
         anchorMissing: merged.anchorMissing || next.anchorMissing,
+        anchorNotUnique: merged.anchorNotUnique || next.anchorNotUnique,
       };
       j++;
     }
