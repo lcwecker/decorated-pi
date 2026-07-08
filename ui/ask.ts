@@ -18,7 +18,7 @@
  */
 
 import type { Theme } from "@earendil-works/pi-coding-agent";
-import { Container, Spacer, Text, type TUI, type Component, getKeybindings } from "@earendil-works/pi-tui";
+import { Container, Spacer, Text, matchesKey, Key, type TUI, type Component, getKeybindings } from "@earendil-works/pi-tui";
 
 export type AskQuestionType = "text" | "single" | "multi";
 
@@ -37,25 +37,30 @@ export interface AskAnswer {
 
 interface QuestionState {
   value: string | string[];
+  /** Cursor position within value for text type (0 = before first char). */
+  textCursor: number;
   cursor: number; // option cursor; opts.length maps to the "Other" row
   /** Typed text when the cursor sits on the "Other" row (single or multi). */
   customText: string;
+  /** Cursor position within customText (0 = before first char). */
+  customCursor: number;
   /** Multi only: whether "Other" is currently toggled into the selection. */
   customSelected: boolean;
 }
 
 function parseDefault(type: AskQuestionType, options: string[] | undefined, defaultValue: string | undefined): QuestionState {
   if (type === "text") {
-    return { value: defaultValue ?? "", cursor: 0, customText: "", customSelected: false };
+    const v = defaultValue ?? "";
+    return { value: v, textCursor: v.length, cursor: 0, customText: "", customCursor: 0, customSelected: false };
   }
   const opts = options ?? [];
   if (type === "single") {
     const idx = defaultValue ? Math.max(0, opts.indexOf(defaultValue)) : 0;
-    return { value: opts[idx] ?? "", cursor: idx, customText: "", customSelected: false };
+    return { value: opts[idx] ?? "", textCursor: 0, cursor: idx, customText: "", customCursor: 0, customSelected: false };
   }
   // multi: comma-separated default, or empty
   const selected = defaultValue ? defaultValue.split(",").map(s => s.trim()).filter(Boolean) : [];
-  return { value: selected, cursor: 0, customText: "", customSelected: false };
+  return { value: selected, textCursor: 0, cursor: 0, customText: "", customCursor: 0, customSelected: false };
 }
 
 /** Returns true for single/multi choice questions, which always get an
@@ -307,13 +312,23 @@ export class AskComponent extends Container {
     const state = this.currentState();
 
     if (q.type === "text") {
+      const tc = state.textCursor;
+      const val = state.value as string;
       if (data === "\x7f" || data === "backspace") {
-        state.value = (state.value as string).slice(0, -1);
+        if (tc > 0) {
+          state.value = val.slice(0, tc - 1) + val.slice(tc);
+          state.textCursor--;
+        }
+      } else if (matchesKey(data, Key.left)) {
+        if (tc > 0) state.textCursor--;
+      } else if (matchesKey(data, Key.right)) {
+        if (tc < val.length) state.textCursor++;
       } else if (data.length > 0 && data.charCodeAt(0) >= 0x20) {
         // Accept any printable character: ASCII, Latin-1, CJK, emoji
         // surrogate pairs. The earlier `>= " " && <= "~"` filter
         // rejected every code point above U+007F (i.e. all Chinese).
-        state.value = (state.value as string) + data;
+        state.value = val.slice(0, tc) + data + val.slice(tc);
+        state.textCursor += data.length;
       }
     } else if (q.type === "single" && q.options) {
       const opts = q.options;
@@ -328,17 +343,25 @@ export class AskComponent extends Container {
         const next = (state.cursor + 1) % totalLen;
         state.cursor = next;
         state.value = next < opts.length ? opts[next] : "";
+      } else if (onCustomRow) {
+        if (data === "\x7f" || data === "backspace") {
+          if (state.customCursor > 0) {
+            state.customText = state.customText.slice(0, state.customCursor - 1) + state.customText.slice(state.customCursor);
+            state.customCursor--;
+          }
+        } else if (matchesKey(data, Key.left)) {
+          if (state.customCursor > 0) state.customCursor--;
+        } else if (matchesKey(data, Key.right)) {
+          if (state.customCursor < state.customText.length) state.customCursor++;
+        } else if (data.length > 0 && data.charCodeAt(0) >= 0x20) {
+          state.customText = state.customText.slice(0, state.customCursor) + data + state.customText.slice(state.customCursor);
+          state.customCursor += data.length;
+        }
       } else if (data >= "1" && data <= "9") {
         const idx = parseInt(data, 10) - 1;
         if (idx < totalLen) {
           state.cursor = idx;
           state.value = idx < opts.length ? opts[idx] : "";
-        }
-      } else if (onCustomRow) {
-        if (data === "\x7f" || data === "backspace") {
-          state.customText = state.customText.slice(0, -1);
-        } else if (data.length > 0 && data.charCodeAt(0) >= 0x20) {
-          state.customText += data;
         }
       }
     } else if (q.type === "multi" && q.options) {
@@ -360,6 +383,21 @@ export class AskComponent extends Container {
           else selected.add(opt);
           state.value = Array.from(selected);
         }
+      } else if (onCustomRow) {
+        if (data === "\x7f" || data === "backspace") {
+          if (state.customCursor > 0) {
+            state.customText = state.customText.slice(0, state.customCursor - 1) + state.customText.slice(state.customCursor);
+            state.customCursor--;
+          }
+        } else if (matchesKey(data, Key.left)) {
+          if (state.customCursor > 0) state.customCursor--;
+        } else if (matchesKey(data, Key.right)) {
+          if (state.customCursor < state.customText.length) state.customCursor++;
+        } else if (data.length > 0 && data.charCodeAt(0) >= 0x20) {
+          state.customSelected = true;
+          state.customText = state.customText.slice(0, state.customCursor) + data + state.customText.slice(state.customCursor);
+          state.customCursor += data.length;
+        }
       } else if (data >= "1" && data <= "9") {
         const idx = parseInt(data, 10) - 1;
         if (idx < totalLen) {
@@ -371,15 +409,6 @@ export class AskComponent extends Container {
             else selected.add(opt);
             state.value = Array.from(selected);
           }
-        }
-      } else if (onCustomRow && data.length > 0 && data.charCodeAt(0) >= 0x20) {
-        // Typing on the "Other" row auto-selects it and feeds customText.
-        // Backspace never enters this branch (handled below).
-        if (data !== "\x7f" && data !== "backspace") {
-          state.customSelected = true;
-          state.customText += data;
-        } else {
-          state.customText = state.customText.slice(0, -1);
         }
       }
     }
@@ -415,8 +444,11 @@ export class AskComponent extends Container {
 
     if (q.type === "text") {
       const value = state.value as string;
-      const cursor = this.theme.fg("accent", "_");
-      lines.push(value + cursor);
+      const tc = state.textCursor;
+      const before = value.slice(0, tc);
+      const after = value.slice(tc);
+      const cursor = this.theme.fg("accent", "|");
+      lines.push(`${before}${cursor}${after}`);
     } else if (q.type === "single" && q.options) {
       const opts = q.options;
       const totalLen = effectiveOptionCount(q);
@@ -432,12 +464,16 @@ export class AskComponent extends Container {
         let line: string;
         if (isCustomRow) {
           const text = state.customText;
-          const cmark = atCursor ? "_" : "";
-          line = `  ${icon} ${optLabel}: ${text}${cmark}`;
+          const cc = state.customCursor;
+          const before = text.slice(0, cc);
+          const after = text.slice(cc);
+          const cmark = atCursor ? this.theme.fg("accent", "|") : "";
+          const hl = atCursor ? this.theme.fg("accent", `  ${icon} ${optLabel}: `) : `  ${icon} ${optLabel}: `;
+          line = `${hl}${before}${cmark}${after}`;
         } else {
-          line = `  ${icon} ${optLabel}`;
+          line = atCursor ? this.theme.fg("accent", `  ${icon} ${optLabel}`) : `  ${icon} ${optLabel}`;
         }
-        lines.push(atCursor ? this.theme.fg("accent", line) : line);
+        lines.push(line);
       }
     } else if (q.type === "multi" && q.options) {
       const opts = q.options;
@@ -452,12 +488,16 @@ export class AskComponent extends Container {
         let line: string;
         if (isCustomRow) {
           const text = state.customText;
-          const cmark = atCursor ? "_" : "";
-          line = `  ${icon} ${optLabel}: ${text}${cmark}`;
+          const cc = state.customCursor;
+          const before = text.slice(0, cc);
+          const after = text.slice(cc);
+          const cmark = atCursor ? this.theme.fg("accent", "|") : "";
+          const hl = atCursor ? this.theme.fg("accent", `  ${icon} ${optLabel}: `) : `  ${icon} ${optLabel}: `;
+          line = `${hl}${before}${cmark}${after}`;
         } else {
-          line = `  ${icon} ${optLabel}`;
+          line = atCursor ? this.theme.fg("accent", `  ${icon} ${optLabel}`) : `  ${icon} ${optLabel}`;
         }
-        lines.push(atCursor ? this.theme.fg("accent", line) : line);
+        lines.push(line);
       }
     }
 

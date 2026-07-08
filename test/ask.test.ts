@@ -428,6 +428,253 @@ describe("AskComponent — wizard flow", () => {
   });
 });
 
+describe("AskComponent — custom text cursor in Other row", () => {
+  it("single: digits on Other row go to customText, not option selection", () => {
+    let result: any = undefined;
+    const questions: AskQuestion[] = [{
+      id: "color",
+      type: "single",
+      question: "Color?",
+      options: ["red", "green", "blue"],
+    }];
+    const comp = new AskComponent(mockTui(), mockTheme(), questions, (ans) => { result = ans; });
+    comp.handleInput("\x1b[B"); // red → green
+    comp.handleInput("\x1b[B"); // green → blue
+    comp.handleInput("\x1b[B"); // blue → Other
+    comp.handleInput("4");
+    comp.handleInput("2");
+    comp.handleInput("\r"); // commit
+    comp.handleInput("\r"); // submit
+    expect(result).toEqual([{ id: "color", value: "42" }]);
+  });
+
+  it("single: left/right arrows move cursor in customText", () => {
+    let result: any = undefined;
+    const questions: AskQuestion[] = [{
+      id: "color",
+      type: "single",
+      question: "Color?",
+      options: ["red"],
+    }];
+    const comp = new AskComponent(mockTui(), mockTheme(), questions, (ans) => { result = ans; });
+    comp.handleInput("\x1b[B"); // down to Other
+    comp.handleInput("ab");
+    comp.handleInput("\x1b[D"); // left ←
+    comp.handleInput("\x1b[D"); // left ← (now at position 0)
+    comp.handleInput("x");
+    comp.handleInput("\r"); // commit
+    comp.handleInput("\r"); // submit
+    expect(result).toEqual([{ id: "color", value: "xab" }]);
+  });
+
+  it("single: left arrow at start of customText is clamped", () => {
+    let result: any = undefined;
+    const questions: AskQuestion[] = [{
+      id: "color",
+      type: "single",
+      question: "Color?",
+      options: ["red"],
+    }];
+    const comp = new AskComponent(mockTui(), mockTheme(), questions, (ans) => { result = ans; });
+    comp.handleInput("\x1b[B"); // down to Other
+    comp.handleInput("a");
+    comp.handleInput("\x1b[D"); // left ← to position 0 (doesn't crash)
+    comp.handleInput("\x1b[D"); // left ← again (should stay at 0)
+    comp.handleInput("b");
+    comp.handleInput("\r"); // commit
+    comp.handleInput("\r"); // submit
+    expect(result).toEqual([{ id: "color", value: "ba" }]);
+  });
+
+  it("single: right arrow at end of customText is clamped", () => {
+    let result: any = undefined;
+    const questions: AskQuestion[] = [{
+      id: "color",
+      type: "single",
+      question: "Color?",
+      options: ["red"],
+    }];
+    const comp = new AskComponent(mockTui(), mockTheme(), questions, (ans) => { result = ans; });
+    comp.handleInput("\x1b[B"); // down to Other
+    comp.handleInput("ab");
+    comp.handleInput("\x1b[C"); // right → (should stay at end)
+    comp.handleInput("c");
+    comp.handleInput("\r"); // commit
+    comp.handleInput("\r"); // submit
+    expect(result).toEqual([{ id: "color", value: "abc" }]);
+  });
+
+  it("single: backspace at cursor position deletes char before cursor", () => {
+    let result: any = undefined;
+    const questions: AskQuestion[] = [{
+      id: "color",
+      type: "single",
+      question: "Color?",
+      options: ["red"],
+    }];
+    const comp = new AskComponent(mockTui(), mockTheme(), questions, (ans) => { result = ans; });
+    comp.handleInput("\x1b[B"); // down to Other
+    comp.handleInput("abc");
+    comp.handleInput("\x1b[D"); // left ← (cursor after 'c' → after 'b')
+    comp.handleInput("\x1b[D"); // left ← (cursor after 'b' → after 'a')
+    comp.handleInput("\x7f"); // backspace — delete 'a'
+    comp.handleInput("\r"); // commit
+    comp.handleInput("\r"); // submit
+    expect(result).toEqual([{ id: "color", value: "bc" }]);
+  });
+
+  it("single: backspace at start of customText does nothing", () => {
+    let result: any = undefined;
+    const questions: AskQuestion[] = [{
+      id: "color",
+      type: "single",
+      question: "Color?",
+      options: ["red"],
+    }];
+    const comp = new AskComponent(mockTui(), mockTheme(), questions, (ans) => { result = ans; });
+    comp.handleInput("\x1b[B"); // down to Other
+    comp.handleInput("a");
+    comp.handleInput("\x1b[D"); // left ← to start
+    comp.handleInput("\x7f"); // backspace at start — no-op
+    comp.handleInput("\r"); // commit
+    comp.handleInput("\r"); // submit
+    expect(result).toEqual([{ id: "color", value: "a" }]);
+  });
+
+  it("multi: digits on Other row go to customText, not option selection", () => {
+    let result: any = undefined;
+    const questions: AskQuestion[] = [{
+      id: "langs",
+      type: "multi",
+      question: "Langs?",
+      options: ["TypeScript", "Python"],
+    }];
+    const comp = new AskComponent(mockTui(), mockTheme(), questions, (ans) => { result = ans; });
+    comp.handleInput("\x1b[B"); // TypeScript → Python
+    comp.handleInput("\x1b[B"); // Python → Other
+    comp.handleInput("1");
+    comp.handleInput("2");
+    comp.handleInput("3");
+    comp.handleInput("\r"); // commit
+    comp.handleInput("\r"); // submit
+    expect(result).toEqual([{ id: "langs", value: ["123"] }]);
+  });
+
+  it("multi: left/right arrows move cursor in customText", () => {
+    let result: any = undefined;
+    const questions: AskQuestion[] = [{
+      id: "langs",
+      type: "multi",
+      question: "Langs?",
+      options: ["Python"],
+    }];
+    const comp = new AskComponent(mockTui(), mockTheme(), questions, (ans) => { result = ans; });
+    comp.handleInput("\x1b[B"); // down to Other
+    comp.handleInput("yz");
+    comp.handleInput("\x1b[D"); // left ← (cursor after 'z' → after 'y')
+    comp.handleInput("x");
+    comp.handleInput("\r"); // commit
+    comp.handleInput("\r"); // submit
+    expect(result).toEqual([{ id: "langs", value: ["yxz"] }]);
+  });
+
+  it("multi: backspace at cursor position deletes char before cursor", () => {
+    let result: any = undefined;
+    const questions: AskQuestion[] = [{
+      id: "langs",
+      type: "multi",
+      question: "Langs?",
+      options: ["Python"],
+    }];
+    const comp = new AskComponent(mockTui(), mockTheme(), questions, (ans) => { result = ans; });
+    comp.handleInput("\x1b[B"); // down to Other
+    comp.handleInput("abc");
+    comp.handleInput("\x1b[D"); // left ← (after 'c' → after 'b')
+    comp.handleInput("\x1b[D"); // left ← (after 'b' → after 'a')
+    comp.handleInput("\x7f"); // backspace — delete 'a'
+    comp.handleInput("\r"); // commit
+    comp.handleInput("\r"); // submit
+    expect(result).toEqual([{ id: "langs", value: ["bc"] }]);
+  });
+});
+
+describe("AskComponent — text cursor movement", () => {
+  it("text: left/right arrows move cursor", () => {
+    let result: any = undefined;
+    const questions: AskQuestion[] = [{ id: "q", type: "text", question: "Name?" }];
+    const comp = new AskComponent(mockTui(), mockTheme(), questions, (ans) => { result = ans; });
+    comp.handleInput("ab");
+    comp.handleInput("\x1b[D"); // left ←
+    comp.handleInput("\x1b[D"); // left ← (cursor at 0)
+    comp.handleInput("x");
+    comp.handleInput("\r"); // commit
+    comp.handleInput("\r"); // submit
+    expect(result).toEqual([{ id: "q", value: "xab" }]);
+  });
+
+  it("text: left arrow at start is clamped", () => {
+    let result: any = undefined;
+    const questions: AskQuestion[] = [{ id: "q", type: "text", question: "Name?" }];
+    const comp = new AskComponent(mockTui(), mockTheme(), questions, (ans) => { result = ans; });
+    comp.handleInput("a");
+    comp.handleInput("\x1b[D"); // left ← to 0
+    comp.handleInput("\x1b[D"); // left ← again (stays at 0)
+    comp.handleInput("b");
+    comp.handleInput("\r"); // commit
+    comp.handleInput("\r"); // submit
+    expect(result).toEqual([{ id: "q", value: "ba" }]);
+  });
+
+  it("text: right arrow at end is clamped", () => {
+    let result: any = undefined;
+    const questions: AskQuestion[] = [{ id: "q", type: "text", question: "Name?" }];
+    const comp = new AskComponent(mockTui(), mockTheme(), questions, (ans) => { result = ans; });
+    comp.handleInput("ab");
+    comp.handleInput("\x1b[C"); // right → (stays at end)
+    comp.handleInput("c");
+    comp.handleInput("\r"); // commit
+    comp.handleInput("\r"); // submit
+    expect(result).toEqual([{ id: "q", value: "abc" }]);
+  });
+
+  it("text: backspace at cursor position deletes char before cursor", () => {
+    let result: any = undefined;
+    const questions: AskQuestion[] = [{ id: "q", type: "text", question: "Name?" }];
+    const comp = new AskComponent(mockTui(), mockTheme(), questions, (ans) => { result = ans; });
+    comp.handleInput("abc");
+    comp.handleInput("\x1b[D"); // left ← (after c → after b)
+    comp.handleInput("\x1b[D"); // left ← (after b → after a)
+    comp.handleInput("\x7f"); // backspace — delete 'a'
+    comp.handleInput("\r"); // commit
+    comp.handleInput("\r"); // submit
+    expect(result).toEqual([{ id: "q", value: "bc" }]);
+  });
+
+  it("text: backspace at start does nothing", () => {
+    let result: any = undefined;
+    const questions: AskQuestion[] = [{ id: "q", type: "text", question: "Name?" }];
+    const comp = new AskComponent(mockTui(), mockTheme(), questions, (ans) => { result = ans; });
+    comp.handleInput("a");
+    comp.handleInput("\x1b[D"); // left ← to start
+    comp.handleInput("\x7f"); // backspace at start — no-op
+    comp.handleInput("\r"); // commit
+    comp.handleInput("\r"); // submit
+    expect(result).toEqual([{ id: "q", value: "a" }]);
+  });
+
+  it("text: insert in middle of existing text", () => {
+    let result: any = undefined;
+    const questions: AskQuestion[] = [{ id: "q", type: "text", question: "Name?" }];
+    const comp = new AskComponent(mockTui(), mockTheme(), questions, (ans) => { result = ans; });
+    comp.handleInput("ac");
+    comp.handleInput("\x1b[D"); // left ← (after c → after a)
+    comp.handleInput("b");
+    comp.handleInput("\r"); // commit
+    comp.handleInput("\r"); // submit
+    expect(result).toEqual([{ id: "q", value: "abc" }]);
+  });
+});
+
 describe("formatAnswers", () => {
   it("formats text, single, and multi answers", () => {
     const questions: AskQuestion[] = [
