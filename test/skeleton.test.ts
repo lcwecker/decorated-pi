@@ -10,6 +10,16 @@
  *  - session_shutdown clears any pending notify timer
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+
+// Mock settings.js so isDontBother does not read the real on-disk config
+// (~/.pi/agent/decorated-pi.json). Tests that need dontBother behaviour
+// override __setDontBother below.
+const dontBotherSet = new Set<string>();
+vi.mock("../settings.js", () => ({
+  isDontBother: (name: string) => dontBotherSet.has(name),
+  __setDontBother: (names: string[]) => { dontBotherSet.clear(); for (const n of names) dontBotherSet.add(n); },
+}));
+
 import { createSkeleton, type Module, type HookEvent } from "../hooks/skeleton.js";
 
 // ─── Helpers ──────────────────────────────────────────────────────────────
@@ -337,26 +347,26 @@ describe("skeleton — dependency check", () => {
   });
 
   it("skips dontBother binaries", async () => {
-    // Mock settings.js so isDontBother returns true only for wakatime-cli.
-    vi.resetModules();
-    vi.doMock("../settings.js", () => ({
-      isDontBother: (name: string) => name === "wakatime-cli",
-    }));
-    const skeletonMod = await import("../hooks/skeleton.js");
-    const sk = skeletonMod.createSkeleton();
-    sk.declareMissing({ name: "rtk" });
-    sk.declareMissing({ name: "wakatime-cli" });
-    sk.install(pi as any);
+    // Override the global mock: only wakatime-cli is silenced.
+    const settings = await import("../settings.js");
+    (settings as any).__setDontBother(["wakatime-cli"]);
+    try {
+      const sk = createSkeleton();
+      sk.declareMissing({ name: "rtk" });
+      sk.declareMissing({ name: "wakatime-cli" });
+      sk.install(pi as any);
 
-    const ctx = makeCtx();
-    await pi.handlers.get("session_start")![0]({ reason: "startup" }, ctx as any);
-    await vi.advanceTimersByTimeAsync(0);
-    // Only rtk counts (wakatime-cli silenced)
-    expect(ctx.ui.notify).toHaveBeenCalledWith(
-      expect.stringContaining("(1)"),
-      "info",
-    );
-    vi.doUnmock("../settings.js");
+      const ctx = makeCtx();
+      await pi.handlers.get("session_start")![0]({ reason: "startup" }, ctx as any);
+      await vi.advanceTimersByTimeAsync(0);
+      // Only rtk counts (wakatime-cli silenced)
+      expect(ctx.ui.notify).toHaveBeenCalledWith(
+        expect.stringContaining("(1)"),
+        "info",
+      );
+    } finally {
+      (settings as any).__setDontBother([]);
+    }
   });
 
   it("swallows notify() throws (stale ctx after reload race)", async () => {
