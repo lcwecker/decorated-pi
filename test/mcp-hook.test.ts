@@ -51,7 +51,7 @@ import {
   updateConfigEnabled,
   getActiveMcpConnections,
 } from "../hooks/mcp.js";
-import { loadScopedMcpCache, updateServerCache } from "../tools/mcp/cache.js";
+import { loadMcpCache, loadScopedMcpCache, updateServerCache } from "../tools/mcp/cache.js";
 
 describe("mcpModule session_start", () => {
   it("registers session_start and session_shutdown handlers", () => {
@@ -285,4 +285,72 @@ describe("connectAll vs refreshServerCache (concurrency)", () => {
     expect(result.ok).toBe(true);
     expect(getMcpStatus().find((s) => s.name === "test1")!.state).toBe("connected");
   }, 10_000);
+});
+
+// ─── Regression: stale ctx after session replacement ──────────────────────
+//
+// connectAll runs fire-and-forget in the session_start handler. If the
+// session is replaced (new/resume/fork) or reloaded while a connection
+// is still in flight, the captured `ctx` is stale by the time `.then`
+// runs. Accessing `ctx.hasUI` throws via assertActive, which used to
+// crash pi as an uncaughtException.
+describe("mcpModule session_start — stale ctx in background connectAll", () => {
+  it("does not throw uncaught when ctx goes stale before .then runs", async () => {
+    // Cache has an old tool list for test1; the new connection returns a
+    // different list → schemaChanges.length > 0 → the .then body runs.
+    vi.mocked(loadMcpCache).mockReturnValueOnce({
+      servers: {
+        test1: {
+          tools: [{ name: "tool_old", description: "old", inputSchema: {} }],
+          cachedAt: 1,
+        },
+      },
+    } as any);
+
+    mockConnect.mockReset();
+    mockConnect.mockImplementation(async function (this: any) {
+      this.tools = [{ name: "tool_a", description: "A", inputSchema: {} }];
+    });
+
+    // Simulate the real lifecycle: ctx is live during the synchronous
+    // part of session_start, then goes stale while the background
+    // connectAll is still in flight. hasUI returns true synchronously,
+    // throws after `goStale()` flips the switch.
+    let stale = false;
+    const staleError = new Error(
+      "This extension ctx is stale after session replacement or reload.",
+    );
+    const staleCtx = {
+      cwd: "/tmp",
+      modelRegistry: {},
+      get hasUI() { if (stale) throw staleError; return true; },
+      ui: { notify: vi.fn() },
+    };
+
+    // Capture unhandled rejections so the test process doesn't crash.
+    const unhandled: unknown[] = [];
+    const onUnhandled = (err: unknown) => { unhandled.push(err); };
+    process.on("unhandledRejection", onUnhandled);
+
+    try {
+      const handler = mcpModule.hooks.session_start![0]!;
+      await handler({} as any, staleCtx as any, {} as any);
+
+      // Session replacement happens here: the synchronous part of
+      // session_start already captured hasUI=true, but the background
+      // connectAll is still running. Flip ctx to stale so that when
+      // .then runs, accessing ctx.hasUI would throw.
+      stale = true;
+
+      // Let the fire-and-forget connectAll + .then settle.
+      await new Promise((r) => setTimeout(r, 80));
+
+      // The .then body must not touch the stale ctx. If it did, the
+      // assertActive throw would surface as an unhandled rejection and
+      // crash pi (the original bug).
+      expect(unhandled).toEqual([]);
+    } finally {
+      process.off("unhandledRejection", onUnhandled);
+    }
+  });
 });

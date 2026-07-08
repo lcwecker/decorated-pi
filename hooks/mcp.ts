@@ -360,9 +360,17 @@ export const mcpModule: Module = {
 
         // connectAll runs in the background so the watchdog tests
         // that mock hung connections don't block session_start.
+        //
+        // Capture hasUI / notify synchronously: connectAll may resolve
+        // after the session is replaced or reloaded, at which point `ctx`
+        // is stale and its `hasUI` getter throws via assertActive.
+        // Using the captured plain values avoids touching the stale ctx
+        // in the .then callback.
+        const hasUI = ctx.hasUI;
+        const notify = ctx.ui?.notify?.bind(ctx.ui);
         void connectAll(toConnect, ctx.modelRegistry, ctx).then(({ schemaChanges }) => {
-          if (schemaChanges.length > 0 && ctx.hasUI) {
-            ctx.ui.notify(`mcp schema changed! please '/reload'`, "warning");
+          if (schemaChanges.length > 0 && hasUI && notify) {
+            notify(`mcp schema changed! please '/reload'`, "warning");
           }
         });
       },
