@@ -32,7 +32,6 @@ Multiple layers of token savings that compound across every session.
 **Cache‑friendly Design** — stable system prompt prefix:
 
 - tool definitions, guidelines, and skills are sorted alphabetically so the system prompt is identical across sessions
-- volatile elements like `Current date: …` are stripped before prompt assembly
 - MCP tool schemas are persisted to a local cache, so the tool list stays stable regardless of network conditions or server availability
 
 **Pi Native Prompt Slimming**

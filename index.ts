@@ -198,8 +198,7 @@ function installBuiltinSkills(pi: ExtensionAPI): void {
 }
 
 /** Install a single before_agent_start handler that appends every
- *  guideline in order, stripping the volatile "Current date: …" line
- *  for cache stability. Idempotent — re-injection is a no-op via marker. */
+ *  guideline in order. Idempotent — re-injection is a no-op via marker. */
 function installGuidelines(pi: ExtensionAPI): void {
     const blocks = buildGuidelines();
     const joined = blocks.join("\n\n");
@@ -209,7 +208,6 @@ function installGuidelines(pi: ExtensionAPI): void {
         if (!event.systemPrompt) return undefined;
         let prompt: string = stripPiDocsBlock(event.systemPrompt);
         prompt = sortSkillsInSystemPrompt(prompt);
-        prompt = prompt.replace(/\nCurrent date: \d{4}-\d{2}-\d{2}/, "");
         if (prompt.includes(marker)) return undefined; // already injected this turn
         return { systemPrompt: `${prompt}\n\n${joined}` };
     });
