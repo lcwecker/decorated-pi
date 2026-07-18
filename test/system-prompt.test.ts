@@ -167,7 +167,7 @@ describe("Decorated Pi Guidance structure", () => {
     expect(src).toMatch(/summary-stamp closings/);
   });
 
-  it("pi-docs skill contains the exact Pi documentation block", () => {
+  it("pi-docs skill mirrors Pi's original documentation block", () => {
     const src = fs.readFileSync(
       path.join(import.meta.dirname, "../skills/pi-docs/SKILL.md"),
       "utf-8",
@@ -175,6 +175,7 @@ describe("Decorated Pi Guidance structure", () => {
     expect(src).toMatch(/name: pi-docs/);
     expect(src).toMatch(/description: pi docs resources/);
     expect(src).toMatch(/Pi documentation \(read only when the user asks about pi itself/);
+    expect(src).toMatch(/npm root -g\)/);
     expect(src).toMatch(/Main documentation:/);
     expect(src).toMatch(/Always read pi \.md files completely/);
   });
