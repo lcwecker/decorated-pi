@@ -177,78 +177,89 @@ async function analyzeAnthropic(
   return data.content?.[0]?.text ?? "No analysis returned.";
 }
 
-const pendingImageFallbacks = new Set<string>();
+/** Build one isolated image-vision module instance. The pending-fallback
+ *  set belongs to the module closure, so reloads and parallel sessions
+ *  cannot share or leak pending tool-call IDs. */
+export function createImageVisionModule(): Module {
+  const pendingImageFallbacks = new Set<string>();
 
-export const imageVisionModule: Module = {
-  name: "image-vision",
-  hooks: {
-    tool_call: [
-      async (event, ctx) => {
-        if (event.toolName !== "read") return;
-        const filePath: string | undefined = (event.input as any)?.file ?? (event.input as any)?.path;
-        if (!filePath) return;
-        const mimeType = await detectImageMimeType(resolve(ctx.cwd, expandHome(filePath)));
-        if (!mimeType) return;
-        const imageKey = getImageModelKey();
-        if (!imageKey) return;
-        pendingImageFallbacks.add(event.toolCallId);
-        if (ctx.hasUI) {
-          const p = parseModelKey(imageKey);
-          if (p) {
-            ctx.ui.notify(
-              `🖼️ Analyzing image with ${p.provider}/${p.modelId}...`,
-              "info",
-            );
-          }
-        }
-      },
-    ],
-    tool_result: [
-      async (event, ctx) => {
-        if (!pendingImageFallbacks.delete(event.toolCallId)) return;
-        const filePath: string | undefined = (event.input as any)?.file ?? (event.input as any)?.path;
-        if (!filePath) return;
-        const imageKey = getImageModelKey();
-        if (!imageKey) return;
-        const parsed = parseModelKey(imageKey);
-        if (!parsed) return;
-        const imageModel = ctx.modelRegistry.find(parsed.provider, parsed.modelId);
-        if (!imageModel) return;
-        try {
-          const absPath = resolve(ctx.cwd, expandHome(filePath));
-          const imageData = fs.readFileSync(absPath);
-          const imageBase64 = imageData.toString("base64");
-          const mimeType = (await detectImageMimeType(absPath)) ?? "image/png";
-          const auth = await ctx.modelRegistry.getApiKeyAndHeaders(imageModel as Model<any>);
-          if (!auth.ok) return;
-          const analysis = await analyzeImage(
-            imageModel as Model<any>, imageBase64, mimeType,
-            auth.apiKey ?? "", auth.headers ?? {},
-          );
-          return {
-            ...event,
-            content: [{ type: "text", text: analysis }],
-            details: { imageModel: imageKey, originalPath: filePath },
-          };
-        } catch (error) {
+  return {
+    name: "image-vision",
+    hooks: {
+      session_start: [
+        () => pendingImageFallbacks.clear(),
+      ],
+      tool_call: [
+        async (event, ctx) => {
+          if (event.toolName !== "read") return;
+          const filePath: string | undefined = (event.input as any)?.file ?? (event.input as any)?.path;
+          if (!filePath) return;
+          const mimeType = await detectImageMimeType(resolve(ctx.cwd, expandHome(filePath)));
+          if (!mimeType) return;
+          const imageKey = getImageModelKey();
+          if (!imageKey) return;
+          pendingImageFallbacks.add(event.toolCallId);
           if (ctx.hasUI) {
-            ctx.ui.notify(
-              `Image analysis failed: ${error instanceof Error ? error.message : error}`,
-              "warning",
-            );
+            const p = parseModelKey(imageKey);
+            if (p) {
+              ctx.ui.notify(
+                `🖼️ Analyzing image with ${p.provider}/${p.modelId}...`,
+                "info",
+              );
+            }
           }
-          return {
-            ...event,
-            content: [{ type: "text", text: `Image analysis failed` }],
-          };
-        }
-      },
-    ],
-  },
-};
+        },
+      ],
+      tool_result: [
+        async (event, ctx) => {
+          if (!pendingImageFallbacks.delete(event.toolCallId)) return;
+          const filePath: string | undefined = (event.input as any)?.file ?? (event.input as any)?.path;
+          if (!filePath) return;
+          const imageKey = getImageModelKey();
+          if (!imageKey) return;
+          const parsed = parseModelKey(imageKey);
+          if (!parsed) return;
+          const imageModel = ctx.modelRegistry.find(parsed.provider, parsed.modelId);
+          if (!imageModel) return;
+          try {
+            const absPath = resolve(ctx.cwd, expandHome(filePath));
+            const imageData = fs.readFileSync(absPath);
+            const imageBase64 = imageData.toString("base64");
+            const mimeType = (await detectImageMimeType(absPath)) ?? "image/png";
+            const auth = await ctx.modelRegistry.getApiKeyAndHeaders(imageModel as Model<any>);
+            if (!auth.ok) return;
+            const analysis = await analyzeImage(
+              imageModel as Model<any>, imageBase64, mimeType,
+              auth.apiKey ?? "", auth.headers ?? {},
+            );
+            return {
+              ...event,
+              content: [{ type: "text", text: analysis }],
+              details: { imageModel: imageKey, originalPath: filePath },
+            };
+          } catch (error) {
+            if (ctx.hasUI) {
+              ctx.ui.notify(
+                `Image analysis failed: ${error instanceof Error ? error.message : error}`,
+                "warning",
+              );
+            }
+            return {
+              ...event,
+              content: [{ type: "text", text: `Image analysis failed` }],
+            };
+          }
+        },
+      ],
+      session_shutdown: [
+        () => pendingImageFallbacks.clear(),
+      ],
+    },
+  };
+}
 
 export function setupImageVision(sk: Skeleton): void {
-  sk.register(imageVisionModule);
+  sk.register(createImageVisionModule());
 }
 
 export const __imageVisionTest = { expandHome, analyzeCodex, appendCodexSseDelta, codexResponsesUrl, extractCodexAccountId };

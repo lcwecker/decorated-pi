@@ -28,8 +28,8 @@ import {
     injectAgentsMdModule,
     INJECT_AGENTS_MD_GUIDANCE,
 } from "./hooks/inject-agents-md.js";
-import { imageVisionModule } from "./hooks/image-vision.js";
-import { smartAtModule } from "./hooks/smart-at.js";
+import { createImageVisionModule } from "./hooks/image-vision.js";
+import { createSmartAtModule } from "./hooks/smart-at.js";
 import { sessionTitleModule } from "./hooks/session-title.js";
 import { piToolFilterModule } from "./hooks/pi-tool-filter.js";
 import { setupCompaction } from "./hooks/compaction.js";
@@ -222,14 +222,14 @@ export default async function (pi: ExtensionAPI) {
     sk.register(externalizeModule);
     sk.register(trackMtimeModule);
     sk.register(injectAgentsMdModule);
-    sk.register(imageVisionModule);
+    sk.register(createImageVisionModule());
 
     // session_start handlers (parallel)
     // pi-tool-filter must register first so native tools are dropped before
     // anything else inspects the tool list.
     sk.register(piToolFilterModule);
     sk.register(sessionTitleModule);
-    if (isModuleEnabled("atOverride")) sk.register(smartAtModule);
+    if (isModuleEnabled("atOverride")) sk.register(createSmartAtModule());
 
     // Compaction + optional integrations.
     setupCompaction(sk);

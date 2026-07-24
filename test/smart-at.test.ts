@@ -1,5 +1,6 @@
-import { describe, it, expect, afterEach } from "vitest";
-import { __smartAtTest, smartAtModule } from "../hooks/smart-at.js";
+import { describe, it, expect, afterEach, beforeEach } from "vitest";
+import { __smartAtTest, createSmartAtModule } from "../hooks/smart-at.js";
+import type { Module } from "../hooks/skeleton.js";
 
 const { atPrefix } = __smartAtTest;
 
@@ -114,11 +115,16 @@ const origStub = {
 
 describe("autocomplete provider (integration with real FFF)", () => {
   let tmp: string;
+  let mod: Module;
+
+  beforeEach(() => {
+    mod = createSmartAtModule();
+  });
 
   afterEach(() => {
     if (tmp) rmSync(tmp, { recursive: true, force: true });
-    // Reset global currentFinder between tests
-    const shutdownHook = smartAtModule.hooks!.session_shutdown![0] as any;
+    // Reset module state between tests
+    const shutdownHook = mod.hooks!.session_shutdown![0] as any;
     shutdownHook({ type: "session_shutdown" }, { ui: { setWidget: () => {} } });
   });
 
@@ -129,7 +135,7 @@ describe("autocomplete provider (integration with real FFF)", () => {
     writeFileSync(join(tmp, "src/helper.ts"), "");
 
     const { ctx, getFactory, widgetUpdates } = makeCtxWith(tmp);
-    const startHook = smartAtModule.hooks!.session_start![0] as any;
+    const startHook = mod.hooks!.session_start![0] as any;
     await startHook({ type: "session_start" }, ctx);
 
     const factory = getFactory()!;
@@ -156,7 +162,7 @@ describe("autocomplete provider (integration with real FFF)", () => {
     writeFileSync(join(tmp, "a.txt"), "");
 
     const { ctx, getFactory } = makeCtxWith(tmp);
-    const startHook = smartAtModule.hooks!.session_start![0] as any;
+    const startHook = mod.hooks!.session_start![0] as any;
     await startHook({ type: "session_start" }, ctx);
 
     const factory = getFactory()!;
@@ -177,7 +183,7 @@ describe("autocomplete provider (integration with real FFF)", () => {
     writeFileSync(join(tmp, "readme.md"), "");
 
     const { ctx, getFactory, widgetUpdates } = makeCtxWith(tmp);
-    const startHook = smartAtModule.hooks!.session_start![0] as any;
+    const startHook = mod.hooks!.session_start![0] as any;
     await startHook({ type: "session_start" }, ctx);
 
     const factory = getFactory()!;
@@ -208,7 +214,7 @@ describe("autocomplete provider (integration with real FFF)", () => {
     writeFileSync(join(tmp, "src/helper.ts"), "");
 
     const { ctx, getFactory, widgetUpdates } = makeCtxWith(tmp);
-    const startHook = smartAtModule.hooks!.session_start![0] as any;
+    const startHook = mod.hooks!.session_start![0] as any;
     await startHook({ type: "session_start" }, ctx);
 
     const factory = getFactory()!;
@@ -235,7 +241,7 @@ describe("autocomplete provider (integration with real FFF)", () => {
     writeFileSync(join(tmp, "beta.txt"), "");
 
     const { ctx, getFactory, widgetUpdates } = makeCtxWith(tmp);
-    const startHook = smartAtModule.hooks!.session_start![0] as any;
+    const startHook = mod.hooks!.session_start![0] as any;
     await startHook({ type: "session_start" }, ctx);
 
     const factory = getFactory()!;
@@ -264,7 +270,7 @@ describe("autocomplete provider (integration with real FFF)", () => {
     writeFileSync(join(tmp, "src/index.ts"), "");
 
     const { ctx, getFactory, widgetUpdates } = makeCtxWith(tmp);
-    const startHook = smartAtModule.hooks!.session_start![0] as any;
+    const startHook = mod.hooks!.session_start![0] as any;
     await startHook({ type: "session_start" }, ctx);
 
     const factory = getFactory()!;
@@ -295,7 +301,7 @@ describe("autocomplete provider (integration with real FFF)", () => {
     writeFileSync(join(tmp, "a.txt"), "");
 
     const { ctx, getFactory, widgetUpdates } = makeCtxWith(tmp);
-    const startHook = smartAtModule.hooks!.session_start![0] as any;
+    const startHook = mod.hooks!.session_start![0] as any;
     await startHook({ type: "session_start" }, ctx);
 
     const factory = getFactory()!;
@@ -335,14 +341,13 @@ describe("autocomplete provider (integration with real FFF)", () => {
     writeFileSync(join(tmp, "a.txt"), "");
 
     const { ctx, getFactory, widgetUpdates } = makeCtxWith(tmp);
-    const startHook = smartAtModule.hooks!.session_start![0] as any;
+    const startHook = mod.hooks!.session_start![0] as any;
     await startHook({ type: "session_start" }, ctx);
 
     const factory = getFactory()!;
 
     // Replace mixedSearch on the live finder to simulate an error.
     const fffMod = await import("@ff-labs/fff-node");
-    const liveFinder = (smartAtModule as any) /* placeholder */;
     // The provider captured the finder at session_start; monkey-patch its
     // method on the prototype to make every FileFinder return an error.
     const origMethod = fffMod.FileFinder.prototype.mixedSearch;
@@ -370,7 +375,7 @@ describe("autocomplete provider (integration with real FFF)", () => {
     writeFileSync(join(tmp, "a.txt"), "");
 
     const { ctx, getFactory } = makeCtxWith(tmp);
-    const startHook = smartAtModule.hooks!.session_start![0] as any;
+    const startHook = mod.hooks!.session_start![0] as any;
     await startHook({ type: "session_start" }, ctx);
 
     const factory = getFactory()!;
@@ -403,7 +408,7 @@ describe("autocomplete provider (integration with real FFF)", () => {
     writeFileSync(join(tmp, ".gitignore"), "node_modules/\n");
 
     const { ctx, getFactory } = makeCtxWith(tmp);
-    const startHook = smartAtModule.hooks!.session_start![0] as any;
+    const startHook = mod.hooks!.session_start![0] as any;
     await startHook({ type: "session_start" }, ctx);
 
     const factory = getFactory()!;
@@ -429,8 +434,8 @@ describe("autocomplete provider (integration with real FFF)", () => {
     writeFileSync(join(tmp, "a.txt"), "");
 
     const { ctx, getFactory } = makeCtxWith(tmp);
-    const startHook = smartAtModule.hooks!.session_start![0] as any;
-    const shutdownHook = smartAtModule.hooks!.session_shutdown![0] as any;
+    const startHook = mod.hooks!.session_start![0] as any;
+    const shutdownHook = mod.hooks!.session_shutdown![0] as any;
 
     await startHook({ type: "session_start" }, ctx);
     const factory = getFactory()!;
@@ -453,7 +458,7 @@ describe("autocomplete provider (integration with real FFF)", () => {
     writeFileSync(join(tmp, "a.txt"), "");
 
     const { ctx, getFactory, widgetUpdates } = makeCtxWith(tmp);
-    const startHook = smartAtModule.hooks!.session_start![0] as any;
+    const startHook = mod.hooks!.session_start![0] as any;
     await startHook({ type: "session_start" }, ctx);
 
     let origCalled = false;
@@ -491,7 +496,7 @@ describe("autocomplete provider (integration with real FFF)", () => {
 
     try {
       const { ctx, getFactory } = makeCtxWith(tmp);
-      const startHook = smartAtModule.hooks!.session_start![0] as any;
+      const startHook = mod.hooks!.session_start![0] as any;
       await startHook({ type: "session_start" }, ctx);
       expect(getFactory()).toBeNull();
     } finally {

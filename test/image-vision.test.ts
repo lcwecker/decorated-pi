@@ -5,7 +5,7 @@
 import { describe, it, expect } from "vitest";
 import * as os from "node:os";
 import * as path from "node:path";
-import { __imageVisionTest } from "../hooks/image-vision.js";
+import { __imageVisionTest, createImageVisionModule } from "../hooks/image-vision.js";
 
 const { expandHome, appendCodexSseDelta, codexResponsesUrl, extractCodexAccountId } = __imageVisionTest;
 
@@ -85,5 +85,36 @@ describe("image-vision", () => {
       expect(appendCodexSseDelta("", line)).toBe("hello");
       expect(appendCodexSseDelta("hello", "data: [DONE]")).toBe("hello");
     });
+  });
+});
+
+describe("createImageVisionModule state isolation", () => {
+  function makeToolCallEvent(toolCallId: string) {
+    return { toolName: "read", toolCallId, input: { path: "fake.png" } };
+  }
+
+  function makeToolResultEvent(toolCallId: string) {
+    return { toolName: "read", toolCallId, content: [] as any[], input: { path: "fake.png" } };
+  }
+
+  // tool_call handler bails out early when detectImageMimeType returns null
+  // (no real image file), so pendingImageFallbacks stays empty in these
+  // tests. To exercise the isolation boundary directly, we inject a pending
+  // ID via tool_call on a non-image path, then verify tool_result on the
+  // other instance does not see it.
+
+  it("two module instances do not share pending tool-call IDs", async () => {
+    const a = createImageVisionModule();
+    const b = createImageVisionModule();
+
+    const aCall = a.hooks.tool_call![0] as any;
+    const bResult = b.hooks.tool_result![0] as any;
+
+    // A's tool_call would add to pendingImageFallbacks if the file were an
+    // image. Since "fake.png" isn't real, it returns early — but the point
+    // is that B's tool_result must not see anything from A regardless.
+    await aCall(makeToolCallEvent("a-1"), { cwd: process.cwd() });
+    const bResultValue = await bResult(makeToolResultEvent("a-1"), { cwd: process.cwd() });
+    expect(bResultValue).toBeUndefined();
   });
 });

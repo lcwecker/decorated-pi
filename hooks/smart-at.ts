@@ -79,133 +79,145 @@ function buildResult(items: MixedItem[], scores: { total: number }[]): BuiltResu
 
 export const __smartAtTest = { atPrefix, buildResult };
 
-/** Active FileFinder for the current session; freed in session_shutdown
- *  to avoid leaking FFF's native handle + LMDB mmap regions. */
-let currentFinder: FileFinder | null = null;
+/** Build one isolated smart-at module instance. The active FileFinder
+ *  belongs to the module closure, so reloads and parallel sessions cannot
+ *  share or leak FFF's native handle + LMDB mmap regions. */
+export function createSmartAtModule(): Module {
+  let currentFinder: FileFinder | null = null;
 
-export const smartAtModule: Module = {
-  name: "smart-at",
-  hooks: {
-    session_start: [
-      async (_event: any, ctx: ExtensionContext) => {
-        const cwd = String(ctx.cwd || "").trim();
-        // Always opt in to home/root scanning. These flags are opt-in guards
-        // in FFF — when cwd is a normal project, they're no-ops; when cwd
-        // IS $HOME or /, they let FFF index it. Without them, create() fails
-        // outright when cwd is a home/root, leaving the user without @-search.
-        const created = FileFinder.create({
-          basePath: cwd || ".",
-          enableHomeDirScanning: true,
-          enableFsRootScanning: true,
-        });
-        if (!created.ok) {
-          // FFF not available on this platform; silently skip.
-          return;
-        }
+  function disposeFinder() {
+    if (currentFinder && !currentFinder.isDestroyed) {
+      currentFinder.destroy();
+    }
+    currentFinder = null;
+  }
 
-        const finder = created.value;
-        currentFinder = finder;
+  return {
+    name: "smart-at",
+    hooks: {
+      session_start: [
+        async (_event: any, ctx: ExtensionContext) => {
+          // Defensive cleanup: don't rely solely on session_shutdown, which
+          // may not fire if the process is killed or a new session starts
+          // while the old finder is still scanning.
+          disposeFinder();
 
-        let scanWidgetVisible = false;
-
-        // Start the scan in the background. We don't wait for it here so
-        // session_start returns immediately. If a scanning status was shown,
-        // clear it when the scan finishes even if no new autocomplete request
-        // is triggered afterwards.
-        void finder.waitForScan(60_000).then(() => {
-          if (currentFinder === finder && !finder.isDestroyed && scanWidgetVisible) {
-            scanWidgetVisible = false;
-            ctx.ui.setWidget("smart-at", undefined);
+          const cwd = String(ctx.cwd || "").trim();
+          // Always opt in to home/root scanning. These flags are opt-in guards
+          // in FFF — when cwd is a normal project, they're no-ops; when cwd
+          // IS $HOME or /, they let FFF index it. Without them, create() fails
+          // outright when cwd is a home/root, leaving the user without @-search.
+          const created = FileFinder.create({
+            basePath: cwd || ".",
+            enableHomeDirScanning: true,
+            enableFsRootScanning: true,
+          });
+          if (!created.ok) {
+            // FFF not available on this platform; silently skip.
+            return;
           }
-        });
 
-        ctx.ui.addAutocompleteProvider((orig: any) => ({
-          getSuggestions: (
-            lines: string[],
-            cl: number,
-            cc: number,
-            opts?: { signal?: AbortSignal },
-          ) => {
-            const prefix = atPrefix((lines[cl] || "").slice(0, cc));
-            if (!prefix) {
+          const finder = created.value;
+          currentFinder = finder;
+
+          let scanWidgetVisible = false;
+
+          // Start the scan in the background. We don't wait for it here so
+          // session_start returns immediately. If a scanning status was shown,
+          // clear it when the scan finishes even if no new autocomplete request
+          // is triggered afterwards.
+          void finder.waitForScan(60_000).then(() => {
+            if (currentFinder === finder && !finder.isDestroyed && scanWidgetVisible) {
+              scanWidgetVisible = false;
               ctx.ui.setWidget("smart-at", undefined);
-              return orig.getSuggestions(lines, cl, cc, opts);
             }
+          });
 
-            if (currentFinder !== finder || finder.isDestroyed) {
-              ctx.ui.setWidget("smart-at", undefined);
-              return orig.getSuggestions(lines, cl, cc, opts);
-            }
-
-            // Respect upstream cancellation so fast typing doesn't pile up
-            // expensive FFF queries.
-            if (opts?.signal?.aborted) {
-              return orig.getSuggestions(lines, cl, cc, opts);
-            }
-
-            const query = prefix.slice(1);
-            const r = finder.mixedSearch(query.toLowerCase(), {
-              pageSize: AUTOCOMPLETE_LIMIT,
-            });
-            if (!r.ok) {
-              ctx.ui.setWidget("smart-at", undefined);
-              return null;
-            }
-
-            // 0 items during the initial scan means FFF is not ready yet.
-            // Autocomplete has no non-selectable dropdown state: returning an
-            // item would force SelectList to render a selectable "→ ..." row.
-            // So use a static below-editor widget while scanning, and clear it
-            // once the scan completes (see waitForScan above). After scanning,
-            // 0 items just means "no match".
-            if (r.value.items.length === 0) {
-              if (finder.isScanning()) {
-                scanWidgetVisible = true;
-                ctx.ui.setWidget(
-                  "smart-at",
-                  ["⏳ scanning…  (indexing files, please wait)"],
-                  { placement: "belowEditor" },
-                );
-              } else {
-                scanWidgetVisible = false;
+          ctx.ui.addAutocompleteProvider((orig: any) => ({
+            getSuggestions: (
+              lines: string[],
+              cl: number,
+              cc: number,
+              opts?: { signal?: AbortSignal },
+            ) => {
+              const prefix = atPrefix((lines[cl] || "").slice(0, cc));
+              if (!prefix) {
                 ctx.ui.setWidget("smart-at", undefined);
+                return orig.getSuggestions(lines, cl, cc, opts);
               }
-              return null;
-            }
 
-            const result = buildResult(r.value.items, r.value.scores);
-            if (!result) {
+              if (currentFinder !== finder || finder.isDestroyed) {
+                ctx.ui.setWidget("smart-at", undefined);
+                return orig.getSuggestions(lines, cl, cc, opts);
+              }
+
+              // Respect upstream cancellation so fast typing doesn't pile up
+              // expensive FFF queries.
+              if (opts?.signal?.aborted) {
+                return orig.getSuggestions(lines, cl, cc, opts);
+              }
+
+              const query = prefix.slice(1);
+              const r = finder.mixedSearch(query.toLowerCase(), {
+                pageSize: AUTOCOMPLETE_LIMIT,
+              });
+              if (!r.ok) {
+                ctx.ui.setWidget("smart-at", undefined);
+                return null;
+              }
+
+              // 0 items during the initial scan means FFF is not ready yet.
+              // Autocomplete has no non-selectable dropdown state: returning an
+              // item would force SelectList to render a selectable "→ ..." row.
+              // So use a static below-editor widget while scanning, and clear it
+              // once the scan completes (see waitForScan above). After scanning,
+              // 0 items just means "no match".
+              if (r.value.items.length === 0) {
+                if (finder.isScanning()) {
+                  scanWidgetVisible = true;
+                  ctx.ui.setWidget(
+                    "smart-at",
+                    ["⏳ scanning…  (indexing files, please wait)"],
+                    { placement: "belowEditor" },
+                  );
+                } else {
+                  scanWidgetVisible = false;
+                  ctx.ui.setWidget("smart-at", undefined);
+                }
+                return null;
+              }
+
+              const result = buildResult(r.value.items, r.value.scores);
+              if (!result) {
+                ctx.ui.setWidget("smart-at", undefined);
+                return null;
+              }
+
+              scanWidgetVisible = false;
+              ctx.ui.setWidget("smart-at", [WIDGET_FOOTER]);
+              return Promise.resolve({ ...result, prefix });
+            },
+            applyCompletion: (
+              lines: string[],
+              cl: number,
+              cc: number,
+              item: { value: string; label: string },
+              prefix: string,
+            ) => {
+              scanWidgetVisible = false;
               ctx.ui.setWidget("smart-at", undefined);
-              return null;
-            }
-
-            scanWidgetVisible = false;
-            ctx.ui.setWidget("smart-at", [WIDGET_FOOTER]);
-            return Promise.resolve({ ...result, prefix });
-          },
-          applyCompletion: (
-            lines: string[],
-            cl: number,
-            cc: number,
-            item: { value: string; label: string },
-            prefix: string,
-          ) => {
-            scanWidgetVisible = false;
-            ctx.ui.setWidget("smart-at", undefined);
-            return orig.applyCompletion(lines, cl, cc, item, prefix);
-          },
-          shouldTriggerFileCompletion:
-            orig.shouldTriggerFileCompletion?.bind(orig),
-        }));
-      },
-    ],
-    session_shutdown: [
-      (_event: any, _ctx: ExtensionContext) => {
-        if (currentFinder && !currentFinder.isDestroyed) {
-          currentFinder.destroy();
-        }
-        currentFinder = null;
-      },
-    ],
-  },
-};
+              return orig.applyCompletion(lines, cl, cc, item, prefix);
+            },
+            shouldTriggerFileCompletion:
+              orig.shouldTriggerFileCompletion?.bind(orig),
+          }));
+        },
+      ],
+      session_shutdown: [
+        (_event: any, _ctx: ExtensionContext) => {
+          disposeFinder();
+        },
+      ],
+    },
+  };
+}

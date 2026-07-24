@@ -201,7 +201,7 @@ describe("index.ts — conditional loading structure (new architecture)", () => 
 
   it("gates atOverride hook behind isModuleEnabled", () => {
     expect(indexSrc).toContain('if (isModuleEnabled("atOverride"))');
-    expect(indexSrc).toContain("smartAtModule");
+    expect(indexSrc).toContain("createSmartAtModule");
   });
 
   it("gates rtk and wakatime hooks behind isModuleEnabled", () => {
