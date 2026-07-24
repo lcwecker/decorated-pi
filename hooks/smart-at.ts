@@ -21,7 +21,7 @@
 
 import { FileFinder, type MixedItem } from "@ff-labs/fff-node";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import type { Module, Skeleton } from "./skeleton.js";
+import type { Module } from "./skeleton.js";
 
 // Characters that, when preceding an "@", allow us to start a smart-at
 // completion.
@@ -209,7 +209,3 @@ export const smartAtModule: Module = {
     ],
   },
 };
-
-export function setupSmartAt(sk: Skeleton): void {
-  sk.register(smartAtModule);
-}

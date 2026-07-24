@@ -165,14 +165,13 @@ describe("Module Settings", () => {
   });
 
   it("isModuleEnabled returns true by default", () => {
-    expect(isModuleEnabled("secretRedaction")).toBe(true);
     expect(isModuleEnabled("lsp")).toBe(true);
     expect(isModuleEnabled("atOverride")).toBe(true);
   });
 
   it("setModuleEnabled persists to config file", () => {
-    setModuleEnabled("secretRedaction", false);
-    expect(isModuleEnabled("secretRedaction")).toBe(false);
+    setModuleEnabled("wakatime", false);
+    expect(isModuleEnabled("wakatime")).toBe(false);
     expect(isModuleEnabled("lsp")).toBe(true); // others unchanged
   });
 
@@ -184,10 +183,10 @@ describe("Module Settings", () => {
   });
 
   it("getAllModuleSettings reflects changes", () => {
-    setModuleEnabled("secretRedaction", false);
+    setModuleEnabled("wakatime", false);
     setModuleEnabled("atOverride", false);
     const settings = getAllModuleSettings();
-    expect(settings.hooks.secretRedaction).toBe(false);
+    expect(settings.hooks.wakatime).toBe(false);
     expect(settings.tools.lsp).toBe(true);
     expect(settings.commands.atOverride).toBe(false);
   });
@@ -220,20 +219,20 @@ describe("Module Settings", () => {
     expect((config.modules as any)?.patch).toBeUndefined();
   });
 
-  it("migrates legacy flat 'safety' key to nested hooks.secretRedaction", () => {
-    saveConfig({ modules: { safety: false } as any });
+  it("drops removed legacy flat redact settings", () => {
+    saveConfig({ modules: { safety: false, secretRedaction: true } as any });
     const config = loadConfig();
-    expect(config.modules?.hooks?.secretRedaction).toBe(false);
     expect((config.modules as any)?.safety).toBeUndefined();
+    expect((config.modules as any)?.secretRedaction).toBeUndefined();
   });
 
-  it("migrates legacy inner names inside already-nested config", () => {
-    saveConfig({ modules: { tools: { patch: false }, hooks: { safety: true } } as any });
+  it("migrates legacy inner names and drops removed redact settings", () => {
+    saveConfig({ modules: { tools: { patch: false }, hooks: { safety: true, secretRedaction: false } } as any });
     const config = loadConfig();
     expect(config.modules?.tools?.patchOverrideEdit).toBe(false);
     expect((config.modules?.tools as any)?.patch).toBeUndefined();
-    expect(config.modules?.hooks?.secretRedaction).toBe(true);
     expect((config.modules?.hooks as any)?.safety).toBeUndefined();
+    expect((config.modules?.hooks as any)?.secretRedaction).toBeUndefined();
   });
 
   it("does not overwrite new key when both legacy and new keys exist", () => {
@@ -247,23 +246,24 @@ describe("Module Settings", () => {
     saveConfig({
       modules: {
         tools: { patchOverrideEdit: false, lsp: true },
-        hooks: { secretRedaction: true },
+        hooks: { rtk: true, wakatime: false },
         commands: { atOverride: false },
       },
     });
     const config = loadConfig();
     expect(config.modules?.tools?.patchOverrideEdit).toBe(false);
     expect(config.modules?.tools?.lsp).toBe(true);
-    expect(config.modules?.hooks?.secretRedaction).toBe(true);
+    expect(config.modules?.hooks?.rtk).toBe(true);
+    expect(config.modules?.hooks?.wakatime).toBe(false);
     expect(config.modules?.commands?.atOverride).toBe(false);
   });
 
   it("multiple module toggles persist independently", () => {
-    setModuleEnabled("secretRedaction", false);
+    setModuleEnabled("wakatime", false);
     setModuleEnabled("lsp", false);
     setModuleEnabled("atOverride", true);
 
-    expect(isModuleEnabled("secretRedaction")).toBe(false);
+    expect(isModuleEnabled("wakatime")).toBe(false);
     expect(isModuleEnabled("lsp")).toBe(false);
     expect(isModuleEnabled("atOverride")).toBe(true);
   });

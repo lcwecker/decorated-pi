@@ -12,11 +12,11 @@ import {
   buildFileHeartbeat,
   buildPluginString,
   classifyBash,
+  createWakatimeModule,
   findWakatimeCli,
   heartbeatChanged,
   readWakatimeCfgApiKey,
-  resetWakatimeStateForTests,
-  setupWakatimeWithApiKey,
+  __wakatimeTest,
 } from "../hooks/wakatime.js";
 
 function countPathParts(p: string): number {
@@ -31,7 +31,7 @@ describe("wakatime", () => {
   });
 
   afterEach(() => {
-    resetWakatimeStateForTests();
+    __wakatimeTest.resetDependencyCache();
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
     vi.useRealTimers();
@@ -165,33 +165,31 @@ describe("wakatime", () => {
     });
   });
 
-  describe("setupWakatime", () => {
-    function createFakePi() {
-      const handlers = new Map<string, Function[]>();
-      return {
-        handlers,
-        pi: {
-          on(event: string, handler: Function) {
-            const arr = handlers.get(event) ?? [];
-            arr.push(handler);
-            handlers.set(event, arr);
-          },
-        },
-      };
-    }
+  describe("createWakatimeModule", () => {
+    it("preserves generic file heartbeats for edit/write-style tool inputs", () => {
+      const sent: Array<{ hb: any; cwd?: string }> = [];
+      const module = createWakatimeModule((hb, cwd) => sent.push({ hb, cwd }));
+      const cwd = path.join(tmpDir, "generic-file-tools");
+      const editPath = path.join(cwd, "edit.ts");
+      const writePath = path.join(cwd, "write.ts");
+      fs.mkdirSync(cwd, { recursive: true });
+      fs.writeFileSync(editPath, "edit\n", "utf-8");
+      fs.writeFileSync(writePath, "write\n", "utf-8");
 
-    it("does nothing when no api key is configured", () => {
-      const { pi, handlers } = createFakePi();
-      setupWakatimeWithApiKey(pi as any, undefined);
-      expect(handlers.size).toBe(0);
+      void module.hooks.tool_result![0]({ toolName: "edit", input: { file: editPath } }, { cwd } as any, {} as any);
+      void module.hooks.tool_result![0]({ toolName: "write", input: { file_path: writePath } }, { cwd } as any, {} as any);
+
+      expect(sent.map(({ hb }) => ({ entity: hb.entity, type: hb.type, isWrite: hb.is_write }))).toEqual([
+        { entity: editPath, type: "file", isWrite: undefined },
+        { entity: writePath, type: "file", isWrite: undefined },
+      ]);
     });
 
     it("keeps app heartbeat active while file heartbeats are one-shot", () => {
       vi.useFakeTimers();
       const sent: Array<{ hb: any; cwd?: string }> = [];
 
-      const { pi, handlers } = createFakePi();
-      setupWakatimeWithApiKey(pi as any, "abc-123", "/usr/bin/wakatime-cli", (hb, cwd) => {
+      const module = createWakatimeModule((hb, cwd) => {
         sent.push({ hb, cwd });
       });
 
@@ -214,9 +212,9 @@ describe("wakatime", () => {
         },
       };
 
-      handlers.get("session_start")?.[0]({ reason: "startup" }, sessionCtx);
+      void module.hooks.session_start![0]({ reason: "startup" }, sessionCtx as any, {} as any);
       terminalInputHandler?.("a");
-      handlers.get("tool_result")?.[0]({ toolName: "read", input: { path: filePath } }, { cwd });
+      void module.hooks.tool_result![0]({ toolName: "read", input: { path: filePath } }, { cwd } as any, {} as any);
 
       expect(sent).toHaveLength(2);
       expect(sent[0]!.hb.entity).toBe("pi");
@@ -228,14 +226,14 @@ describe("wakatime", () => {
       expect(sent).toHaveLength(3);
       expect(sent[2]!.hb.entity).toBe("pi");
       expect(sent[2]!.hb.type).toBe("app");
+      void module.hooks.session_shutdown![0]({}, sessionCtx as any, {} as any);
     });
 
     it("keeps the app heartbeat active across terminal input, agent start/end, and keepalive", () => {
       vi.useFakeTimers();
       const sent: Array<{ hb: any; cwd?: string }> = [];
 
-      const { pi, handlers } = createFakePi();
-      setupWakatimeWithApiKey(pi as any, "abc-123", "/usr/bin/wakatime-cli", (hb, cwd) => {
+      const module = createWakatimeModule((hb, cwd) => {
         sent.push({ hb, cwd });
       });
 
@@ -258,11 +256,11 @@ describe("wakatime", () => {
         },
       };
 
-      handlers.get("session_start")?.[0]({ reason: "startup" }, sessionCtx);
+      void module.hooks.session_start![0]({ reason: "startup" }, sessionCtx as any, {} as any);
       terminalInputHandler?.("x");
-      handlers.get("tool_result")?.[0]({ toolName: "read", input: { path: filePath } }, { cwd });
-      handlers.get("before_agent_start")?.[0]({}, { cwd });
-      handlers.get("agent_end")?.[0]({}, { cwd });
+      void module.hooks.tool_result![0]({ toolName: "read", input: { path: filePath } }, { cwd } as any, {} as any);
+      void module.hooks.before_agent_start![0]({}, { cwd } as any, {} as any);
+      void module.hooks.agent_end![0]({}, { cwd } as any, {} as any);
 
       expect(sent).toHaveLength(3);
       const bodies = sent.map((call) => call.hb);
@@ -279,6 +277,7 @@ describe("wakatime", () => {
       const keepalive = sent[3]!.hb;
       expect(keepalive.entity).toBe("pi");
       expect(keepalive.type).toBe("app");
+      void module.hooks.session_shutdown![0]({}, sessionCtx as any, {} as any);
     });
   });
 

@@ -127,25 +127,7 @@ Zero-config MCP client with built-in servers:
 
 Use `/mcp` to view connection status and toggle servers.
 
-### 4. Secret Redaction
-
-Three-layer detection: high-confidence known-format patterns (AWS, GitHub, OpenAI, etc.), config-key regex matching, and adjusted Shannon entropy heuristics for unknown secret-like values.
-
-Example redaction on a `read` / `bash` output:
-
-```json
-{
-  "aws_access_key_id": "AKI**************PLE",
-  "github_token": "ghp***************def",
-  "database_password": "Sup#######t99",
-  "api_key": "sk_**************f5a",
-  "random_secret": "a1b??????5f5"
-}
-```
-
-> `*` = known pattern, `#` = config key regex, `?` = entropy heuristic.
-
-### 5. Other
+### 4. Other
 
 - `/usage` — token stats with cache‑hit rate, per‑model breakdown (Session / Today / This Week / This Month / All Time)
 - `/retry` — continue after interruption
@@ -166,7 +148,6 @@ Runtime settings in `~/.pi/agent/decorated-pi.json`. run `/dp-settings` to confi
       "mcp": true
     },
     "hooks": {
-      "secretRedaction": true,
       "rtk": true,
       "wakatime": true
     },

@@ -20,7 +20,6 @@ import { fileURLToPath } from "node:url";
 
 import { createSkeleton } from "./hooks/skeleton.js";
 
-import { setupRedact, REDACT_GUIDANCE } from "./hooks/redact.js";
 import { externalizeModule } from "./hooks/externalize.js";
 import { normalizeCodeblocksModule } from "./hooks/normalize-codeblocks.js";
 import { thinkingLabelStripModule } from "./hooks/thinking-label-strip.js";
@@ -35,7 +34,7 @@ import { sessionTitleModule } from "./hooks/session-title.js";
 import { piToolFilterModule } from "./hooks/pi-tool-filter.js";
 import { setupCompaction } from "./hooks/compaction.js";
 import { mcpModule } from "./hooks/mcp.js";
-import { setupWakatime, wakatimeModule } from "./hooks/wakatime.js";
+import { setupWakatime } from "./hooks/wakatime.js";
 import { setupRtk } from "./hooks/rtk.js";
 
 import { registerPatchTool } from "./tools/patch/index.js";
@@ -158,20 +157,13 @@ export function sortSkillsInSystemPrompt(prompt: string): string {
     return before + sortedInner + after;
 }
 
-/** Build the list of guideline strings to inject, in prompt order.
- *  Always-on rules first, then per-module guidelines. REDACT_GUIDANCE is
- *  gated by the secretRedaction module; CodeGraph guidance follows the MCP
- *  server switch chain (mcp module on → codegraph server on → guidance
- *  injected). The mcp module check lives in `resolveMcpConfigs`, so this
- *  code only needs to look at the server's own `enabled` flag. */
+/** Build the list of guideline strings to inject, in prompt order. */
 function buildGuidelines(): string[] {
-    const out: string[] = [
+    return [
         BASE_GUIDANCE,
         TALK_NORMAL_GUIDANCE,
         INJECT_AGENTS_MD_GUIDANCE, // from hooks/inject-agents-md.ts — always on
     ];
-    if (isModuleEnabled("secretRedaction")) out.push(REDACT_GUIDANCE);
-    return out;
 }
 
 function canRegisterMcpServer(
@@ -223,9 +215,8 @@ export default async function (pi: ExtensionAPI) {
     const sk = createSkeleton();
 
     // Order matters for tool_result compose chain:
-    //   1. redact → normalize-codeblocks → externalize → track-mtime → inject-agents-md → image-vision → wakatime
+    //   1. normalize-codeblocks → externalize → track-mtime → inject-agents-md → image-vision → wakatime
     // The first module registered for a given event runs first (compose chain).
-    if (isModuleEnabled("secretRedaction")) setupRedact(sk);
     sk.register(normalizeCodeblocksModule);
     sk.register(thinkingLabelStripModule);
     sk.register(externalizeModule);
@@ -239,12 +230,11 @@ export default async function (pi: ExtensionAPI) {
     sk.register(piToolFilterModule);
     sk.register(sessionTitleModule);
     if (isModuleEnabled("atOverride")) sk.register(smartAtModule);
-    if (isModuleEnabled("wakatime")) sk.register(wakatimeModule);
 
-    // Compaction + RTK (these also install their own pi.on via setup<>()).
+    // Compaction + optional integrations.
     setupCompaction(sk);
     if (isModuleEnabled("rtk")) setupRtk(sk);
-    if (isModuleEnabled("wakatime")) setupWakatime(sk, pi);
+    if (isModuleEnabled("wakatime")) setupWakatime(sk);
 
     // ── Tools (conditional on module switches) ────────────────────────────
     if (isModuleEnabled("patchOverrideEdit")) registerPatchTool(pi);

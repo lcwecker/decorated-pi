@@ -14,7 +14,6 @@ import { listMcpBinaryNames } from "../tools/mcp/config.js";
 
 type ModuleName =
   | "patchOverrideEdit"
-  | "secretRedaction"
   | "lsp"
   | "atOverride"
   | "mcp"
@@ -26,7 +25,6 @@ type ModuleName =
 
 const MODULE_LABELS: Record<ModuleName, string> = {
   patchOverrideEdit: "patchOverrideEdit",
-  secretRedaction: "secretRedaction",
   lsp: "LSP",
   atOverride: "@ overload",
   mcp: "MCP",
@@ -39,7 +37,6 @@ const MODULE_LABELS: Record<ModuleName, string> = {
 
 const MODULE_DESCS: Record<ModuleName, string> = {
   patchOverrideEdit: "Replace Pi native edit/write with patch tool (targeted string replacement)",
-  secretRedaction: "Redact secrets from read / bash output before they enter model context",
   lsp: "Language server diagnostics, hover, definition, references, symbols, rename",
   atOverride: "Project-aware file search replacing default autocomplete",
   mcp: "MCP client with builtin servers (context7, exa, codegraph)",
@@ -67,7 +64,7 @@ const CATEGORIES: Record<CategoryId, CategoryDef> = {
   hooks: {
     label: "Hooks",
     description: "Agent-loop event handlers",
-    modules: ["rtk", "secretRedaction", "wakatime"],
+    modules: ["rtk", "wakatime"],
   },
   tools: {
     label: "Tools",
@@ -102,7 +99,6 @@ const MODULE_TO_CATEGORY: Record<ModuleName, CategoryId> = {
   ask: "tools",
   lsp: "tools",
   mcp: "tools",
-  secretRedaction: "hooks",
   "rtk": "hooks",
   wakatime: "hooks",
   atOverride: "commands",

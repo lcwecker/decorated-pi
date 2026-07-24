@@ -125,16 +125,6 @@ describe("Decorated Pi Guidance structure", () => {
     expect(src).toMatch(/CAUTION: Do not perform write operations/);
   });
 
-  it("REDACT_GUIDANCE is exported from hooks/redact.ts", () => {
-    const src = fs.readFileSync(
-      path.join(import.meta.dirname, "../hooks/redact.ts"),
-      "utf-8",
-    );
-    expect(src).toMatch(/REDACT_GUIDANCE/);
-    expect(src).toMatch(/Secret Masking/);
-    expect(src).toMatch(/masked secret values/);
-  });
-
   it("INJECT_AGENTS_MD_GUIDANCE is exported from hooks/inject-agents-md.ts", () => {
     const src = fs.readFileSync(
       path.join(import.meta.dirname, "../hooks/inject-agents-md.ts"),
@@ -145,12 +135,11 @@ describe("Decorated Pi Guidance structure", () => {
     expect(src).toMatch(/AGENTS\.md/);
   });
 
-  it("index.ts imports and pushes all module guidelines via buildGuidelines()", () => {
+  it("index.ts imports and pushes all guidelines via buildGuidelines()", () => {
     const src = fs.readFileSync(
       path.join(import.meta.dirname, "../index.ts"),
       "utf-8",
     );
-    expect(src).toMatch(/REDACT_GUIDANCE/);
     expect(src).toMatch(/INJECT_AGENTS_MD_GUIDANCE/);
     expect(src).toMatch(/TALK_NORMAL_GUIDANCE/);
     expect(src).toMatch(/buildGuidelines/);

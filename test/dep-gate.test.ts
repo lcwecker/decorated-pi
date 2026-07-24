@@ -89,7 +89,7 @@ describe("index.ts dep gate", () => {
     const clean = {
       modules: {
         tools: { patchOverrideEdit: true, ask: true, lsp: true, mcp: true },
-        hooks: { secretRedaction: true, rtk: false, wakatime: false },
+        hooks: { rtk: false, wakatime: false },
         commands: { atOverride: false, retry: false, usage: false },
       },
     };

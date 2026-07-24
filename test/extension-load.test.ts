@@ -5,7 +5,7 @@
  * the plugin wires up without runtime errors. Catches issues that the
  * other test suites miss:
  *
- *   - Missing imports (e.g. using wakatimeModule without importing it)
+ *   - Missing imports referenced by the entry point
  *   - Reference errors at module top level
  *   - Runtime errors during setupXxx() calls
  *   - pi.* API mismatches between ExtensionAPI and our usage
@@ -72,7 +72,7 @@ describe("extension load smoke test", () => {
     const clean = {
       modules: {
         tools: { patchOverrideEdit: true, ask: true, lsp: false, mcp: false },
-        hooks: { secretRedaction: true, rtk: true, wakatime: true },
+        hooks: { rtk: true, wakatime: true },
         commands: { atOverride: true, retry: true, usage: true },
       },
     };

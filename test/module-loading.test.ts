@@ -64,55 +64,55 @@ describe("Conditional loading — isModuleEnabled gates", () => {
   });
 
   it("core modules are enabled by default", () => {
-    expect(isModuleEnabled("secretRedaction")).toBe(true);
+    expect(isModuleEnabled("wakatime")).toBe(true);
     expect(isModuleEnabled("lsp")).toBe(true);
     expect(isModuleEnabled("atOverride")).toBe(true);
     expect(isModuleEnabled("retry")).toBe(true);
     expect(isModuleEnabled("usage")).toBe(true);
   });
 
-  it("disabling secretRedaction does not affect other modules", () => {
-    setModuleEnabled("secretRedaction", false);
-    expect(isModuleEnabled("secretRedaction")).toBe(false);
+  it("disabling wakatime does not affect other modules", () => {
+    setModuleEnabled("wakatime", false);
+    expect(isModuleEnabled("wakatime")).toBe(false);
     expect(isModuleEnabled("lsp")).toBe(true);
     expect(isModuleEnabled("atOverride")).toBe(true);
   });
 
   it("disabling lsp does not affect other modules", () => {
     setModuleEnabled("lsp", false);
-    expect(isModuleEnabled("secretRedaction")).toBe(true);
+    expect(isModuleEnabled("wakatime")).toBe(true);
     expect(isModuleEnabled("lsp")).toBe(false);
     expect(isModuleEnabled("atOverride")).toBe(true);
   });
 
   it("disabling atOverride does not affect other modules", () => {
     setModuleEnabled("atOverride", false);
-    expect(isModuleEnabled("secretRedaction")).toBe(true);
+    expect(isModuleEnabled("wakatime")).toBe(true);
     expect(isModuleEnabled("lsp")).toBe(true);
     expect(isModuleEnabled("atOverride")).toBe(false);
   });
 
   it("core modules can be disabled simultaneously", () => {
-    setModuleEnabled("secretRedaction", false);
+    setModuleEnabled("wakatime", false);
     setModuleEnabled("lsp", false);
     setModuleEnabled("atOverride", false);
     const settings = getAllModuleSettings();
-    expect(settings.hooks.secretRedaction).toBe(false);
+    expect(settings.hooks.wakatime).toBe(false);
     expect(settings.tools.lsp).toBe(false);
     expect(settings.commands.atOverride).toBe(false);
   });
 
   it("core modules can be re-enabled after disabling", () => {
-    setModuleEnabled("secretRedaction", false);
+    setModuleEnabled("wakatime", false);
     setModuleEnabled("lsp", false);
     setModuleEnabled("atOverride", false);
 
-    setModuleEnabled("secretRedaction", true);
+    setModuleEnabled("wakatime", true);
     setModuleEnabled("lsp", true);
     setModuleEnabled("atOverride", true);
 
     const settings = getAllModuleSettings();
-    expect(settings.hooks.secretRedaction).toBe(true);
+    expect(settings.hooks.wakatime).toBe(true);
     expect(settings.tools.lsp).toBe(true);
     expect(settings.commands.atOverride).toBe(true);
   });
@@ -197,11 +197,6 @@ describe("index.ts — conditional loading structure (new architecture)", () => 
   it("gates patch tool behind isModuleEnabled", () => {
     expect(indexSrc).toContain('if (isModuleEnabled("patchOverrideEdit"))');
     expect(indexSrc).toContain("registerPatchTool");
-  });
-
-  it("gates secretRedaction hook behind isModuleEnabled", () => {
-    expect(indexSrc).toContain('if (isModuleEnabled("secretRedaction"))');
-    expect(indexSrc).toContain("setupRedact");
   });
 
   it("gates atOverride hook behind isModuleEnabled", () => {

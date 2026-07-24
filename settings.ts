@@ -47,8 +47,6 @@ export interface ModuleSettings {
     mcp?: boolean;
   };
   hooks?: {
-    /** Redact secrets from read/bash output before model context. */
-    secretRedaction?: boolean;
     /** Rewrite bash through system RTK when available. */
     "rtk"?: boolean;
     /** Send coding activity heartbeats to WakaTime. */
@@ -334,7 +332,6 @@ const DEFAULT_MODULES: Required<ModuleSettings> = {
     mcp: true,
   },
   hooks: {
-    secretRedaction: true,
     "rtk": true,
     wakatime: true,
   },
@@ -351,7 +348,6 @@ const MODULE_TO_CATEGORY: Record<string, keyof ModuleSettings> = {
   ask: "tools",
   lsp: "tools",
   mcp: "tools",
-  secretRedaction: "hooks",
   "rtk": "hooks",
   wakatime: "hooks",
   atOverride: "commands",
@@ -359,19 +355,9 @@ const MODULE_TO_CATEGORY: Record<string, keyof ModuleSettings> = {
   usage: "commands",
 };
 
-/** Legacy flat module keys that were renamed. Applied before flat→nested migration. */
-const LEGACY_MODULE_KEYS: Record<string, string> = {
-  patch: "patchOverrideEdit",
-  safety: "secretRedaction",
-};
-
 /**
- * Migrate module settings to the nested tools/hooks/commands layout.
- * Handles three legacy shapes:
- *   1. Flat config with current names (patchOverrideEdit, secretRedaction, ...)
- *   2. Flat config with old names (patch, safety)
- *   3. Nested config with old inner names (tools.patch, hooks.safety)
- * Already-correct nested configs are left untouched.
+ * Migrate module settings to the nested tools/hooks/commands layout and
+ * discard settings for removed modules.
  */
 function migrateModuleSettings(config: DecoratedPiConfig): boolean {
   if (!config.modules) return false;
@@ -398,8 +384,15 @@ function migrateModuleSettings(config: DecoratedPiConfig): boolean {
     }
   }
   renameInCategory("tools", "patch", "patchOverrideEdit");
-  renameInCategory("hooks", "safety", "secretRedaction");
   renameInCategory("commands", "smart-at", "atOverride");
+
+  const hooks = result.hooks as Record<string, boolean> | undefined;
+  for (const removedKey of ["secretRedaction", "safety"]) {
+    if (hooks && removedKey in hooks) {
+      delete hooks[removedKey];
+      migrated = true;
+    }
+  }
 
   // Migrate flat keys into nested categories.
   const flatMapping: Record<string, [keyof ModuleSettings, string]> = {
@@ -407,19 +400,21 @@ function migrateModuleSettings(config: DecoratedPiConfig): boolean {
     ask: ["tools", "ask"],
     lsp: ["tools", "lsp"],
     mcp: ["tools", "mcp"],
-    secretRedaction: ["hooks", "secretRedaction"],
     "rtk": ["hooks", "rtk"],
     wakatime: ["hooks", "wakatime"],
     atOverride: ["commands", "atOverride"],
     retry: ["commands", "retry"],
     usage: ["commands", "usage"],
     patch: ["tools", "patchOverrideEdit"],
-    safety: ["hooks", "secretRedaction"],
     "smart-at": ["commands", "atOverride"],
   };
 
   for (const [key, value] of Object.entries(config.modules)) {
     if (key === "tools" || key === "hooks" || key === "commands") continue;
+    if (key === "secretRedaction" || key === "safety") {
+      migrated = true;
+      continue;
+    }
     const mapping = flatMapping[key];
     if (!mapping) continue;
     const [category, newKey] = mapping;

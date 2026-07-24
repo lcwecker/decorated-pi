@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach } from "vitest";
-import { __smartAtTest, smartAtModule, setupSmartAt } from "../hooks/smart-at.js";
+import { __smartAtTest, smartAtModule } from "../hooks/smart-at.js";
 
 const { atPrefix } = __smartAtTest;
 
@@ -46,20 +46,6 @@ describe("@ prefix detection", () => {
 
   it("just @", () => {
     expect(atPrefix("@")).toBe("@");
-  });
-});
-
-// ═══════════════════════════════════════════════════════════
-// Skeleton registration
-// ═══════════════════════════════════════════════════════════
-
-describe("setupSmartAt", () => {
-  it("registers the module", () => {
-    const registered: any[] = [];
-    const sk = { register: (m: any) => registered.push(m) };
-    setupSmartAt(sk as any);
-    expect(registered).toHaveLength(1);
-    expect(registered[0]).toBe(smartAtModule);
   });
 });
 

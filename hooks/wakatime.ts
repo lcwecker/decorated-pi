@@ -5,7 +5,6 @@
  * Owns its own timer state and the "active" entity.
  */
 
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { execFile } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
@@ -18,8 +17,6 @@ const MACHINE_NAME = os.hostname();
 const PACKAGE_VERSION = readPackageVersion();
 
 const WAKATIME_CFG = path.join(os.homedir(), ".wakatime.cfg");
-const WAKATIME_CLI_FALLBACK = path.join(os.homedir(), ".wakatime", "wakatime-cli");
-const API_URL = "https://api.wakatime.com/api/v1";
 const KEEPALIVE_MS = 90 * 1000;
 const IDLE_TIMEOUT_MS = 2 * 60 * 1000;
 const TIMER_TICK_MS = 15 * 1000;
@@ -66,11 +63,18 @@ interface ActiveState {
   lastHeartbeatAt: number;
 }
 
-type HeartbeatSender = (hb: Heartbeat, cwd?: string) => void;
+export type HeartbeatSender = (hb: Heartbeat, cwd?: string) => void;
 
-let active: ActiveState | null = null;
-let timer: ReturnType<typeof setInterval> | null = null;
-let terminalInputUnsub: (() => void) | null = null;
+interface WakatimeRuntime {
+  active: ActiveState | null;
+  timer: ReturnType<typeof setInterval> | null;
+  terminalInputUnsub: (() => void) | null;
+}
+
+function createRuntime(): WakatimeRuntime {
+  return { active: null, timer: null, terminalInputUnsub: null };
+}
+
 let cachedWakatimeCliPath: string | null | undefined;
 
 // ─── Helpers ──────────────────────────────────────────────────────────────
@@ -167,13 +171,23 @@ export function heartbeatChanged(a: Omit<Heartbeat, "time">, b: Omit<Heartbeat, 
     || a.language !== b.language;
 }
 
-function switchActive(next: Omit<Heartbeat, "time">, sendHeartbeat: HeartbeatSender, options: { immediate?: boolean; isWrite?: boolean; cwd?: string } = {}) {
+function switchActive(
+  runtime: WakatimeRuntime,
+  next: Omit<Heartbeat, "time">,
+  sendHeartbeat: HeartbeatSender,
+  options: { immediate?: boolean; isWrite?: boolean; cwd?: string } = {},
+) {
   const now = Date.now();
-  const changed = !active || heartbeatChanged(active.heartbeat, next);
-  active = { heartbeat: next, cwd: options.cwd, lastActivityAt: now, lastHeartbeatAt: active?.lastHeartbeatAt ?? 0 };
+  const changed = !runtime.active || heartbeatChanged(runtime.active.heartbeat, next);
+  runtime.active = {
+    heartbeat: next,
+    cwd: options.cwd,
+    lastActivityAt: now,
+    lastHeartbeatAt: runtime.active?.lastHeartbeatAt ?? 0,
+  };
   if (changed || options.immediate || options.isWrite) {
     sendHeartbeat({ ...next, time: now / 1000, is_write: options.isWrite }, options.cwd);
-    active.lastHeartbeatAt = now;
+    runtime.active.lastHeartbeatAt = now;
   }
 }
 
@@ -181,23 +195,28 @@ function sendOneShot(hb: Omit<Heartbeat, "time">, sendHeartbeat: HeartbeatSender
   sendHeartbeat({ ...hb, time: Date.now() / 1000, is_write: isWrite }, cwd);
 }
 
-function touchActivity() { if (active) active.lastActivityAt = Date.now(); }
+function touchActivity(runtime: WakatimeRuntime) {
+  if (runtime.active) runtime.active.lastActivityAt = Date.now();
+}
 
-function ensureTimer(sendHeartbeat: HeartbeatSender) {
-  if (timer) return;
-  timer = setInterval(() => {
-    if (!active) return;
+function ensureTimer(runtime: WakatimeRuntime, sendHeartbeat: HeartbeatSender) {
+  if (runtime.timer) return;
+  runtime.timer = setInterval(() => {
+    if (!runtime.active) return;
     const now = Date.now();
-    if (now - active.lastActivityAt > IDLE_TIMEOUT_MS) return;
-    if (now - active.lastHeartbeatAt < KEEPALIVE_MS) return;
-    sendHeartbeat({ ...active.heartbeat, time: now / 1000 }, active.cwd);
-    active.lastHeartbeatAt = now;
+    if (now - runtime.active.lastActivityAt > IDLE_TIMEOUT_MS) return;
+    if (now - runtime.active.lastHeartbeatAt < KEEPALIVE_MS) return;
+    sendHeartbeat({ ...runtime.active.heartbeat, time: now / 1000 }, runtime.active.cwd);
+    runtime.active.lastHeartbeatAt = now;
   }, TIMER_TICK_MS);
 }
 
-function clearTimer() {
-  if (timer) clearInterval(timer);
-  timer = null;
+function resetRuntime(runtime: WakatimeRuntime) {
+  runtime.active = null;
+  if (runtime.timer) clearInterval(runtime.timer);
+  runtime.timer = null;
+  runtime.terminalInputUnsub?.();
+  runtime.terminalInputUnsub = null;
 }
 
 export function buildAppHeartbeat(cwd: string, category: Heartbeat["category"] = "ai coding"): Omit<Heartbeat, "time"> {
@@ -210,122 +229,70 @@ export function buildFileHeartbeat(absPath: string, cwd: string, category: Heart
   return { entity: absPath, type: "file", category, project: meta.project, project_root_count: meta.project_root_count, language: extToLanguage(absPath), lines: countLines(absPath) };
 }
 
-export function resetWakatimeStateForTests() {
-  active = null;
-  clearTimer();
-  if (terminalInputUnsub) terminalInputUnsub();
-  terminalInputUnsub = null;
-  cachedWakatimeCliPath = undefined;
-}
-
 // ─── Module + setup ──────────────────────────────────────────────────────
 
-export const wakatimeModule: Module = {
-  name: "wakatime",
-  hooks: {
-    session_start: [
-      (_event, ctx) => {
-        active = null;
-        // Timer is set up in setupWakatime (needs API key + CLI).
-      },
-    ],
-    session_shutdown: [
-      () => {
-        active = null;
-        clearTimer();
-        if (terminalInputUnsub) terminalInputUnsub();
-        terminalInputUnsub = null;
-      },
-    ],
-    before_agent_start: [
-      (_event, ctx) => {
-        const cwd = ctx.cwd ?? process.cwd();
-        // Caller (setupWakatime) provides the actual sender; this module's
-        // before_agent_start is a no-op when not configured.
-        if (active && (Date.now() - active.lastActivityAt) <= IDLE_TIMEOUT_MS) {
-          active.heartbeat = buildAppHeartbeat(cwd, active.heartbeat.category);
-          active.lastActivityAt = Date.now();
-        }
-      },
-    ],
-    agent_end: [
-      () => { touchActivity(); },
-    ],
-  },
-};
+/** Build one isolated WakaTime module instance. Runtime state belongs to the
+ *  module closure, so reloads and parallel sessions cannot share timers,
+ *  active entities, or terminal-input subscriptions. */
+export function createWakatimeModule(sendHeartbeat: HeartbeatSender): Module {
+  const runtime = createRuntime();
 
-export function setupWakatimeWithApiKey(
-  pi: ExtensionAPI,
-  apiKey: string | undefined,
-  cliPath: string | null | undefined = findWakatimeCli(),
-  sendHeartbeat: HeartbeatSender | undefined = cliPath && apiKey
-    ? (hb, cwd) => sendHeartbeatViaCli(hb, apiKey, cliPath, cwd)
-    : undefined,
-): void {
-  if (!apiKey || !cliPath || !sendHeartbeat) return;
-
-  pi.on("session_start", (_event, ctx) => {
-    active = null;
-    ensureTimer(sendHeartbeat);
-    if (terminalInputUnsub) terminalInputUnsub();
-    terminalInputUnsub = null;
-    if (!ctx.hasUI) return;
-    terminalInputUnsub = ctx.ui.onTerminalInput(() => {
-      const cwd = ctx.cwd ?? process.cwd();
-      const recent = active && (Date.now() - active.lastActivityAt) <= IDLE_TIMEOUT_MS;
-      const isAppHeartbeat = active?.heartbeat.type === "app" && active.heartbeat.entity === "pi";
-      if (!recent || !isAppHeartbeat) {
-        switchActive(buildAppHeartbeat(cwd), sendHeartbeat, { immediate: true, cwd });
-      } else {
-        touchActivity();
-      }
-      return undefined;
-    });
-  });
-
-  pi.on("session_shutdown", () => {
-    active = null;
-    clearTimer();
-    if (terminalInputUnsub) terminalInputUnsub();
-    terminalInputUnsub = null;
-  });
-
-  pi.on("before_agent_start", (_event, ctx) => {
-    const cwd = ctx.cwd ?? process.cwd();
-    switchActive(buildAppHeartbeat(cwd), sendHeartbeat, { immediate: true, cwd });
-  });
-
-  // File-level heartbeats as one-shots in tool_result (don't replace the active keepalive).
-  pi.on("tool_result", (event, ctx) => {
-    const cwd = ctx.cwd ?? process.cwd();
-    const input = (event as any).input;
-    if (event.toolName === "read") {
-      const filePath = input?.path ?? input?.file ?? input?.file_path;
-      if (typeof filePath !== "string" || !filePath.trim()) return;
-      const absPath = path.isAbsolute(filePath) ? filePath : path.resolve(cwd, filePath);
-      sendOneShot(buildFileHeartbeat(absPath, cwd), sendHeartbeat, undefined, cwd);
-      touchActivity();
-    } else if (event.toolName === "patch") {
-      const filePath = input?.path;
-      if (typeof filePath !== "string" || !filePath.trim()) return;
-      const absPath = path.isAbsolute(filePath) ? filePath : path.resolve(cwd, filePath);
-      sendOneShot(buildFileHeartbeat(absPath, cwd), sendHeartbeat, true, cwd);
-      touchActivity();
-    } else if (event.toolName === "lsp_diagnostics") {
-      touchActivity();
-    } else if (event.toolName === "bash") {
-      const category = classifyBash(input?.command);
-      switchActive(buildAppHeartbeat(cwd, category), sendHeartbeat, { cwd });
-      touchActivity();
-    } else {
-      touchActivity();
-    }
-  });
-
-  pi.on("agent_end", (_event, _ctx) => { touchActivity(); });
+  return {
+    name: "wakatime",
+    hooks: {
+      session_start: [
+        (_event, ctx) => {
+          resetRuntime(runtime);
+          ensureTimer(runtime, sendHeartbeat);
+          if (!ctx.hasUI) return;
+          runtime.terminalInputUnsub = ctx.ui.onTerminalInput(() => {
+            const cwd = ctx.cwd ?? process.cwd();
+            const recent = runtime.active && (Date.now() - runtime.active.lastActivityAt) <= IDLE_TIMEOUT_MS;
+            const isAppHeartbeat = runtime.active?.heartbeat.type === "app" && runtime.active.heartbeat.entity === "pi";
+            if (!recent || !isAppHeartbeat) {
+              switchActive(runtime, buildAppHeartbeat(cwd), sendHeartbeat, { immediate: true, cwd });
+            } else {
+              touchActivity(runtime);
+            }
+            return undefined;
+          });
+        },
+      ],
+      session_shutdown: [
+        () => resetRuntime(runtime),
+      ],
+      before_agent_start: [
+        (_event, ctx) => {
+          const cwd = ctx.cwd ?? process.cwd();
+          switchActive(runtime, buildAppHeartbeat(cwd), sendHeartbeat, { immediate: true, cwd });
+        },
+      ],
+      tool_result: [
+        (event, ctx) => {
+          const cwd = ctx.cwd ?? process.cwd();
+          const input = event.input as any;
+          const filePath = input?.path ?? input?.file ?? input?.file_path;
+          if (typeof filePath === "string" && filePath.trim()) {
+            const absPath = path.isAbsolute(filePath) ? filePath : path.resolve(cwd, filePath);
+            sendOneShot(buildFileHeartbeat(absPath, cwd), sendHeartbeat, undefined, cwd);
+            touchActivity(runtime);
+            return;
+          }
+          if (event.toolName === "bash") {
+            const category = classifyBash(input?.command);
+            switchActive(runtime, buildAppHeartbeat(cwd, category), sendHeartbeat, { cwd });
+          }
+          touchActivity(runtime);
+        },
+      ],
+      agent_end: [
+        () => touchActivity(runtime),
+      ],
+    },
+  };
 }
 
-export function setupWakatime(sk: Skeleton, pi: ExtensionAPI): void {
+export function setupWakatime(sk: Skeleton): void {
   const apiKey = readWakatimeCfgApiKey();
   const cliPath = findWakatimeCli();
   if (!cliPath) {
@@ -338,52 +305,11 @@ export function setupWakatime(sk: Skeleton, pi: ExtensionAPI): void {
   if (!apiKey || !cliPath) return;
 
   const sendHeartbeat: HeartbeatSender = (hb, cwd) => sendHeartbeatViaCli(hb, apiKey, cliPath, cwd);
-
-  // Hook into session_start to set up timer + terminal input.
-  pi.on("session_start", (_event, ctx) => {
-    active = null;
-    ensureTimer(sendHeartbeat);
-    if (terminalInputUnsub) terminalInputUnsub();
-    terminalInputUnsub = null;
-    if (!ctx.hasUI) return;
-    terminalInputUnsub = ctx.ui.onTerminalInput(() => {
-      const cwd = ctx.cwd ?? process.cwd();
-      const recent = active && (Date.now() - active.lastActivityAt) <= IDLE_TIMEOUT_MS;
-      const isAppHeartbeat = active?.heartbeat.type === "app" && active.heartbeat.entity === "pi";
-      if (!recent || !isAppHeartbeat) {
-        switchActive(buildAppHeartbeat(cwd), sendHeartbeat, { immediate: true, cwd });
-      } else {
-        touchActivity();
-      }
-      return undefined;
-    });
-  });
-
-  // Tool result: auto-detect file operations, classify bash, touch activity
-  pi.on("tool_result", (event, ctx) => {
-    const cwd = ctx.cwd ?? process.cwd();
-    const input = (event as any).input;
-
-    // Auto-detect file operations from input shape
-    const filePath = input?.path ?? input?.file ?? input?.file_path;
-    if (typeof filePath === "string" && filePath.trim()) {
-      const absPath = path.isAbsolute(filePath) ? filePath : path.resolve(cwd, filePath);
-      sendOneShot(buildFileHeartbeat(absPath, cwd), sendHeartbeat, undefined, cwd);
-      touchActivity();
-      return;
-    }
-
-    // Bash needs special classification
-    if (event.toolName === "bash") {
-      const category = classifyBash(input?.command);
-      if (active) active.heartbeat = { ...active.heartbeat, category };
-      touchActivity();
-      return;
-    }
-
-    // Everything else: just touch activity
-    touchActivity();
-  });
-
-  sk.register(wakatimeModule);
+  sk.register(createWakatimeModule(sendHeartbeat));
 }
+
+export const __wakatimeTest = {
+  resetDependencyCache() {
+    cachedWakatimeCliPath = undefined;
+  },
+};
