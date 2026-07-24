@@ -77,46 +77,57 @@ export async function executeOriginalBash(command: string, cwd: string, timeout:
 
 // ─── Module + setup ──────────────────────────────────────────────────────
 
-let rtkBinary: string | null = null;
-const rewrittenCommands = new Map<string, { originalCommand: string; timeout?: number }>();
-const rewriteabilityCache = new Map<string, boolean>();
+interface RtkPendingCommand {
+  originalCommand: string;
+  timeout?: number;
+}
 
-export const rtkModule: Module = {
-  name: "rtk",
-  hooks: {
-    tool_call: [
-      (event) => {
-        if (event.toolName !== "bash") return;
-        const command = event.input?.command;
-        if (!command || typeof command !== "string" || !command.trim()) return;
-        const rewritten = rewriteWithRtk(command, rtkBinary!);
-        rewriteabilityCache.set(command, rewritten !== null);
-        if (!rewritten) return;
-        rewrittenCommands.set(event.toolCallId, { originalCommand: command, timeout: event.input?.timeout });
-        event.input.command = rewritten;
-      },
-    ],
-    tool_result: [
-      async (event, ctx) => {
-        if (event.toolName !== "bash") return;
-        const pending = rewrittenCommands.get(event.toolCallId);
-        if (!pending) return;
-        rewrittenCommands.delete(event.toolCallId);
-        if (!event.isError) return;
-        return executeOriginalBash(pending.originalCommand, ctx.cwd, pending.timeout, ctx.signal);
-      },
-    ],
-    session_shutdown: [
-      () => {
-        rewrittenCommands.clear();
-        rewriteabilityCache.clear();
-      },
-    ],
-  },
-};
+/** Build one isolated RTK module instance. The pending-command map and
+ *  binary path belong to the module closure, so reloads and parallel
+ *  sessions cannot share rewrite state or overwrite each other's binary.
+ *  `rewriter` is injectable for tests; production uses `rewriteWithRtk`. */
+export function createRtkModule(
+  rtkBinary: string,
+  rewriter: (command: string, rtkPath: string) => string | null = rewriteWithRtk,
+): Module {
+  const rewrittenCommands = new Map<string, RtkPendingCommand>();
+
+  return {
+    name: "rtk",
+    hooks: {
+      session_start: [
+        () => rewrittenCommands.clear(),
+      ],
+      tool_call: [
+        (event) => {
+          if (event.toolName !== "bash") return;
+          const command = event.input?.command;
+          if (!command || typeof command !== "string" || !command.trim()) return;
+          const rewritten = rewriter(command, rtkBinary);
+          if (!rewritten) return;
+          rewrittenCommands.set(event.toolCallId, { originalCommand: command, timeout: event.input?.timeout });
+          event.input.command = rewritten;
+        },
+      ],
+      tool_result: [
+        async (event, ctx) => {
+          if (event.toolName !== "bash") return;
+          const pending = rewrittenCommands.get(event.toolCallId);
+          if (!pending) return;
+          rewrittenCommands.delete(event.toolCallId);
+          if (!event.isError) return;
+          return executeOriginalBash(pending.originalCommand, ctx.cwd, pending.timeout, ctx.signal);
+        },
+      ],
+      session_shutdown: [
+        () => rewrittenCommands.clear(),
+      ],
+    },
+  };
+}
 
 export function setupRtk(sk: Skeleton): void {
-  rtkBinary = findSystemRtk();
+  const rtkBinary = findSystemRtk();
   if (!rtkBinary) {
     sk.declareMissing({
       name: "rtk",
@@ -129,5 +140,5 @@ export function setupRtk(sk: Skeleton): void {
   // Hook pi's built-in bash tool via tool_call/tool_result. We deliberately do
   // not call pi.registerTool — that would shadow pi's bash and conflict with
   // any other extension that also overrides bash (e.g. pi-sandbox).
-  sk.register(rtkModule);
+  sk.register(createRtkModule(rtkBinary));
 }
