@@ -256,17 +256,15 @@ describe("/retry", () => {
 
 // ─── /mcp (non-interactive branch) ────────────────────────────────────────
 
+
+// ─── /mcp (non-interactive branch) ────────────────────────────────────────
+
 describe("/mcp — non-interactive", () => {
   it("notifies 'No MCP servers configured' when list is empty", async () => {
-    vi.resetModules();
-    vi.doMock("../hooks/mcp.js", () => ({
-      getMcpStatus: vi.fn(() => []),
-      refreshServerCache: vi.fn(),
-      updateConfigEnabled: vi.fn(),
-    }));
     const { registerMcpStatusCommand } = await import("../commands/mcp-status.js");
     const pi = makePi();
-    registerMcpStatusCommand(pi as any);
+    const service = { getStatus: () => [], refresh: vi.fn(), setEnabled: vi.fn() };
+    registerMcpStatusCommand(pi as any, service as any);
 
     const ctx = makeCtx({ hasUI: false });
     await lastCommand!.handler([], ctx);
@@ -276,13 +274,13 @@ describe("/mcp — non-interactive", () => {
       "info",
     );
     expect(mockSendMessage).not.toHaveBeenCalled();
-    vi.doUnmock("../hooks/mcp.js");
   });
 
   it("sends a mcp-status custom message when servers are present", async () => {
-    vi.resetModules();
-    vi.doMock("../hooks/mcp.js", () => ({
-      getMcpStatus: vi.fn(() => [
+    const { registerMcpStatusCommand } = await import("../commands/mcp-status.js");
+    const pi = makePi();
+    const service = {
+      getStatus: () => [
         {
           name: "exa",
           url: "https://mcp.exa.ai/mcp",
@@ -303,13 +301,11 @@ describe("/mcp — non-interactive", () => {
           tools: [],
           error: "DNS resolution failed",
         },
-      ]),
-      refreshServerCache: vi.fn(),
-      updateConfigEnabled: vi.fn(),
-    }));
-    const { registerMcpStatusCommand } = await import("../commands/mcp-status.js");
-    const pi = makePi();
-    registerMcpStatusCommand(pi as any);
+      ],
+      refresh: vi.fn(),
+      setEnabled: vi.fn(),
+    };
+    registerMcpStatusCommand(pi as any, service as any);
 
     const ctx = makeCtx({ hasUI: false });
     await lastCommand!.handler([], ctx);
@@ -325,13 +321,13 @@ describe("/mcp — non-interactive", () => {
     expect(msg.content).toContain("broken");
     expect(msg.content).toContain("failed");
     expect(msg.content).toContain("DNS resolution failed");
-    vi.doUnmock("../hooks/mcp.js");
   });
 
   it("shows 'connecting...' state without listing tools", async () => {
-    vi.resetModules();
-    vi.doMock("../hooks/mcp.js", () => ({
-      getMcpStatus: vi.fn(() => [
+    const { registerMcpStatusCommand } = await import("../commands/mcp-status.js");
+    const pi = makePi();
+    const service = {
+      getStatus: () => [
         {
           name: "loading",
           url: "https://loading.example/mcp",
@@ -340,20 +336,19 @@ describe("/mcp — non-interactive", () => {
           toolCount: 0,
           tools: [],
         },
-      ]),
-      refreshServerCache: vi.fn(),
-      updateConfigEnabled: vi.fn(),
-    }));
-    const { registerMcpStatusCommand } = await import("../commands/mcp-status.js");
-    const pi = makePi();
-    registerMcpStatusCommand(pi as any);
+      ],
+      refresh: vi.fn(),
+      setEnabled: vi.fn(),
+    };
+    registerMcpStatusCommand(pi as any, service as any);
 
     const ctx = makeCtx({ hasUI: false });
     await lastCommand!.handler([], ctx);
 
+    expect(mockSendMessage).toHaveBeenCalledTimes(1);
     const [msg] = mockSendMessage.mock.calls[0];
+    expect(msg.content).toContain("loading");
     expect(msg.content).toContain("connecting...");
-    expect(msg.content).not.toContain("Tools: 0"); // we don't list tools when connecting
-    vi.doUnmock("../hooks/mcp.js");
+    expect(msg.content).not.toContain("Tools: 0");
   });
 });

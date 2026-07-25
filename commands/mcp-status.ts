@@ -8,10 +8,10 @@
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { McpStatusComponent, type McpServerView } from "../ui/mcp-status.js";
-import { getMcpStatus, refreshServerCache, updateConfigEnabled } from "../hooks/mcp.js";
+import type { McpStatusService } from "../hooks/mcp.js";
 import { toggleMcpServerEnabled } from "../tools/mcp/config.js";
 
-export function registerMcpStatusCommand(pi: ExtensionAPI): void {
+export function registerMcpStatusCommand(pi: ExtensionAPI, service: McpStatusService): void {
   pi.registerCommand("mcp", {
     description: "Show active MCP servers and their tools",
     handler: async (_args, ctx) => {
@@ -19,7 +19,7 @@ export function registerMcpStatusCommand(pi: ExtensionAPI): void {
         await ctx.ui.custom<void>(
           (tui, theme, _kb, done) =>
             new McpStatusComponent(tui, theme, {
-              read: () => getMcpStatus() as McpServerView[],
+              read: () => service.getStatus() as McpServerView[],
               toggle: async (name, enabled) => {
                 const scope: "global" | "project" = "global";
                 const ok = toggleMcpServerEnabled(name, enabled, scope, ctx.cwd || undefined);
@@ -27,16 +27,16 @@ export function registerMcpStatusCommand(pi: ExtensionAPI): void {
                   // Await so the connection (if disabling) is fully torn down
                   // before /reload. Otherwise teardownMcp() may hang on a
                   // zombie conn and stall session_shutdown.
-                  await updateConfigEnabled(name, enabled);
+                  await service.setEnabled(name, enabled);
                 }
                 return ok;
               },
-              refresh: (name) => refreshServerCache(name, ctx.modelRegistry),
+              refresh: (name) => service.refresh(name, ctx.modelRegistry),
             }, done)
         );
         return;
       }
-      const servers = getMcpStatus();
+      const servers = service.getStatus();
       if (servers.length === 0) {
         ctx.ui.notify("No MCP servers configured.", "info");
         return;

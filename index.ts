@@ -33,7 +33,7 @@ import { createSmartAtModule } from "./hooks/smart-at.js";
 import { sessionTitleModule } from "./hooks/session-title.js";
 import { piToolFilterModule } from "./hooks/pi-tool-filter.js";
 import { setupCompaction } from "./hooks/compaction.js";
-import { mcpModule } from "./hooks/mcp.js";
+import { McpRuntime, createMcpModule } from "./hooks/mcp.js";
 import { setupWakatime } from "./hooks/wakatime.js";
 import { setupRtk } from "./hooks/rtk.js";
 
@@ -47,7 +47,6 @@ import {
     migrateLegacyGlobalMcpConfig,
     collectMcpDependencyStatuses,
 } from "./tools/mcp/config.js";
-import { ensureMcpServerReady } from "./hooks/mcp.js";
 
 import { registerDpModelCommand } from "./commands/dp-model.js";
 import { registerDpSettingsCommand } from "./commands/dp-settings.js";
@@ -263,7 +262,8 @@ export default async function (pi: ExtensionAPI) {
         // ~/.pi/agent/decorated-pi.json move to ~/.pi/agent/mcp.json. Run
         // explicitly here so `loadGlobalMcpConfigs` stays pure.
         migrateLegacyGlobalMcpConfig();
-        sk.register(mcpModule);
+        const mcpRuntime = new McpRuntime();
+        sk.register(createMcpModule(mcpRuntime));
         const mcpDeps = collectMcpDependencyStatuses(process.cwd());
         for (const dep of mcpDeps) {
             if (dep.state !== "ok") {
@@ -283,9 +283,9 @@ export default async function (pi: ExtensionAPI) {
         // Skip servers whose binary is missing (dependency not met).
         for (const config of configs) {
             if (!canRegisterMcpServer(config, mcpDeps)) continue;
-            await ensureMcpServerReady(pi, config, process.cwd());
+            await mcpRuntime.ensureServerReady(pi, config, process.cwd());
         }
-        registerMcpStatusCommand(pi);
+        registerMcpStatusCommand(pi, mcpRuntime);
     }
 
     // ── Builtin skills (travel with the plugin in every project) ─────────────

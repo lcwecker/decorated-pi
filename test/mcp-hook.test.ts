@@ -44,73 +44,77 @@ vi.mock("../tools/mcp/cache.js", () => ({
 }));
 
 import {
-  mcpModule,
-  getMcpStatus,
-  refreshServerCache,
-  ensureMcpServerReady,
-  updateConfigEnabled,
-  getActiveMcpConnections,
   McpRuntime,
   createMcpModule,
 } from "../hooks/mcp.js";
 import { loadMcpCache, loadScopedMcpCache, updateServerCache } from "../tools/mcp/cache.js";
 
+// Each describe creates its own runtime + module so tests can't leak state.
+function makeMcpModule() {
+  const runtime = new McpRuntime();
+  const mod = createMcpModule(runtime);
+  return { runtime, mod };
+}
+
 describe("mcpModule session_start", () => {
   it("registers session_start and session_shutdown handlers", () => {
-    expect(mcpModule.name).toBe("mcp");
-    expect(mcpModule.hooks.session_start).toBeDefined();
-    expect(mcpModule.hooks.session_start!.length).toBeGreaterThan(0);
-    expect(mcpModule.hooks.session_shutdown).toBeDefined();
+    const { mod } = makeMcpModule();
+    expect(mod.name).toBe("mcp");
+    expect(mod.hooks.session_start).toBeDefined();
+    expect(mod.hooks.session_start!.length).toBeGreaterThan(0);
+    expect(mod.hooks.session_shutdown).toBeDefined();
   });
 
   it("marks server as 'connected' when connection resolves", async () => {
+    const { runtime, mod } = makeMcpModule();
     mockConnect.mockReset();
     mockConnect.mockImplementation(async function (this: any) {
       this.tools = [
         { name: "tool_a", description: "A", inputSchema: { type: "object" } },
       ];
     });
-    const handler = mcpModule.hooks.session_start![0]!;
+    const handler = mod.hooks.session_start![0]!;
     await handler({} as any, { cwd: "/tmp" } as any, {} as any);
 
     // Wait a tick for the fire-and-forget connectAll to update state.
     await new Promise((r) => setTimeout(r, 50));
 
-    const status = getMcpStatus();
+    const status = runtime.getStatus();
     const s1 = status.find((s) => s.name === "test1")!;
     expect(s1.state).toBe("connected");
   });
 
   it("marks server as 'failed' when connection rejects", async () => {
+    const { runtime, mod } = makeMcpModule();
     mockConnect.mockReset();
     mockConnect.mockRejectedValue(new Error("connection refused"));
-    const handler = mcpModule.hooks.session_start![0]!;
+    const handler = mod.hooks.session_start![0]!;
     await handler({} as any, { cwd: "/tmp" } as any, {} as any);
     await new Promise((r) => setTimeout(r, 50));
 
-    const status = getMcpStatus();
+    const status = runtime.getStatus();
     const s1 = status.find((s) => s.name === "test1")!;
     expect(s1.state).toBe("failed");
     expect(s1.error).toContain("connection refused");
   });
 
   // Regression: /reload triggers session_start while a previous connectAll
-  // may still be running. The new connectAll must not reassign allServers
-  // — otherwise the old in-flight `allServers.set("connected")` updates a
-  // detached Map and the UI (which reads the new Map) never sees it.
-  it("survives /reload: new session_start keeps the same allServers reference", async () => {
+  // may still be running. Generation cancellation makes the stale
+  // connectAll abort itself instead of polluting the new session.
+  it("survives /reload: new session_start is not polluted by stale connectAll", async () => {
+    const { runtime, mod } = makeMcpModule();
     // First connection hangs forever (simulates a slow MCP server on /reload).
     mockConnect.mockReset();
     mockConnect.mockReturnValue(new Promise(() => {}));
 
-    const handler = mcpModule.hooks.session_start![0]!;
+    const handler = mod.hooks.session_start![0]!;
     await handler({} as any, { cwd: "/tmp" } as any, {} as any);
 
     // Capture the status the UI sees right now — should be "connecting".
-    const beforeReload = getMcpStatus();
+    const beforeReload = runtime.getStatus();
     expect(beforeReload.find((s) => s.name === "test1")!.state).toBe("connecting");
 
-    // Simulate /reload: second session_start fires (teardownMcp clears,
+    // Simulate /reload: second session_start fires (teardown clears,
     // new connectAll starts). This time the connection succeeds.
     mockConnect.mockReset();
     mockConnect.mockImplementation(async function (this: any) {
@@ -119,14 +123,14 @@ describe("mcpModule session_start", () => {
 
     // Manually invoke teardown (it's the session_shutdown handler) to mimic
     // the session_shutdown that /reload emits before the new session_start.
-    const shutdown = mcpModule.hooks.session_shutdown![0]!;
+    const shutdown = mod.hooks.session_shutdown![0]!;
     await shutdown({} as any, {} as any, {} as any);
 
     await handler({} as any, { cwd: "/tmp" } as any, {} as any);
     await new Promise((r) => setTimeout(r, 50));
 
     // The UI now sees the NEW state from the new connectAll.
-    const afterReload = getMcpStatus();
+    const afterReload = runtime.getStatus();
     expect(afterReload.find((s) => s.name === "test1")!.state).toBe("connected");
   });
 
@@ -137,6 +141,7 @@ describe("mcpModule session_start", () => {
   // This test simulates a permanently-hung connect() and asserts the
   // 35s watchdog marks the server as failed.
   it("watchdog marks hung connection as 'failed' after 35s", async () => {
+    const { runtime, mod } = makeMcpModule();
     mockConnect.mockReset();
     // Never resolves or rejects.
     mockConnect.mockReturnValue(new Promise(() => {}));
@@ -145,17 +150,17 @@ describe("mcpModule session_start", () => {
     // setTimeout is registered against the fake clock.
     vi.useFakeTimers();
     try {
-      const handler = mcpModule.hooks.session_start![0]!;
+      const handler = mod.hooks.session_start![0]!;
       await handler({} as any, { cwd: "/tmp" } as any, {} as any);
 
       // Right after session_start, state should still be "connecting".
-      expect(getMcpStatus().find((s) => s.name === "test1")!.state).toBe("connecting");
+      expect(runtime.getStatus().find((s) => s.name === "test1")!.state).toBe("connecting");
 
       // Advance fake timers past the 35s watchdog window.
       await vi.advanceTimersByTimeAsync(36_000);
 
       // Now the watchdog should have marked the hung server as failed.
-      const after = getMcpStatus();
+      const after = runtime.getStatus();
       const s1 = after.find((s) => s.name === "test1")!;
       expect(s1.state).toBe("failed");
       expect(s1.error).toMatch(/watchdog/i);
@@ -168,8 +173,9 @@ describe("mcpModule session_start", () => {
 const loadScopedMcpCacheMock = loadScopedMcpCache as unknown as ReturnType<typeof vi.fn>;
 const updateServerCacheMock = updateServerCache as unknown as ReturnType<typeof vi.fn>;
 
-describe("ensureMcpServerReady cache scope", () => {
+describe("ensureServerReady cache scope", () => {
   it("uses project cache directly on cache hit", async () => {
+    const { runtime } = makeMcpModule();
     loadScopedMcpCacheMock.mockReset();
     loadScopedMcpCacheMock.mockReturnValue({
       servers: {
@@ -179,14 +185,33 @@ describe("ensureMcpServerReady cache scope", () => {
     mockConnect.mockReset();
     const pi = { registerTool: vi.fn() };
 
-    await ensureMcpServerReady(pi as any, { name: "proj", command: "proj-mcp", enabled: true, source: "project" } as any, "/worktree");
+    await runtime.ensureServerReady(pi as any, { name: "proj", command: "proj-mcp", enabled: true, source: "project" } as any, "/worktree");
 
     expect(loadScopedMcpCacheMock).toHaveBeenCalledWith("project", "/worktree");
     expect(mockConnect).not.toHaveBeenCalled();
     expect(pi.registerTool).toHaveBeenCalledWith(expect.objectContaining({ name: "proj_explore" }));
   });
 
+  it("disconnects a failed cache-miss connection", async () => {
+    const { runtime } = makeMcpModule();
+    loadScopedMcpCacheMock.mockReset();
+    loadScopedMcpCacheMock.mockReturnValue(null);
+    mockConnect.mockReset();
+    mockDisconnect.mockReset();
+    mockConnect.mockRejectedValue(new Error("list tools failed"));
+    mockDisconnect.mockResolvedValue(undefined);
+
+    await runtime.ensureServerReady(
+      { registerTool: vi.fn() } as any,
+      { name: "proj", command: "proj-mcp", enabled: true, source: "project" } as any,
+      "/worktree",
+    );
+
+    expect(mockDisconnect).toHaveBeenCalledTimes(1);
+  });
+
   it("writes back to the matching project cache on cache miss", async () => {
+    const { runtime } = makeMcpModule();
     loadScopedMcpCacheMock.mockReset();
     loadScopedMcpCacheMock.mockReturnValue(null);
     updateServerCacheMock.mockReset();
@@ -195,7 +220,7 @@ describe("ensureMcpServerReady cache scope", () => {
       this.tools = [{ name: "explore", description: "Explore", inputSchema: { type: "object" } }];
     });
 
-    await ensureMcpServerReady({ registerTool: vi.fn() } as any, { name: "proj", command: "proj-mcp", enabled: true, source: "project" } as any, "/worktree");
+    await runtime.ensureServerReady({ registerTool: vi.fn() } as any, { name: "proj", command: "proj-mcp", enabled: true, source: "project" } as any, "/worktree");
 
     expect(updateServerCacheMock).toHaveBeenCalledWith(
       "proj",
@@ -206,15 +231,16 @@ describe("ensureMcpServerReady cache scope", () => {
   });
 });
 
-describe("updateConfigEnabled (close-time cleanup)", () => {
+describe("setEnabled (close-time cleanup)", () => {
   // Regression: previously, disabling a server only flipped the UI state
   // to "disabled" but left the live McpConnection in activeConnections.
-  // On /reload, teardownMcp() would then have to disconnect that server.
+  // On /reload, teardown() would then have to disconnect that server.
   // If conn.disconnect() hangs (same root cause as the connect hang),
-  // the Promise.all in teardownMcp never resolves, session_shutdown
+  // the Promise.all in teardown never resolves, session_shutdown
   // never returns, and /reload appears stuck. The fix: close the
-  // connection eagerly at toggle time, so teardownMcp has nothing to do.
+  // connection eagerly at toggle time, so teardown has nothing to do.
   it("disables: disconnects and drops the McpConnection immediately", async () => {
+    const { runtime, mod } = makeMcpModule();
     mockConnect.mockReset();
     mockDisconnect.mockReset();
     mockConnect.mockImplementation(async function (this: any) {
@@ -225,54 +251,61 @@ describe("updateConfigEnabled (close-time cleanup)", () => {
     });
 
     // First, do a session_start so test1 gets a live connection.
-    const start = mcpModule.hooks.session_start![0]!;
+    const start = mod.hooks.session_start![0]!;
     await start({} as any, { cwd: "/tmp" } as any, {} as any);
     await new Promise((r) => setTimeout(r, 50));
 
     // Sanity: test1 is connected, and has an active connection.
-    expect(getMcpStatus().find((s) => s.name === "test1")!.state).toBe("connected");
-    expect(getActiveMcpConnections().find((c) => c.serverName === "test1")).toBeDefined();
+    expect(runtime.getStatus().find((s) => s.name === "test1")!.state).toBe("connected");
+    expect(runtime.findConnection("test1")).toBeDefined();
 
     // Now disable it. Connection must be torn down eagerly.
-    await updateConfigEnabled("test1", false);
+    await runtime.setEnabled("test1", false);
 
     // State flipped, conn dropped, disconnect was called.
-    expect(getMcpStatus().find((s) => s.name === "test1")!.state).toBe("disabled");
-    expect(getActiveMcpConnections().find((c) => c.serverName === "test1")).toBeUndefined();
+    expect(runtime.getStatus().find((s) => s.name === "test1")!.state).toBe("disabled");
+    expect(runtime.findConnection("test1")).toBeUndefined();
     expect(disconnected.has("test1")).toBe(true);
   });
 
   it("re-enables: state flips to waiting reload (needs /reload to take effect)", async () => {
-    await updateConfigEnabled("test1", true);
+    const { runtime, mod } = makeMcpModule();
+    // Run session_start so the runtime has configs loaded.
+    const start = mod.hooks.session_start![0]!;
+    await start({} as any, { cwd: "/tmp" } as any, {} as any);
+    await new Promise((r) => setTimeout(r, 50));
+
+    await runtime.setEnabled("test1", true);
     // Tools aren't registered until the next session_start, so the UI
     // shows waiting reload — the user must /reload to actually connect.
-    expect(getMcpStatus().find((s) => s.name === "test1")!.state).toBe("waiting reload");
+    expect(runtime.getStatus().find((s) => s.name === "test1")!.state).toBe("waiting reload");
   });
 });
 
-describe("connectAll vs refreshServerCache (concurrency)", () => {
+describe("connectAll vs refresh (concurrency)", () => {
   // Regression: in the user's environment, /reload and session_start
   // initial connectAll would hang all servers on "connecting" forever.
-  // Pressing 'r' (refreshServerCache) on the same server would connect
+  // Pressing 'r' (refresh) on the same server would connect
   // fine. The only meaningful difference between the two paths is that
   // connectAll fans out into Promise.all([...]) over multiple servers,
-  // while refreshServerCache runs a single conn.connect().
+  // while refresh runs a single conn.connect().
   //
   // This test reproduces that: mockConnect succeeds on the first call
   // per McpConnection instance but only when not invoked in the same
   // microtask burst as another connect. (In the real bug, the SDK
   // fetch is sensitive to concurrent DNS / connection-pool state.)
   it("refresh of a single server works even after connectAll hung", async () => {
+    const { runtime, mod } = makeMcpModule();
     mockConnect.mockReset();
     // Make every connect hang forever.
     mockConnect.mockReturnValue(new Promise(() => {}));
 
-    const start = mcpModule.hooks.session_start![0]!;
+    const start = mod.hooks.session_start![0]!;
     await start({} as any, { cwd: "/tmp" } as any, {} as any);
 
     // After connectAll's fan-out, all servers are "connecting".
     await new Promise((r) => setTimeout(r, 50));
-    for (const s of getMcpStatus()) {
+    for (const s of runtime.getStatus()) {
       expect(s.state).toBe("connecting");
     }
 
@@ -282,10 +315,10 @@ describe("connectAll vs refreshServerCache (concurrency)", () => {
       this.tools = [{ name: "tool_a", description: "A", inputSchema: {} }];
     });
 
-    // refreshServerCache (single, non-fanned-out) succeeds.
-    const result = await refreshServerCache("test1", undefined as any);
+    // refresh (single, non-fanned-out) succeeds.
+    const result = await runtime.refresh("test1", undefined as any);
     expect(result.ok).toBe(true);
-    expect(getMcpStatus().find((s) => s.name === "test1")!.state).toBe("connected");
+    expect(runtime.getStatus().find((s) => s.name === "test1")!.state).toBe("connected");
   }, 10_000);
 });
 
@@ -298,6 +331,7 @@ describe("connectAll vs refreshServerCache (concurrency)", () => {
 // crash pi as an uncaughtException.
 describe("mcpModule session_start — stale ctx in background connectAll", () => {
   it("does not throw uncaught when ctx goes stale before .then runs", async () => {
+    const { runtime, mod } = makeMcpModule();
     // Cache has an old tool list for test1; the new connection returns a
     // different list → schemaChanges.length > 0 → the .then body runs.
     vi.mocked(loadMcpCache).mockReturnValueOnce({
@@ -335,7 +369,7 @@ describe("mcpModule session_start — stale ctx in background connectAll", () =>
     process.on("unhandledRejection", onUnhandled);
 
     try {
-      const handler = mcpModule.hooks.session_start![0]!;
+      const handler = mod.hooks.session_start![0]!;
       await handler({} as any, staleCtx as any, {} as any);
 
       // Session replacement happens here: the synchronous part of
@@ -351,6 +385,8 @@ describe("mcpModule session_start — stale ctx in background connectAll", () =>
       // assertActive throw would surface as an unhandled rejection and
       // crash pi (the original bug).
       expect(unhandled).toEqual([]);
+      // Verify the runtime is functional and the connect succeeded.
+      expect(runtime.getStatus().find((s) => s.name === "test1")!.state).toBe("connected");
     } finally {
       process.off("unhandledRejection", onUnhandled);
     }
@@ -358,6 +394,116 @@ describe("mcpModule session_start — stale ctx in background connectAll", () =>
 });
 
 describe("McpRuntime generation cancellation", () => {
+  async function connectRuntime(runtime: McpRuntime, cwd = "/old") {
+    mockConnect.mockReset();
+    mockDisconnect.mockReset();
+    mockConnect.mockImplementation(async function (this: any) {
+      this.tools = [{ name: "tool", description: "", inputSchema: {} }];
+    });
+    await runtime.startSession(cwd);
+    await runtime.connectAll(runtime.getConfigs(), undefined);
+  }
+
+  it("a stale overlapping startSession cannot overwrite the newer cwd", async () => {
+    const runtime = new McpRuntime();
+    await connectRuntime(runtime);
+
+    let releaseDisconnect!: () => void;
+    let firstDisconnect = true;
+    mockDisconnect.mockImplementation(() => {
+      if (!firstDisconnect) return Promise.resolve();
+      firstDisconnect = false;
+      return new Promise<void>((resolve) => { releaseDisconnect = resolve; });
+    });
+
+    const staleStart = runtime.startSession("/stale");
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(await runtime.startSession("/current")).toBe(true);
+
+    releaseDisconnect();
+    expect(await staleStart).toBe(false);
+    expect(runtime.getCwd()).toBe("/current");
+  });
+
+  it("stale refresh cannot remove a new session's same-name connection", async () => {
+    const runtime = new McpRuntime();
+    await connectRuntime(runtime);
+
+    let releaseDisconnect!: () => void;
+    let firstDisconnect = true;
+    mockDisconnect.mockImplementation(() => {
+      if (!firstDisconnect) return Promise.resolve();
+      firstDisconnect = false;
+      return new Promise<void>((resolve) => { releaseDisconnect = resolve; });
+    });
+
+    const staleRefresh = runtime.refresh("test1", undefined);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await runtime.startSession("/new");
+    await runtime.connectAll(runtime.getConfigs(), undefined);
+    const newConnection = runtime.findConnection("test1");
+
+    releaseDisconnect();
+    expect(await staleRefresh).toEqual({ ok: false, error: "Session replaced" });
+    expect(runtime.findConnection("test1")).toBe(newConnection);
+    expect(runtime.getStatus().find((s) => s.name === "test1")!.state).toBe("connected");
+  });
+
+  it("stale disable cannot remove or overwrite a new session's connection", async () => {
+    const runtime = new McpRuntime();
+    await connectRuntime(runtime);
+
+    let releaseDisconnect!: () => void;
+    let firstDisconnect = true;
+    mockDisconnect.mockImplementation(() => {
+      if (!firstDisconnect) return Promise.resolve();
+      firstDisconnect = false;
+      return new Promise<void>((resolve) => { releaseDisconnect = resolve; });
+    });
+
+    const staleDisable = runtime.setEnabled("test1", false);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await runtime.startSession("/new");
+    await runtime.connectAll(runtime.getConfigs(), undefined);
+    const newConnection = runtime.findConnection("test1");
+
+    releaseDisconnect();
+    await staleDisable;
+    expect(runtime.findConnection("test1")).toBe(newConnection);
+    expect(runtime.getStatus().find((s) => s.name === "test1")!.state).toBe("connected");
+  });
+
+  it("disconnects a connection whose connect attempt rejects", async () => {
+    const runtime = new McpRuntime();
+    await runtime.startSession("/tmp");
+    mockConnect.mockReset();
+    mockDisconnect.mockReset();
+    mockConnect.mockRejectedValue(new Error("list tools failed"));
+    mockDisconnect.mockResolvedValue(undefined);
+
+    await runtime.connectAll(runtime.getConfigs(), undefined);
+
+    expect(mockDisconnect).toHaveBeenCalled();
+    expect(runtime.getStatus().find((s) => s.name === "test1")!.state).toBe("failed");
+  });
+
+  it("teardown stops waiting after the disconnect timeout", async () => {
+    const runtime = new McpRuntime();
+    await connectRuntime(runtime);
+    mockDisconnect.mockReset();
+    mockDisconnect.mockReturnValue(new Promise(() => {}));
+
+    vi.useFakeTimers();
+    try {
+      const teardown = runtime.teardown();
+      await vi.advanceTimersByTimeAsync(5_000);
+      await expect(teardown).resolves.toBeUndefined();
+      expect(runtime.getStatus()).toEqual([]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   // When /reload fires session_start while an old connectAll is still
   // awaiting conn.connect(), the old promise must not pollute the new
   // session's state once it resolves. Generation cancellation makes the

@@ -69,28 +69,44 @@ export class McpRuntime implements McpStatusService, McpConnectionLookup {
 
   // ─── session lifecycle ────────────────────────────────────────────────
 
-  /** Start a new session: tear down the old state, bump generation so
-   *  any in-flight connectAll/refresh/ensureReady from the previous
-   *  session aborts itself, then install the new cwd + configs. */
-  async startSession(cwd: string): Promise<void> {
-    await this.teardown();
-    this.cwd = cwd;
-    this.configs = resolveMcpConfigs(cwd).sort((a, b) => a.name.localeCompare(b.name));
-    this.generation += 1;
-  }
-
-  async teardown(): Promise<void> {
-    this.generation += 1; // invalidate in-flight work
+  private resetState(): McpConnection[] {
     const conns = this.activeConnections;
     this.activeConnections = [];
     this.serverStatuses.clear();
     this.configs = [];
     this.cwd = "";
-    await Promise.all(
-      conns.map(async (conn) => {
-        try { await conn.disconnect(); } catch { /* ignore */ }
-      }),
-    );
+    return conns;
+  }
+
+  private async disconnectConnection(conn: McpConnection): Promise<void> {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timeout = new Promise<void>((resolve) => {
+      timer = setTimeout(resolve, 5_000);
+    });
+    const disconnect = Promise.resolve()
+      .then(() => conn.disconnect())
+      .catch(() => undefined);
+    await Promise.race([disconnect, timeout]);
+    if (timer) clearTimeout(timer);
+  }
+
+  /** Start a new session. Returns false when a newer lifecycle operation wins
+   *  while old connections are closing, so the stale session_start handler can
+   *  stop before using the new session's runtime state with its old context. */
+  async startSession(cwd: string): Promise<boolean> {
+    const gen = ++this.generation;
+    const conns = this.resetState();
+    await Promise.all(conns.map((conn) => this.disconnectConnection(conn)));
+    if (!this.isCurrent(gen)) return false;
+    this.cwd = cwd;
+    this.configs = resolveMcpConfigs(cwd).sort((a, b) => a.name.localeCompare(b.name));
+    return true;
+  }
+
+  async teardown(): Promise<void> {
+    this.generation += 1; // invalidate in-flight work before awaiting cleanup
+    const conns = this.resetState();
+    await Promise.all(conns.map((conn) => this.disconnectConnection(conn)));
   }
 
   private isCurrent(gen: number): boolean {
@@ -240,18 +256,18 @@ export class McpRuntime implements McpStatusService, McpConnectionLookup {
         // Session replaced while we were awaiting connect. Discard the
         // result so we don't pollute the new session's state.
         if (!this.isCurrent(gen)) {
-          try { await conn.disconnect(); } catch { /* ignore */ }
+          await this.disconnectConnection(conn);
           return { schemaChanges, hasNewServer };
         }
         if (watchdogFired) {
-          try { await conn.disconnect(); } catch { /* ignore */ }
+          await this.disconnectConnection(conn);
           return { schemaChanges, hasNewServer };
         }
         if (conn.tools.length === 0) {
           // Server connected but advertises no tools. Treat this as a
           // failed state and do NOT write an empty cache, otherwise a
           // subsequent /reload will keep using the empty cache forever.
-          try { await conn.disconnect(); } catch { /* ignore */ }
+          await this.disconnectConnection(conn);
           this.markFailed(server, "Server connected but returned no tools (e.g. codegraph without a .codegraph index)");
           continue;
         }
@@ -278,6 +294,7 @@ export class McpRuntime implements McpStatusService, McpConnectionLookup {
         this.markConnected(server, tools);
         updateServerCache(server.name, { tools, cachedAt: Date.now() }, cacheScopeForSource(server.source), this.cwd || undefined);
       } catch (err) {
+        await this.disconnectConnection(conn);
         if (watchdogFired) return { schemaChanges, hasNewServer };
         if (!this.isCurrent(gen)) return { schemaChanges, hasNewServer };
         const msg = err instanceof Error ? err.message : String(err);
@@ -311,19 +328,20 @@ export class McpRuntime implements McpStatusService, McpConnectionLookup {
     }
     const existing = this.activeConnections.find(c => c.serverName === name);
     if (existing) {
-      try { await existing.disconnect(); } catch { /* ignore */ }
-      this.activeConnections = this.activeConnections.filter(c => c.serverName !== name);
+      await this.disconnectConnection(existing);
+      if (!this.isCurrent(gen)) return { ok: false, error: "Session replaced" };
+      this.activeConnections = this.activeConnections.filter(c => c !== existing);
     }
     const conn = new McpConnection(config.name, config);
     conn.source = config.source;
     try {
       await conn.connect(30_000);
       if (!this.isCurrent(gen)) {
-        try { await conn.disconnect(); } catch { /* ignore */ }
+        await this.disconnectConnection(conn);
         return { ok: false, error: "Session replaced" };
       }
       if (conn.tools.length === 0) {
-        try { await conn.disconnect(); } catch { /* ignore */ }
+        await this.disconnectConnection(conn);
         const error = "Server connected but returned no tools (e.g. codegraph without a .codegraph index)";
         this.markFailed(config, error);
         return { ok: false, error };
@@ -334,6 +352,7 @@ export class McpRuntime implements McpStatusService, McpConnectionLookup {
       updateServerCache(config.name, { tools, cachedAt: Date.now() }, cacheScopeForSource(config.source), this.cwd || undefined);
       return { ok: true };
     } catch (err) {
+      await this.disconnectConnection(conn);
       if (!this.isCurrent(gen)) return { ok: false, error: "Session replaced" };
       const msg = err instanceof Error ? err.message : String(err);
       this.markFailed(config, msg);
@@ -345,6 +364,7 @@ export class McpRuntime implements McpStatusService, McpConnectionLookup {
    *  live connection eagerly so teardown() on /reload doesn't hang on a
    *  zombie conn. */
   async setEnabled(name: string, enabled: boolean): Promise<void> {
+    const gen = this.generation;
     const config = this.configs.find(c => c.name === name);
     if (config) config.enabled = enabled;
 
@@ -353,11 +373,12 @@ export class McpRuntime implements McpStatusService, McpConnectionLookup {
       // /reload doesn't have to deal with a zombie conn.
       const conn = this.activeConnections.find(c => c.serverName === name);
       if (conn) {
-        try { await conn.disconnect(); } catch { /* ignore */ }
-        this.activeConnections = this.activeConnections.filter(c => c.serverName !== name);
+        await this.disconnectConnection(conn);
+        if (!this.isCurrent(gen)) return;
+        this.activeConnections = this.activeConnections.filter(c => c !== conn);
       }
       // Mark the server as disabled (or add it if absent).
-      this.markState(name, "disabled", config ?? undefined);
+      if (this.isCurrent(gen)) this.markState(name, "disabled", config ?? undefined);
       return;
     }
 
@@ -409,13 +430,13 @@ export class McpRuntime implements McpStatusService, McpConnectionLookup {
       if (!this.isCurrent(gen)) {
         // Session replaced while awaiting connect. Don't register tools
         // or mutate state — the new session owns both.
-        try { await conn.disconnect(); } catch { /* ignore */ }
+        await this.disconnectConnection(conn);
         return;
       }
       if (conn.tools.length === 0) {
         // Empty tool list means the server is not useful. Disconnect and
         // leave cache untouched so the next /reload retries the connection.
-        try { await conn.disconnect(); } catch { /* ignore */ }
+        await this.disconnectConnection(conn);
         this.markFailed(config, "Server connected but returned no tools (e.g. codegraph without a .codegraph index)");
         return;
       }
@@ -433,6 +454,7 @@ export class McpRuntime implements McpStatusService, McpConnectionLookup {
         } catch { /* duplicate name */ }
       }
     } catch (err) {
+      await this.disconnectConnection(conn);
       if (!this.isCurrent(gen)) return;
       const msg = err instanceof Error ? err.message : String(err);
       this.markFailed(config, `No cache and initial connect failed: ${msg}`);
@@ -449,7 +471,7 @@ export function createMcpModule(runtime: McpRuntime): Module {
     hooks: {
       session_start: [
         async (_event, ctx) => {
-          await runtime.startSession(ctx.cwd);
+          if (!await runtime.startSession(ctx.cwd)) return;
           const configs = runtime.getConfigs();
           if (configs.length === 0) return;
           cleanupStaleCache(configs, runtime.getCwd());
@@ -485,49 +507,4 @@ export function createMcpModule(runtime: McpRuntime): Module {
       ],
     },
   };
-}
-
-// ─── Module-level default runtime + thin-wrapper exports ─────────────────
-//
-// These keep tools/mcp/index.ts, commands/mcp-status.ts, and index.ts
-// working without injection plumbing. They all delegate to a single
-// module-level McpRuntime instance. Tests that need isolation create
-// their own instance and call its methods directly.
-
-const defaultRuntime = new McpRuntime();
-
-export function getMcpStatus(): ServerStatus[] {
-  return defaultRuntime.getStatus();
-}
-
-export async function refreshServerCache(serverName: string, registry: any): Promise<{ ok: boolean; error?: string }> {
-  return defaultRuntime.refresh(serverName, registry);
-}
-
-export async function updateConfigEnabled(serverName: string, enabled: boolean): Promise<void> {
-  return defaultRuntime.setEnabled(serverName, enabled);
-}
-
-export function getActiveMcpConnections(): McpConnection[] {
-  // Return a snapshot so callers can't mutate internal state directly.
-  return [...defaultRuntime["activeConnections"]];
-}
-
-export function getCachedMcpConfigs(): McpServerConfig[] {
-  return defaultRuntime.getConfigs();
-}
-
-export async function ensureMcpServerReady(pi: ExtensionAPI, config: McpServerConfig, cwd?: string): Promise<void> {
-  return defaultRuntime.ensureServerReady(pi, config, cwd);
-}
-
-export async function teardownMcp(): Promise<void> {
-  return defaultRuntime.teardown();
-}
-
-/** @deprecated Use createMcpModule(runtime) for state isolation. */
-export const mcpModule: Module = createMcpModule(defaultRuntime);
-
-export function setupMcp(sk: Skeleton, _pi: ExtensionAPI): void {
-  sk.register(mcpModule);
 }

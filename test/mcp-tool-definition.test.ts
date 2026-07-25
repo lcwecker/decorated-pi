@@ -245,7 +245,8 @@ describe("registerMcpToolsFromCache", () => {
     const configs = [
       { name: "exa", url: "x", enabled: true, source: "builtin" as const },
     ];
-    registerMcpToolsFromCache(pi as any, cache, configs);
+    const connections = { findConnection: () => undefined };
+    registerMcpToolsFromCache(pi as any, cache, configs, connections as any);
     expect(pi.registerTool).toHaveBeenCalledTimes(2);
     expect(pi.registerTool.mock.calls[0][0].name).toBe("exa_web_search");
     expect(pi.registerTool.mock.calls[1][0].name).toBe("exa_fetch");
@@ -263,7 +264,8 @@ describe("registerMcpToolsFromCache", () => {
     const configs = [
       { name: "exa", url: "x", enabled: false, source: "builtin" as const },
     ];
-    registerMcpToolsFromCache(pi as any, cache, configs);
+    const connections = { findConnection: () => undefined };
+    registerMcpToolsFromCache(pi as any, cache, configs, connections as any);
     expect(pi.registerTool).not.toHaveBeenCalled();
   });
 
@@ -274,7 +276,8 @@ describe("registerMcpToolsFromCache", () => {
     const configs = [
       { name: "missing", url: "x", enabled: true, source: "builtin" as const },
     ];
-    registerMcpToolsFromCache(pi as any, cache, configs);
+    const connections = { findConnection: () => undefined };
+    registerMcpToolsFromCache(pi as any, cache, configs, connections as any);
     expect(pi.registerTool).not.toHaveBeenCalled();
   });
 
@@ -288,7 +291,8 @@ describe("registerMcpToolsFromCache", () => {
     const configs = [
       { name: "exa", url: "x", enabled: true, source: "builtin" as const },
     ];
-    registerMcpToolsFromCache(pi as any, cache, configs);
+    const connections = { findConnection: () => undefined };
+    registerMcpToolsFromCache(pi as any, cache, configs, connections as any);
     expect(pi.registerTool).not.toHaveBeenCalled();
   });
 
@@ -307,7 +311,8 @@ describe("registerMcpToolsFromCache", () => {
       { name: "exa", url: "x", enabled: true, source: "builtin" as const },
     ];
     // Should not throw
-    expect(() => registerMcpToolsFromCache(pi as any, cache, configs)).not.toThrow();
+    const connections = { findConnection: () => undefined };
+    expect(() => registerMcpToolsFromCache(pi as any, cache, configs, connections as any)).not.toThrow();
   });
 });
 
@@ -333,7 +338,8 @@ describe("registerMcpTools", () => {
 
     const { registerMcpTools } = await import("../tools/mcp/index.js");
     const pi = { registerTool: vi.fn() };
-    registerMcpTools(pi as any, tmpRoot);
+    const connections = { findConnection: () => undefined };
+    registerMcpTools(pi as any, tmpRoot, connections as any);
 
     expect(pi.registerTool).toHaveBeenCalledTimes(1);
     expect(pi.registerTool.mock.calls[0][0].name).toBe("exa_web_search");
@@ -356,7 +362,8 @@ describe("registerMcpTools", () => {
 
     const { registerMcpTools } = await import("../tools/mcp/index.js");
     const pi = { registerTool: vi.fn() };
-    registerMcpTools(pi as any, tmpRoot);
+    const connections = { findConnection: () => undefined };
+    registerMcpTools(pi as any, tmpRoot, connections as any);
 
     expect(pi.registerTool).not.toHaveBeenCalled();
 
@@ -381,7 +388,8 @@ describe("registerMcpTools", () => {
 
     const { registerMcpTools } = await import("../tools/mcp/index.js");
     const pi = { registerTool: vi.fn() };
-    registerMcpTools(pi as any, tmpRoot);
+    const connections = { findConnection: () => undefined };
+    registerMcpTools(pi as any, tmpRoot, connections as any);
 
     expect(pi.registerTool).not.toHaveBeenCalled();
 

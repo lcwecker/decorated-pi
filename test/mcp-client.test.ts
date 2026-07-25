@@ -205,6 +205,7 @@ describe("McpConnection — connect()", () => {
     client.connect.mockReturnValueOnce(new Promise(() => {}));
     await expect(conn.connect(50)).rejects.toThrow(/timed out after 50ms/);
     expect(conn.connected).toBe(false);
+    expect(client.close).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -305,10 +306,26 @@ describe("McpConnection — callTool()", () => {
 // ─── disconnect() ─────────────────────────────────────────────────────────
 
 describe("McpConnection — disconnect()", () => {
-  it("is a no-op when not connected", async () => {
+  it("is a no-op before a transport is created", async () => {
     const conn = new McpConnection("nc-disc", baseConfig({ command: "bin" }));
     await conn.disconnect();
     expect(mockClientInstances[0].close).not.toHaveBeenCalled();
+  });
+
+  it("closes a transport even when connect has not completed", async () => {
+    const conn = new McpConnection("pending-disc", baseConfig({ command: "bin" }));
+    const client = mockClientInstances[mockClientInstances.length - 1];
+    let releaseConnect!: () => void;
+    client.connect.mockReturnValueOnce(new Promise<void>((resolve) => { releaseConnect = resolve; }));
+
+    const connecting = conn.connect(1_000);
+    await Promise.resolve();
+    await conn.disconnect();
+    releaseConnect();
+
+    await expect(connecting).rejects.toThrow(/cancelled/);
+    expect(client.close).toHaveBeenCalledTimes(1);
+    expect(conn.connected).toBe(false);
   });
 
   it("calls client.close() once when connected", async () => {

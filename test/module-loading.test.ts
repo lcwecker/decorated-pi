@@ -224,7 +224,7 @@ describe("index.ts — conditional loading structure (new architecture)", () => 
   });
 
   it("gates /mcp command behind isModuleEnabled(mcp)", () => {
-    expect(indexSrc).toMatch(/if\s*\(\s*isModuleEnabled\(["']mcp["']\)\s*\)[\s\S]*?registerMcpStatusCommand\(pi\)/);
+    expect(indexSrc).toMatch(/if\s*\(\s*isModuleEnabled\(["']mcp["']\)\s*\)[\s\S]*?registerMcpStatusCommand\(pi,/);
   });
 
   it("imports isModuleEnabled from settings", () => {

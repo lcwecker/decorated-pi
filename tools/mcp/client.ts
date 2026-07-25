@@ -17,6 +17,8 @@ export class McpConnection {
   transport: StreamableHTTPClientTransport | SSEClientTransport | StdioClientTransport | undefined;
   tools: McpToolSpec[] = [];
   connected = false;
+  private disposed = false;
+  private closePromise: Promise<void> | null = null;
 
   source: string = "unknown";
 
@@ -40,20 +42,22 @@ export class McpConnection {
           env: this.config.env,
           stderr: "ignore",
         });
-        await this.client.connect(transport);
         this.transport = transport;
+        await this.client.connect(transport);
+        if (this.disposed) throw new Error(`MCP ${this.serverName}: connection cancelled`);
         this.connected = true;
       } else if (this.config.url) {
         // HTTP or SSE transport — determined by URL path
         if (isSseUrl(this.config.url)) {
           const transport = new SSEClientTransport(new URL(this.config.url));
-          await this.client.connect(transport);
           this.transport = transport;
+          await this.client.connect(transport);
         } else {
           const transport = new StreamableHTTPClientTransport(new URL(this.config.url));
-          await this.client.connect(transport);
           this.transport = transport;
+          await this.client.connect(transport);
         }
+        if (this.disposed) throw new Error(`MCP ${this.serverName}: connection cancelled`);
         this.connected = true;
       } else {
         throw new Error(`MCP ${this.serverName}: no url or command configured`);
@@ -67,6 +71,7 @@ export class McpConnection {
         }>;
       };
 
+      if (this.disposed) throw new Error(`MCP ${this.serverName}: connection cancelled`);
       this.tools = (result.tools ?? []).map((t) => ({
         name: t.name,
         description: t.description || "",
@@ -74,11 +79,22 @@ export class McpConnection {
       }));
     };
 
-    const timeout = new Promise<never>((_, reject) =>
-      setTimeout(() => reject(new Error(`MCP ${this.serverName}: connection timed out after ${timeoutMs}ms`)), timeoutMs),
-    );
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timeout = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(new Error(`MCP ${this.serverName}: connection timed out after ${timeoutMs}ms`)), timeoutMs);
+    });
 
-    await Promise.race([connectAndListTools(), timeout]);
+    try {
+      await Promise.race([connectAndListTools(), timeout]);
+    } catch (error) {
+      // Start cleanup, but don't await SDK close here: close() can hang for
+      // the same transport-level reasons as connect(). Runtime teardown has
+      // its own bounded wait and disconnect() is idempotent.
+      void this.disconnect();
+      throw error;
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
   }
 
   async callTool(name: string, args: Record<string, unknown>): Promise<string> {
@@ -106,10 +122,12 @@ export class McpConnection {
   }
 
   async disconnect(): Promise<void> {
-    if (!this.connected) return;
+    this.disposed = true;
     this.connected = false;
-    try {
-      await this.client.close();
-    } catch {}
+    if (!this.transport) return;
+    this.closePromise ??= (async () => {
+      try { await this.client.close(); } catch { /* ignore */ }
+    })();
+    await this.closePromise;
   }
 }
