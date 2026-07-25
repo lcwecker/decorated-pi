@@ -91,11 +91,16 @@ import { join } from "node:path";
 function makeCtxWith(cwd: string) {
   const widgetUpdates: Array<{ key: string; content: any; options?: any }> = [];
   let providerFactory: ((orig: any) => any) | null = null;
+  let terminalInputHandler: ((data: string) => any) | null = null;
 
   const ctx: any = {
     cwd,
     ui: {
       addAutocompleteProvider: (f: any) => { providerFactory = f; },
+      onTerminalInput: (handler: (data: string) => any) => {
+        terminalInputHandler = handler;
+        return () => { terminalInputHandler = null; };
+      },
       setWidget: (key: string, content: any, options?: any) => {
         widgetUpdates.push({ key, content, options });
       },
@@ -104,6 +109,7 @@ function makeCtxWith(cwd: string) {
   return {
     ctx,
     getFactory: () => providerFactory,
+    sendTerminalInput: (data: string) => terminalInputHandler?.(data),
     widgetUpdates,
   };
 }
@@ -451,6 +457,81 @@ describe("autocomplete provider (integration with real FFF)", () => {
     );
 
     expect(result).toEqual({ items: [], prefix: "" });
+  }, 15000);
+
+  it("clears the footer widget when autocomplete is cancelled with Escape", async () => {
+    tmp = mkdtempSync(join(tmpdir(), "smart-at-"));
+    writeFileSync(join(tmp, "alpha.txt"), "");
+
+    const { ctx, getFactory, sendTerminalInput, widgetUpdates } = makeCtxWith(tmp);
+    const startHook = mod.hooks!.session_start![0] as any;
+    await startHook({ type: "session_start" }, ctx);
+
+    const provider = getFactory()!(origStub);
+    await new Promise((r) => setTimeout(r, 200));
+    const result = await provider.getSuggestions(
+      ["@alpha"],
+      0,
+      6,
+      { signal: new AbortController().signal },
+    );
+
+    expect(result).not.toBeNull();
+    expect(widgetUpdates.at(-1)?.content).toEqual([
+      "\x1b[2mpowered by fff\x1b[0m",
+    ]);
+
+    sendTerminalInput("\x1b");
+
+    expect(widgetUpdates.at(-1)).toMatchObject({
+      key: "smart-at",
+      content: undefined,
+    });
+  }, 15000);
+
+  it("does not clear a scanning widget that replaced the footer", async () => {
+    tmp = mkdtempSync(join(tmpdir(), "smart-at-"));
+    writeFileSync(join(tmp, "alpha.txt"), "");
+
+    const { ctx, getFactory, sendTerminalInput, widgetUpdates } = makeCtxWith(tmp);
+    const startHook = mod.hooks!.session_start![0] as any;
+    await startHook({ type: "session_start" }, ctx);
+
+    const provider = getFactory()!(origStub);
+    await new Promise((r) => setTimeout(r, 200));
+    expect(await provider.getSuggestions(
+      ["@alpha"],
+      0,
+      6,
+      { signal: new AbortController().signal },
+    )).not.toBeNull();
+
+    const fffMod = await import("@ff-labs/fff-node");
+    const origMixedSearch = fffMod.FileFinder.prototype.mixedSearch;
+    const origIsScanning = fffMod.FileFinder.prototype.isScanning;
+    fffMod.FileFinder.prototype.mixedSearch = () =>
+      ({ ok: true, value: { items: [], scores: [], totalMatched: 0, totalFiles: 0, totalDirs: 0 } }) as any;
+    fffMod.FileFinder.prototype.isScanning = () => true;
+
+    try {
+      expect(await provider.getSuggestions(
+        ["@next"],
+        0,
+        5,
+        { signal: new AbortController().signal },
+      )).toBeNull();
+      expect(widgetUpdates.at(-1)?.content).toEqual([
+        "⏳ scanning…  (indexing files, please wait)",
+      ]);
+
+      const updateCount = widgetUpdates.length;
+      sendTerminalInput("\x1b");
+
+      expect(widgetUpdates).toHaveLength(updateCount);
+    } finally {
+      fffMod.FileFinder.prototype.mixedSearch = origMixedSearch;
+      fffMod.FileFinder.prototype.isScanning = origIsScanning;
+    }
   }, 15000);
 
   it("applyCompletion delegates to orig and clears widget", async () => {

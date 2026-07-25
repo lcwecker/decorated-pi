@@ -21,6 +21,7 @@
 
 import { FileFinder, type MixedItem } from "@ff-labs/fff-node";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { matchesKey } from "@earendil-works/pi-tui";
 import type { Module } from "./skeleton.js";
 
 // Characters that, when preceding an "@", allow us to start a smart-at
@@ -84,12 +85,15 @@ export const __smartAtTest = { atPrefix, buildResult };
  *  share or leak FFF's native handle + LMDB mmap regions. */
 export function createSmartAtModule(): Module {
   let currentFinder: FileFinder | null = null;
+  let terminalInputUnsub: (() => void) | null = null;
 
   function disposeFinder() {
     if (currentFinder && !currentFinder.isDestroyed) {
       currentFinder.destroy();
     }
     currentFinder = null;
+    terminalInputUnsub?.();
+    terminalInputUnsub = null;
   }
 
   return {
@@ -121,6 +125,36 @@ export function createSmartAtModule(): Module {
           currentFinder = finder;
 
           let scanWidgetVisible = false;
+          let footerWidgetVisible = false;
+
+          function clearWidget() {
+            scanWidgetVisible = false;
+            footerWidgetVisible = false;
+            ctx.ui.setWidget("smart-at", undefined);
+          }
+
+          function showScanningWidget() {
+            scanWidgetVisible = true;
+            footerWidgetVisible = false;
+            ctx.ui.setWidget(
+              "smart-at",
+              ["⏳ scanning…  (indexing files, please wait)"],
+              { placement: "belowEditor" },
+            );
+          }
+
+          function showFooterWidget() {
+            scanWidgetVisible = false;
+            footerWidgetVisible = true;
+            ctx.ui.setWidget("smart-at", [WIDGET_FOOTER]);
+          }
+
+          terminalInputUnsub = ctx.ui.onTerminalInput((data) => {
+            if (footerWidgetVisible && matchesKey(data, "escape")) {
+              clearWidget();
+            }
+            return undefined;
+          });
 
           // Start the scan in the background. We don't wait for it here so
           // session_start returns immediately. If a scanning status was shown,
@@ -128,8 +162,7 @@ export function createSmartAtModule(): Module {
           // is triggered afterwards.
           void finder.waitForScan(60_000).then(() => {
             if (currentFinder === finder && !finder.isDestroyed && scanWidgetVisible) {
-              scanWidgetVisible = false;
-              ctx.ui.setWidget("smart-at", undefined);
+              clearWidget();
             }
           });
 
@@ -142,12 +175,12 @@ export function createSmartAtModule(): Module {
             ) => {
               const prefix = atPrefix((lines[cl] || "").slice(0, cc));
               if (!prefix) {
-                ctx.ui.setWidget("smart-at", undefined);
+                clearWidget();
                 return orig.getSuggestions(lines, cl, cc, opts);
               }
 
               if (currentFinder !== finder || finder.isDestroyed) {
-                ctx.ui.setWidget("smart-at", undefined);
+                clearWidget();
                 return orig.getSuggestions(lines, cl, cc, opts);
               }
 
@@ -162,7 +195,7 @@ export function createSmartAtModule(): Module {
                 pageSize: AUTOCOMPLETE_LIMIT,
               });
               if (!r.ok) {
-                ctx.ui.setWidget("smart-at", undefined);
+                clearWidget();
                 return null;
               }
 
@@ -174,27 +207,20 @@ export function createSmartAtModule(): Module {
               // 0 items just means "no match".
               if (r.value.items.length === 0) {
                 if (finder.isScanning()) {
-                  scanWidgetVisible = true;
-                  ctx.ui.setWidget(
-                    "smart-at",
-                    ["⏳ scanning…  (indexing files, please wait)"],
-                    { placement: "belowEditor" },
-                  );
+                  showScanningWidget();
                 } else {
-                  scanWidgetVisible = false;
-                  ctx.ui.setWidget("smart-at", undefined);
+                  clearWidget();
                 }
                 return null;
               }
 
               const result = buildResult(r.value.items, r.value.scores);
               if (!result) {
-                ctx.ui.setWidget("smart-at", undefined);
+                clearWidget();
                 return null;
               }
 
-              scanWidgetVisible = false;
-              ctx.ui.setWidget("smart-at", [WIDGET_FOOTER]);
+              showFooterWidget();
               return Promise.resolve({ ...result, prefix });
             },
             applyCompletion: (
@@ -204,8 +230,7 @@ export function createSmartAtModule(): Module {
               item: { value: string; label: string },
               prefix: string,
             ) => {
-              scanWidgetVisible = false;
-              ctx.ui.setWidget("smart-at", undefined);
+              clearWidget();
               return orig.applyCompletion(lines, cl, cc, item, prefix);
             },
             shouldTriggerFileCompletion:
