@@ -26,29 +26,55 @@ interface SessionLikeEntry {
   data?: unknown;
 }
 
-const readMarkers = new Map<string, number>();
+/** Owning tracker for read-time markers. One instance per extension load,
+ *  so reloads and parallel sessions cannot share or leak markers. */
+export class FileTimeTracker {
+  private readonly readMarkers = new Map<string, number>();
+
+  clear(): void {
+    this.readMarkers.clear();
+  }
+
+  record(absPath: string): void {
+    if (!fs.existsSync(absPath)) return;
+    this.readMarkers.set(absPath, fs.statSync(absPath).mtimeMs);
+  }
+
+  check(absPath: string, displayPath: string): string | undefined {
+    if (!fs.existsSync(absPath)) return undefined;
+    const lastRead = this.readMarkers.get(absPath);
+    if (lastRead === undefined) {
+      return `Please read the file with the read tool before editing. File not read yet: ${displayPath}.`;
+    }
+    const currentMtime = fs.statSync(absPath).mtimeMs;
+    if (currentMtime > lastRead) {
+      return `Please re-read the file with the read tool before editing. File modified since last read: ${displayPath}.`;
+    }
+    return undefined;
+  }
+
+  restore(entries: SessionLikeEntry[], cwd: string): void {
+    this.clear();
+    const start = lastCompactionIndex(entries) + 1;
+    for (const entry of entries.slice(start)) {
+      if (entry.type !== "custom" || entry.customType !== FILE_TIMES_CUSTOM_TYPE) continue;
+      if (!isFileTimeMarkerData(entry.data)) continue;
+      const absPath = resolveAbsolutePath(cwd, entry.data.path);
+      this.readMarkers.set(absPath, entry.data.mtimeMs);
+    }
+  }
+
+  toMarker(cwd: string, absPath: string): FileTimeMarkerData | undefined {
+    if (!fs.existsSync(absPath)) return undefined;
+    return { path: toStoredPath(cwd, absPath), mtimeMs: fs.statSync(absPath).mtimeMs };
+  }
+}
 
 function getFileMtime(absPath: string): number {
   return fs.statSync(absPath).mtimeMs;
 }
 
-export function recordReadTime(absPath: string): void {
-  if (!fs.existsSync(absPath)) return;
-  readMarkers.set(absPath, getFileMtime(absPath));
-}
-
-export function checkStaleFile(absPath: string, displayPath: string): string | undefined {
-  if (!fs.existsSync(absPath)) return undefined;
-  const lastRead = readMarkers.get(absPath);
-  if (lastRead === undefined) {
-    return `Please read the file with the read tool before editing. File not read yet: ${displayPath}.`;
-  }
-  const currentMtime = getFileMtime(absPath);
-  if (currentMtime > lastRead) {
-    return `Please re-read the file with the read tool before editing. File modified since last read: ${displayPath}.`;
-  }
-  return undefined;
-}
+// ─── Pure helpers (kept module-level — no state) ────────────────────────────
 
 function toStoredPath(cwd: string, absPath: string): string {
   const normalizedCwd = path.normalize(cwd);
@@ -71,56 +97,64 @@ function isFileTimeMarkerData(value: unknown): value is FileTimeMarkerData {
     && typeof (value as any).mtimeMs === "number";
 }
 
-export function createFileTimeMarkerData(cwd: string, absPath: string): FileTimeMarkerData | undefined {
-  if (!fs.existsSync(absPath)) return undefined;
-  return { path: toStoredPath(cwd, absPath), mtimeMs: getFileMtime(absPath) };
-}
-
-export function restoreReadMarkersFromBranch(entries: SessionLikeEntry[], cwd: string): void {
-  clearReadMarkers();
-  const start = lastCompactionIndex(entries) + 1;
-  for (const entry of entries.slice(start)) {
-    if (entry.type !== "custom" || entry.customType !== FILE_TIMES_CUSTOM_TYPE) continue;
-    if (!isFileTimeMarkerData(entry.data)) continue;
-    const absPath = resolveAbsolutePath(cwd, entry.data.path);
-    readMarkers.set(absPath, entry.data.mtimeMs);
-  }
-}
-
-export function clearReadMarkers(): void {
-  readMarkers.clear();
-}
-
 export function resolveAbsolutePath(cwd: string, filePath: string): string {
   if (path.isAbsolute(filePath)) return path.normalize(filePath);
   return path.normalize(path.resolve(cwd, filePath));
 }
 
+// Re-export for tests / external consumers that still build markers directly.
+export function createFileTimeMarkerData(cwd: string, absPath: string): FileTimeMarkerData | undefined {
+  if (!fs.existsSync(absPath)) return undefined;
+  return { path: toStoredPath(cwd, absPath), mtimeMs: getFileMtime(absPath) };
+}
+
+// ─── Module ───────────────────────────────────────────────────────────────
+
 const READ_WRITE_EDIT_PATCH = new Set(["read", "write", "edit", "patch"]);
 
-export const trackMtimeModule: Module = {
-  name: "track-mtime",
-  hooks: {
-    session_compact: [
-      () => clearReadMarkers(),
-    ],
-    tool_result: [
-      (event, ctx, pi) => {
-        if (!READ_WRITE_EDIT_PATCH.has(event.toolName)) return;
-        const filePath = (event.input as any)?.path;
-        if (typeof filePath !== "string" || !filePath.trim()) return;
-        // For read: always record. For write/edit/patch: only on success.
-        if (event.toolName !== "read" && event.isError) return;
-        const cwd: string = ctx.cwd ?? process.cwd();
-        const absPath = resolveAbsolutePath(cwd, filePath);
-        recordReadTime(absPath);
-        const marker = createFileTimeMarkerData(cwd, absPath);
-        if (marker) pi.appendEntry(FILE_TIMES_CUSTOM_TYPE, marker);
-      },
-    ],
-  },
-};
+export function createTrackMtimeModule(tracker: FileTimeTracker): Module {
+  return {
+    name: "track-mtime",
+    hooks: {
+      session_start: [
+        (_event, ctx) => {
+          tracker.restore(ctx.sessionManager.getBranch() as SessionLikeEntry[], ctx.cwd);
+        },
+      ],
+      session_compact: [
+        () => tracker.clear(),
+      ],
+      session_shutdown: [
+        () => tracker.clear(),
+      ],
+      tool_call: [
+        (event, ctx) => {
+          if (event.toolName !== "patch") return;
+          const filePath = (event.input as any)?.path;
+          if (typeof filePath !== "string" || !filePath.trim()) return;
+          const cwd: string = ctx.cwd ?? process.cwd();
+          const reason = tracker.check(resolveAbsolutePath(cwd, filePath), filePath);
+          if (reason) return { block: true, reason };
+        },
+      ],
+      tool_result: [
+        (event, ctx, pi) => {
+          if (!READ_WRITE_EDIT_PATCH.has(event.toolName)) return;
+          const filePath = (event.input as any)?.path;
+          if (typeof filePath !== "string" || !filePath.trim()) return;
+          // For read: always record. For write/edit/patch: only on success.
+          if (event.toolName !== "read" && event.isError) return;
+          const cwd: string = ctx.cwd ?? process.cwd();
+          const absPath = resolveAbsolutePath(cwd, filePath);
+          tracker.record(absPath);
+          const marker = tracker.toMarker(cwd, absPath);
+          if (marker) pi.appendEntry(FILE_TIMES_CUSTOM_TYPE, marker);
+        },
+      ],
+    },
+  };
+}
 
 export function setupTrackMtime(sk: Skeleton): void {
-  sk.register(trackMtimeModule);
+  sk.register(createTrackMtimeModule(new FileTimeTracker()));
 }

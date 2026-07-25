@@ -8,7 +8,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { __subdirAgentsTest } from "../hooks/inject-agents-md.js";
 
-const { restoreFromBranch, findNewAgents, isInsideSkillDir } = __subdirAgentsTest;
+const { createRuntime, restoreFromBranch, findNewAgents, isInsideSkillDir } = __subdirAgentsTest;
 
 describe("subdir-agents state restoration", () => {
   let tmpDir: string;
@@ -24,7 +24,8 @@ describe("subdir-agents state restoration", () => {
   });
 
   it("does not reload AGENTS already restored from branch custom state", () => {
-    restoreFromBranch({
+    const runtime = createRuntime();
+    restoreFromBranch(runtime, {
       cwd: tmpDir,
       sessionManager: {
         getBranch: () => [
@@ -33,12 +34,13 @@ describe("subdir-agents state restoration", () => {
       },
     });
 
-    const agents = findNewAgents("pkg/file.ts", tmpDir);
+    const agents = findNewAgents(runtime, "pkg/file.ts", tmpDir);
     expect(agents).toHaveLength(0);
   });
 
   it("forgets restored AGENTS before the last compaction", () => {
-    restoreFromBranch({
+    const runtime = createRuntime();
+    restoreFromBranch(runtime, {
       cwd: tmpDir,
       sessionManager: {
         getBranch: () => [
@@ -48,7 +50,7 @@ describe("subdir-agents state restoration", () => {
       },
     });
 
-    const agents = findNewAgents("pkg/file.ts", tmpDir);
+    const agents = findNewAgents(runtime, "pkg/file.ts", tmpDir);
     expect(agents).toHaveLength(1);
     expect(agents[0]?.path).toBe("pkg/AGENTS.md");
   });

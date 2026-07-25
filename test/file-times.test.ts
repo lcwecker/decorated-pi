@@ -7,21 +7,20 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
 import {
-  recordReadTime,
-  checkStaleFile,
-  clearReadMarkers,
+  FileTimeTracker,
+  createTrackMtimeModule,
   resolveAbsolutePath,
   createFileTimeMarkerData,
-  restoreReadMarkersFromBranch,
   FILE_TIMES_CUSTOM_TYPE,
 } from "../hooks/track-mtime.js";
 
 describe("file-times", () => {
   let tmpDir: string;
+  let tracker: FileTimeTracker;
 
   beforeEach(() => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "filetimes-test-"));
-    clearReadMarkers();
+    tracker = new FileTimeTracker();
   });
 
   afterEach(() => {
@@ -33,54 +32,46 @@ describe("file-times", () => {
   it("records mtime for an existing file", () => {
     const filePath = path.join(tmpDir, "test.txt");
     fs.writeFileSync(filePath, "hello");
-    const mtimeBefore = fs.statSync(filePath).mtimeMs;
-
-    recordReadTime(filePath);
-
-    // No error — just verify it doesn't throw
-    expect(checkStaleFile(filePath, filePath)).toBeUndefined();
+    tracker.record(filePath);
+    expect(tracker.check(filePath, filePath)).toBeUndefined();
   });
 
   it("silently skips non-existent files", () => {
     const ghost = path.join(tmpDir, "no-such-file");
-    expect(() => recordReadTime(ghost)).not.toThrow();
+    expect(() => tracker.record(ghost)).not.toThrow();
   });
 
-  // ─── checkStaleFile ───
+  // ─── check ───
 
   it("rejects edit on unread existing file — must read first", () => {
     const filePath = path.join(tmpDir, "new.txt");
     fs.writeFileSync(filePath, "content");
-    // File exists but never recorded — must read first
-    const error = checkStaleFile(filePath, filePath);
+    const error = tracker.check(filePath, filePath);
     expect(error).toContain("File not read yet");
     expect(error).toContain("new.txt");
   });
 
   it("allows edit on non-existent file — creating new file needs no read", () => {
     const filePath = path.join(tmpDir, "brand-new.txt");
-    // File does not exist on disk, never read — should allow
-    expect(checkStaleFile(filePath, filePath)).toBeUndefined();
+    expect(tracker.check(filePath, filePath)).toBeUndefined();
   });
 
   it("allows edit immediately after read", () => {
     const filePath = path.join(tmpDir, "fresh.txt");
     fs.writeFileSync(filePath, "data");
-    recordReadTime(filePath);
-    expect(checkStaleFile(filePath, filePath)).toBeUndefined();
+    tracker.record(filePath);
+    expect(tracker.check(filePath, filePath)).toBeUndefined();
   });
 
   it("blocks edit when file modified after read", () => {
     const filePath = path.join(tmpDir, "stale.txt");
     fs.writeFileSync(filePath, "original");
-    recordReadTime(filePath);
+    tracker.record(filePath);
 
-    // Simulate external modification by touching mtime
-    const now = new Date();
-    const future = new Date(now.getTime() + 10000);
+    const future = new Date(Date.now() + 10000);
     fs.utimesSync(filePath, future, future);
 
-    const error = checkStaleFile(filePath, filePath);
+    const error = tracker.check(filePath, filePath);
     expect(error).toContain("File modified since last read");
     expect(error).toContain("stale.txt");
   });
@@ -88,53 +79,45 @@ describe("file-times", () => {
   it("allows edit after re-read", () => {
     const filePath = path.join(tmpDir, "re-read.txt");
     fs.writeFileSync(filePath, "v1");
-    recordReadTime(filePath);
+    tracker.record(filePath);
 
-    // Modify externally
-    const now = new Date();
-    const future = new Date(now.getTime() + 10000);
+    const future = new Date(Date.now() + 10000);
     fs.utimesSync(filePath, future, future);
 
-    expect(checkStaleFile(filePath, filePath)).toContain("File modified since last read");
-
-    // Re-read records the new mtime
-    recordReadTime(filePath);
-    expect(checkStaleFile(filePath, filePath)).toBeUndefined();
+    expect(tracker.check(filePath, filePath)).toContain("File modified since last read");
+    tracker.record(filePath);
+    expect(tracker.check(filePath, filePath)).toBeUndefined();
   });
 
   it("allows edit on deleted file (overwrite will recreate)", () => {
     const filePath = path.join(tmpDir, "deleted.txt");
     fs.writeFileSync(filePath, "data");
-    recordReadTime(filePath);
+    tracker.record(filePath);
     fs.unlinkSync(filePath);
-
-    expect(checkStaleFile(filePath, filePath)).toBeUndefined();
+    expect(tracker.check(filePath, filePath)).toBeUndefined();
   });
 
   it("allows edit after patch writes (mtime updated)", () => {
     const filePath = path.join(tmpDir, "after-patch.txt");
     fs.writeFileSync(filePath, "v1");
-    recordReadTime(filePath);
-
-    // Simulate patch writing the file
+    tracker.record(filePath);
     fs.writeFileSync(filePath, "v2");
-    recordReadTime(filePath); // patch updates marker
-
-    expect(checkStaleFile(filePath, filePath)).toBeUndefined();
+    tracker.record(filePath);
+    expect(tracker.check(filePath, filePath)).toBeUndefined();
   });
 
-  // ─── restoreReadMarkersFromBranch ───
+  // ─── restore ───
 
   it("restores markers from custom entries on current branch", () => {
     const filePath = path.join(tmpDir, "restored.txt");
     fs.writeFileSync(filePath, "data");
     const marker = createFileTimeMarkerData(tmpDir, filePath)!;
 
-    restoreReadMarkersFromBranch([
+    tracker.restore([
       { type: "custom", customType: FILE_TIMES_CUSTOM_TYPE, data: marker },
     ], tmpDir);
 
-    expect(checkStaleFile(filePath, filePath)).toBeUndefined();
+    expect(tracker.check(filePath, filePath)).toBeUndefined();
   });
 
   it("ignores markers before the last compaction", () => {
@@ -142,32 +125,100 @@ describe("file-times", () => {
     fs.writeFileSync(filePath, "data");
     const marker = createFileTimeMarkerData(tmpDir, filePath)!;
 
-    restoreReadMarkersFromBranch([
+    tracker.restore([
       { type: "custom", customType: FILE_TIMES_CUSTOM_TYPE, data: marker },
       { type: "compaction" },
     ], tmpDir);
 
-    expect(checkStaleFile(filePath, filePath)).toContain("File not read yet");
+    expect(tracker.check(filePath, filePath)).toContain("File not read yet");
   });
 
-  // ─── clearReadMarkers ───
+  // ─── clear ───
 
   it("clears all tracked markers", () => {
     const filePath = path.join(tmpDir, "clear.txt");
     fs.writeFileSync(filePath, "data");
-    recordReadTime(filePath);
+    tracker.record(filePath);
 
-    // Modify externally
-    const now = new Date();
-    const future = new Date(now.getTime() + 10000);
+    const future = new Date(Date.now() + 10000);
     fs.utimesSync(filePath, future, future);
+    expect(tracker.check(filePath, filePath)).toContain("File modified since last read");
 
-    // Stale detected
-    expect(checkStaleFile(filePath, filePath)).toContain("File modified since last read");
+    tracker.clear();
+    expect(tracker.check(filePath, filePath)).toContain("File not read yet");
+  });
 
-    // Clear markers — now requires re-read
-    clearReadMarkers();
-    expect(checkStaleFile(filePath, filePath)).toContain("File not read yet");
+  // ─── instance isolation ───
+
+  it("two tracker instances do not share markers", () => {
+    const a = new FileTimeTracker();
+    const b = new FileTimeTracker();
+    const filePath = path.join(tmpDir, "iso.txt");
+    fs.writeFileSync(filePath, "data");
+
+    a.record(filePath);
+    // B never recorded — must report unread
+    expect(b.check(filePath, filePath)).toContain("File not read yet");
+    expect(a.check(filePath, filePath)).toBeUndefined();
+  });
+
+  // ─── module preflight ───
+
+  it("blocks patch when an existing file has not been read", () => {
+    const filePath = path.join(tmpDir, "unread-patch.txt");
+    fs.writeFileSync(filePath, "data");
+    const module = createTrackMtimeModule(tracker);
+
+    const result = module.hooks.tool_call![0](
+      { toolName: "patch", input: { path: filePath } } as any,
+      { cwd: tmpDir } as any,
+      {} as any,
+    );
+
+    expect(result).toEqual(expect.objectContaining({
+      block: true,
+      reason: expect.stringContaining("File not read yet"),
+    }));
+  });
+
+  it("blocks patch when a different part of the file changed after read", () => {
+    const filePath = path.join(tmpDir, "stale-patch.txt");
+    fs.writeFileSync(filePath, "target=1\nexternal=1\n");
+    tracker.record(filePath);
+    fs.writeFileSync(filePath, "target=1\nexternal=2\n");
+    const future = new Date(Date.now() + 10_000);
+    fs.utimesSync(filePath, future, future);
+    const module = createTrackMtimeModule(tracker);
+
+    const result = module.hooks.tool_call![0](
+      { toolName: "patch", input: { path: filePath } } as any,
+      { cwd: tmpDir } as any,
+      {} as any,
+    );
+
+    expect(result).toEqual(expect.objectContaining({
+      block: true,
+      reason: expect.stringContaining("File modified since last read"),
+    }));
+  });
+
+  it("allows patch after read and when creating a new file", () => {
+    const existing = path.join(tmpDir, "fresh-patch.txt");
+    fs.writeFileSync(existing, "data");
+    tracker.record(existing);
+    const module = createTrackMtimeModule(tracker);
+    const call = module.hooks.tool_call![0];
+
+    expect(call(
+      { toolName: "patch", input: { path: existing } } as any,
+      { cwd: tmpDir } as any,
+      {} as any,
+    )).toBeUndefined();
+    expect(call(
+      { toolName: "patch", input: { path: "new-patch.txt" } } as any,
+      { cwd: tmpDir } as any,
+      {} as any,
+    )).toBeUndefined();
   });
 
   // ─── resolveAbsolutePath ───

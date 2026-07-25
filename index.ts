@@ -23,9 +23,9 @@ import { createSkeleton } from "./hooks/skeleton.js";
 import { externalizeModule } from "./hooks/externalize.js";
 import { normalizeCodeblocksModule } from "./hooks/normalize-codeblocks.js";
 import { thinkingLabelStripModule } from "./hooks/thinking-label-strip.js";
-import { trackMtimeModule } from "./hooks/track-mtime.js";
+import { FileTimeTracker, createTrackMtimeModule } from "./hooks/track-mtime.js";
 import {
-    injectAgentsMdModule,
+    createInjectAgentsMdModule,
     INJECT_AGENTS_MD_GUIDANCE,
 } from "./hooks/inject-agents-md.js";
 import { createImageVisionModule } from "./hooks/image-vision.js";
@@ -220,8 +220,8 @@ export default async function (pi: ExtensionAPI) {
     sk.register(normalizeCodeblocksModule);
     sk.register(thinkingLabelStripModule);
     sk.register(externalizeModule);
-    sk.register(trackMtimeModule);
-    sk.register(injectAgentsMdModule);
+    sk.register(createTrackMtimeModule(new FileTimeTracker()));
+    sk.register(createInjectAgentsMdModule());
     sk.register(createImageVisionModule());
 
     // session_start handlers (parallel)
