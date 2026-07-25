@@ -50,6 +50,8 @@ import {
   ensureMcpServerReady,
   updateConfigEnabled,
   getActiveMcpConnections,
+  McpRuntime,
+  createMcpModule,
 } from "../hooks/mcp.js";
 import { loadMcpCache, loadScopedMcpCache, updateServerCache } from "../tools/mcp/cache.js";
 
@@ -287,7 +289,7 @@ describe("connectAll vs refreshServerCache (concurrency)", () => {
   }, 10_000);
 });
 
-// ─── Regression: stale ctx after session replacement ──────────────────────
+// ─── Regression: stale ctx after session replacement ───────────────────────
 //
 // connectAll runs fire-and-forget in the session_start handler. If the
 // session is replaced (new/resume/fork) or reloaded while a connection
@@ -353,4 +355,52 @@ describe("mcpModule session_start — stale ctx in background connectAll", () =>
       process.off("unhandledRejection", onUnhandled);
     }
   });
+});
+
+describe("McpRuntime generation cancellation", () => {
+  // When /reload fires session_start while an old connectAll is still
+  // awaiting conn.connect(), the old promise must not pollute the new
+  // session's state once it resolves. Generation cancellation makes the
+  // stale connectAll abort itself.
+  it("stale connectAll does not pollute new session after reload", async () => {
+    const runtime = new McpRuntime();
+    const mod = createMcpModule(runtime);
+
+    // Track the old connect promise so we can resolve it later.
+    let oldConnectResolve: () => void = () => {};
+    mockConnect.mockReset();
+    mockConnect.mockReturnValue(new Promise<void>((resolve) => {
+      oldConnectResolve = resolve;
+    }));
+
+    // First session_start — connectAll hangs on the old connect.
+    const start = mod.hooks.session_start![0]!;
+    await start({} as any, { cwd: "/tmp" } as any, {} as any);
+    await new Promise((r) => setTimeout(r, 30));
+    expect(runtime.getStatus().find((s) => s.name === "test1")!.state).toBe("connecting");
+
+    // Reload: teardown + new session_start. Bumps generation.
+    await runtime.teardown();
+    // New connectAll uses a fast mock that succeeds.
+    mockConnect.mockReset();
+    mockConnect.mockImplementation(async function (this: any) {
+      this.tools = [{ name: "tool_new", description: "new", inputSchema: {} }];
+    });
+    await runtime.startSession("/tmp");
+    await mod.hooks.session_start![0]!({} as any, { cwd: "/tmp" } as any, {} as any);
+    await new Promise((r) => setTimeout(r, 50));
+
+    // New session is connected with the NEW tool.
+    const status = runtime.getStatus();
+    expect(status.find((s) => s.name === "test1")!.state).toBe("connected");
+    expect(runtime.findConnection("test1")!.tools[0].name).toBe("tool_new");
+
+    // Now let the OLD connect resolve. It must NOT overwrite the new state.
+    oldConnectResolve();
+    await new Promise((r) => setTimeout(r, 50));
+
+    // State is still the new session's, not corrupted by the stale promise.
+    expect(runtime.getStatus().find((s) => s.name === "test1")!.state).toBe("connected");
+    expect(runtime.findConnection("test1")!.tools[0].name).toBe("tool_new");
+  }, 10_000);
 });
