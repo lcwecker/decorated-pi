@@ -11,14 +11,34 @@ import { getDependencyPath, resolveDependency } from "../../settings.js";
 
 const require = createRequire(import.meta.url);
 
+function resolveBundledCli(packageJson: string, relativeCli: string, label: string): string {
+  const cli = join(dirname(packageJson), relativeCli);
+  if (existsSync(cli)) return cli;
+  throw new Error(`Bundled ${label} LSP is missing; reinstall decorated-pi`);
+}
+
 function resolveBundledTypeScriptCli(): string {
   try {
-    const cli = join(dirname(require.resolve("typescript/package.json")), "bin", "tsc");
-    if (existsSync(cli)) return cli;
+    return resolveBundledCli(
+      require.resolve("typescript/package.json"),
+      join("bin", "tsc"),
+      "TypeScript 7",
+    );
   } catch {
-    // Fall through to the actionable error below.
+    throw new Error("Bundled TypeScript 7 LSP is missing; reinstall decorated-pi");
   }
-  throw new Error("Bundled TypeScript 7 LSP is missing; reinstall decorated-pi");
+}
+
+function resolveBundledBiomeCli(): string {
+  try {
+    return resolveBundledCli(
+      require.resolve("@biomejs/biome/package.json"),
+      join("bin", "biome"),
+      "Biome",
+    );
+  } catch {
+    throw new Error("Bundled Biome LSP is missing; reinstall decorated-pi");
+  }
 }
 
 const EXTENSION_LANGUAGES: Record<string, string> = {
@@ -83,7 +103,7 @@ const LANGUAGE_SERVERS: Record<string, Omit<LanguageConfig, "is_project_local">>
   },
   json: {
     language: "json", command: "biome", args: ["lsp-proxy"],
-    install_hint: "Install Biome with: pnpm add -D @biomejs/biome",
+    install_hint: "The Biome LSP is bundled with decorated-pi; reinstall decorated-pi if it is missing",
   },
 };
 
@@ -115,7 +135,7 @@ export function listSupportedLanguages(): string[] {
 export function listLspBinaryNames(): string[] {
   const seen = new Set<string>();
   for (const lang of Object.keys(LANGUAGE_SERVERS)) {
-    if (lang === "typescript") continue;
+    if (lang === "typescript" || lang === "json") continue;
     seen.add(LANGUAGE_SERVERS[lang].command);
   }
   return [...seen].sort();
@@ -128,11 +148,14 @@ export function getServerConfig(
   const base = LANGUAGE_SERVERS[language];
   if (!base) return undefined;
 
-  if (language === "typescript") {
+  if (language === "typescript" || language === "json") {
+    const bundledCli = language === "typescript"
+      ? resolveBundledTypeScriptCli()
+      : resolveBundledBiomeCli();
     return {
       ...base,
       command: process.execPath,
-      args: [resolveBundledTypeScriptCli(), ...base.args],
+      args: [bundledCli, ...base.args],
       is_project_local: false,
     };
   }
@@ -186,7 +209,7 @@ export function collectLspDependencyStatuses(cwd: string): DependencyStatus[] {
   const statuses: DependencyStatus[] = [];
   const seen = new Set<string>();
   for (const language of listSupportedLanguages()) {
-    if (language === "typescript") continue;
+    if (language === "typescript" || language === "json") continue;
     const base = LANGUAGE_SERVERS[language];
     if (!base || seen.has(base.command)) continue;
     seen.add(base.command);

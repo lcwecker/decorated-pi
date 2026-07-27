@@ -24,6 +24,7 @@
     "homepage": "https://github.com/lcwecker/decorated-pi#readme",
     "bugs": "https://github.com/lcwecker/decorated-pi/issues",
     "dependencies": {
+        "@biomejs/biome": "^2.5.5",
         "@ff-labs/fff-node": "^0.9.4",
         "@modelcontextprotocol/sdk": "^1.29.0",
         "chardet": "^2.2.0",

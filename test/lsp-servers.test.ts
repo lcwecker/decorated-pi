@@ -93,9 +93,10 @@ describe("listSupportedLanguages", () => {
     expect([...langs].sort()).toEqual(langs);
   });
 
-  it("excludes bundled TypeScript from configurable LSP binaries", async () => {
+  it("excludes bundled TypeScript and Biome from configurable LSP binaries", async () => {
     const { listLspBinaryNames } = await import("../tools/lsp/servers.js");
     expect(listLspBinaryNames()).not.toContain("tsc");
+    expect(listLspBinaryNames()).not.toContain("biome");
     expect(listLspBinaryNames()).toContain("gopls");
   });
 });
@@ -112,6 +113,12 @@ describe("getServerConfig", () => {
     expect(ts!.args.slice(1)).toEqual(["--lsp", "--stdio"]);
     expect(ts!.install_hint).toContain("bundled with decorated-pi");
     expect(ts!.is_project_local).toBe(false);
+
+    const json = getServerConfig("json", tmpRoot);
+    expect(json!.command).toBe(process.execPath);
+    expect(json!.args[0]).toMatch(/@biomejs[/\\]biome[/\\]bin[/\\]biome$/);
+    expect(json!.args.slice(1)).toEqual(["lsp-proxy"]);
+    expect(json!.install_hint).toContain("bundled with decorated-pi");
   });
 
   it("returns undefined for unknown language", async () => {
@@ -129,6 +136,17 @@ describe("getServerConfig", () => {
     expect(ts!.args[0]).not.toContain(tmpRoot);
     expect(ts!.args[0]).toMatch(/typescript[/\\]bin[/\\]tsc$/);
     expect(ts!.is_project_local).toBe(false);
+  });
+
+  it("uses decorated-pi's bundled Biome instead of a project-local binary", async () => {
+    mkdirSync(join(tmpRoot, "node_modules", ".bin"), { recursive: true });
+    writeFileSync(join(tmpRoot, "node_modules", ".bin", "biome"), "");
+    const { getServerConfig } = await import("../tools/lsp/servers.js");
+    const json = getServerConfig("json", tmpRoot)!;
+    expect(json.command).toBe(process.execPath);
+    expect(json.args[0]).not.toContain(tmpRoot);
+    expect(json.args[0]).toMatch(/@biomejs[/\\]biome[/\\]bin[/\\]biome$/);
+    expect(json.is_project_local).toBe(false);
   });
 });
 
@@ -236,6 +254,7 @@ describe("collectLspDependencyStatuses", () => {
     expect(statuses.length).toBeGreaterThan(0);
     const commands = statuses.map((s) => s.label);
     expect(commands).not.toContain("tsc");
+    expect(commands).not.toContain("biome");
     // clangd is used by both c and cpp — should be deduped
     const clangdCount = commands.filter((c) => c === "clangd").length;
     expect(clangdCount).toBe(1);
