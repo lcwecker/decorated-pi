@@ -72,6 +72,29 @@ describe("LspProtocol", () => {
     expect(proc.stdin.write).toHaveBeenCalled();
   });
 
+  it("omits params from shutdown and exit messages", async () => {
+    const protocol = new LspProtocol();
+    const spawned = protocol.spawn("tsc", ["--lsp", "--stdio"], {});
+    proc.emit("spawn");
+    await spawned;
+
+    const shutdown = protocol.shutdown(1000);
+    const requestBody = JSON.parse((proc.stdin.write.mock.calls[0][0] as Buffer)
+      .subarray((proc.stdin.write.mock.calls[0][0] as Buffer).indexOf("\r\n\r\n") + 4)
+      .toString("utf8"));
+    expect(requestBody).toMatchObject({ method: "shutdown" });
+    expect(requestBody).not.toHaveProperty("params");
+
+    emitMessage(proc, { jsonrpc: "2.0", id: 1, result: null });
+    await shutdown;
+
+    const exitBody = JSON.parse((proc.stdin.write.mock.calls[1][0] as Buffer)
+      .subarray((proc.stdin.write.mock.calls[1][0] as Buffer).indexOf("\r\n\r\n") + 4)
+      .toString("utf8"));
+    expect(exitBody).toMatchObject({ method: "exit" });
+    expect(exitBody).not.toHaveProperty("params");
+  });
+
   it("emits diagnostics notifications", async () => {
     const protocol = new LspProtocol();
     const spawned = protocol.spawn("tsserver", ["--stdio"], {});

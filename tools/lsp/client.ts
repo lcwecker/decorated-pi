@@ -51,6 +51,7 @@ export class LspClient {
   #protocol = new LspProtocol();
   #options: LspClientOptions;
   #initialized = false;
+  #supportsPullDiagnostics = false;
   #openDocs = new Map<string, OpenDoc>();
   #diagnosticsByUri = new Map<string, LspDiagnostic[]>();
 
@@ -91,12 +92,13 @@ export class LspClient {
     }
 
     try {
-      await this.#request("initialize", {
+      const initializeResult = await this.#request("initialize", {
         processId: process.pid,
         rootUri: this.#options.root_uri,
         capabilities: {
           textDocument: {
             publishDiagnostics: { relatedInformation: true },
+            diagnostic: { dynamicRegistration: false, relatedDocumentSupport: false },
             hover: { contentFormat: ["markdown", "plaintext"] },
             definition: { linkSupport: false },
             references: {},
@@ -106,7 +108,8 @@ export class LspClient {
           workspace: { workspaceFolders: true, symbol: {} },
         },
         workspaceFolders: [{ uri: this.#options.root_uri, name: "workspace" }],
-      }, timeoutMs);
+      }, timeoutMs) as { capabilities?: { diagnosticProvider?: unknown } } | null;
+      this.#supportsPullDiagnostics = Boolean(initializeResult?.capabilities?.diagnosticProvider);
       this.#protocol.notify("initialized", {});
       this.#initialized = true;
     } catch (err) {
@@ -145,6 +148,19 @@ export class LspClient {
 
   /** Wait for diagnostics, with optional timeout. */
   async waitForDiagnostics(uri: string, timeoutMs = 1500): Promise<LspDiagnostic[]> {
+    if (this.#supportsPullDiagnostics) {
+      const report = await this.#request(
+        "textDocument/diagnostic",
+        { textDocument: { uri } },
+        timeoutMs,
+      ) as { kind?: string; items?: LspDiagnostic[] } | null;
+      const diagnostics = report?.kind === "full" && Array.isArray(report.items)
+        ? report.items
+        : [];
+      this.#diagnosticsByUri.set(uri, diagnostics);
+      return diagnostics;
+    }
+
     if (this.#diagnosticsByUri.has(uri)) {
       return this.getDiagnostics(uri);
     }

@@ -92,6 +92,12 @@ describe("listSupportedLanguages", () => {
     expect(langs).toContain("rust");
     expect([...langs].sort()).toEqual(langs);
   });
+
+  it("excludes bundled TypeScript from configurable LSP binaries", async () => {
+    const { listLspBinaryNames } = await import("../tools/lsp/servers.js");
+    expect(listLspBinaryNames()).not.toContain("tsc");
+    expect(listLspBinaryNames()).toContain("gopls");
+  });
 });
 
 // ─── getServerConfig ──────────────────────────────────────────────────────
@@ -101,9 +107,10 @@ describe("getServerConfig", () => {
     const { getServerConfig } = await import("../tools/lsp/servers.js");
     const ts = getServerConfig("typescript", tmpRoot);
     expect(ts).toBeDefined();
-    expect(ts!.command).toBe("typescript-language-server");
-    expect(ts!.args).toContain("--stdio");
-    expect(ts!.install_hint).toContain("typescript-language-server");
+    expect(ts!.command).toBe(process.execPath);
+    expect(ts!.args[0]).toMatch(/typescript[/\\]bin[/\\]tsc$/);
+    expect(ts!.args.slice(1)).toEqual(["--lsp", "--stdio"]);
+    expect(ts!.install_hint).toContain("bundled with decorated-pi");
     expect(ts!.is_project_local).toBe(false);
   });
 
@@ -112,14 +119,16 @@ describe("getServerConfig", () => {
     expect(getServerConfig("klingon", tmpRoot)).toBeUndefined();
   });
 
-  it("marks a project-local binary in node_modules/.bin", async () => {
+  it("uses decorated-pi's bundled TypeScript instead of a project-local tsc", async () => {
     mkdirSync(join(tmpRoot, "node_modules", ".bin"), { recursive: true });
-    writeFileSync(join(tmpRoot, "node_modules", ".bin", "typescript-language-server"), "");
+    writeFileSync(join(tmpRoot, "node_modules", ".bin", "tsc"), "");
     const { getServerConfig } = await import("../tools/lsp/servers.js");
     const ts = getServerConfig("typescript", tmpRoot);
     expect(ts).toBeDefined();
-    expect(ts!.is_project_local).toBe(true);
-    expect(ts!.command).toContain("node_modules");
+    expect(ts!.command).toBe(process.execPath);
+    expect(ts!.args[0]).not.toContain(tmpRoot);
+    expect(ts!.args[0]).toMatch(/typescript[/\\]bin[/\\]tsc$/);
+    expect(ts!.is_project_local).toBe(false);
   });
 });
 
@@ -226,6 +235,7 @@ describe("collectLspDependencyStatuses", () => {
     const statuses = collectLspDependencyStatuses(tmpRoot);
     expect(statuses.length).toBeGreaterThan(0);
     const commands = statuses.map((s) => s.label);
+    expect(commands).not.toContain("tsc");
     // clangd is used by both c and cpp — should be deduped
     const clangdCount = commands.filter((c) => c === "clangd").length;
     expect(clangdCount).toBe(1);

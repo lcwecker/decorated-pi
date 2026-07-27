@@ -239,9 +239,7 @@ export default async function (pi: ExtensionAPI) {
     if (isModuleEnabled("patchOverrideEdit")) registerPatchTool(pi);
     if (isModuleEnabled("lsp")) {
         const lspDeps = collectLspDependencyStatuses(process.cwd());
-        if (lspDeps.some((d) => d.state === "ok")) {
-            registerLspTools(pi, new LspServerManager());
-        }
+        registerLspTools(pi, new LspServerManager());
         for (const dep of lspDeps) {
             if (dep.state !== "ok") {
                 sk.declareMissing({

@@ -62,6 +62,33 @@ describe("LspClient", () => {
     expect(protocol.notify).toHaveBeenCalledWith("initialized", {});
   });
 
+  it("pulls diagnostics when the server advertises diagnosticProvider", async () => {
+    const client = new LspClient({
+      command: "tsc",
+      args: ["--lsp", "--stdio"],
+      root_uri: "file:///ws",
+      language_id_for_uri: () => "typescript",
+    });
+    const protocol = lastProtocol();
+    const diagnostics: LspDiagnostic[] = [
+      { range: { start: { line: 0, character: 0 }, end: { line: 0, character: 1 } }, severity: 1, code: 2322, message: "boom" },
+    ];
+    protocol.request.mockImplementation(async (method: string) => {
+      if (method === "initialize") return { capabilities: { diagnosticProvider: {} } };
+      if (method === "textDocument/diagnostic") return { kind: "full", items: diagnostics };
+      return null;
+    });
+
+    await client.start();
+
+    await expect(client.waitForDiagnostics("file:///a.ts", 1000)).resolves.toEqual(diagnostics);
+    expect(protocol.request).toHaveBeenCalledWith(
+      "textDocument/diagnostic",
+      { textDocument: { uri: "file:///a.ts" } },
+      1000,
+    );
+  });
+
   it("waitForDiagnostics resolves when matching diagnostics event arrives", async () => {
     const client = new LspClient({
       command: "tsserver",

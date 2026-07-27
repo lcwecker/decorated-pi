@@ -7,9 +7,9 @@ const state = vi.hoisted(() => ({
   findWorkspaceRootMock: vi.fn(() => "/workspace"),
   getServerConfigMock: vi.fn(() => ({
     language: "typescript",
-    command: "typescript-language-server",
-    args: ["--stdio"],
-    install_hint: "install tsls",
+    command: process.execPath,
+    args: ["/bundled/typescript/bin/tsc", "--lsp", "--stdio"],
+    install_hint: "bundled TypeScript 7 LSP",
   })),
   languageIdForFileMock: vi.fn(() => "typescript"),
   filePathToUriMock: vi.fn((p: string) => `file://${p}`),

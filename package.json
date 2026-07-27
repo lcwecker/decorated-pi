@@ -29,7 +29,8 @@
         "chardet": "^2.2.0",
         "file-type": "^21.3.4",
         "iconv-lite": "^0.7.2",
-        "openai": "^6.37.0"
+        "openai": "^6.37.0",
+        "typescript": "^7.0.2"
     },
     "peerDependencies": {
         "@earendil-works/pi-ai": "*",

@@ -123,11 +123,11 @@ export class LspProtocol extends EventEmitter {
   async shutdown(timeoutMs = 1000): Promise<void> {
     this.#stopped = true;
     try {
-      await this.request("shutdown", null, timeoutMs);
+      await this.request("shutdown", undefined, timeoutMs);
     } catch {
       // server already dead
     }
-    this.notify("exit", null);
+    this.notify("exit", undefined);
     this.#proc?.kill();
     this.#proc = null;
   }

@@ -101,13 +101,12 @@ describe("index.ts dep gate", () => {
     restoreConfig();
   });
 
-  it("LSP module: no tools register when no LSP server binary is available", async () => {
+  it("LSP module: bundled TypeScript 7 makes diagnostics available", async () => {
     const mod = await import("../index.js");
     const mockPi = makeMockPi();
     await mod.default(mockPi);
 
-    // lsp_diagnostics should NOT be among registered tools.
-    expect(mockPi.log.tools).not.toContain("lsp_diagnostics");
+    expect(mockPi.log.tools).toContain("lsp_diagnostics");
   });
 
   it("MCP module: codegraph tools not registered when codegraph binary is missing", async () => {

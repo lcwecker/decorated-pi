@@ -2,11 +2,24 @@
  * LSP Server Config — language detection, server commands, workspace roots.
  */
 import { existsSync, readdirSync, type Dirent } from "node:fs";
+import { createRequire } from "node:module";
 import { dirname, extname, isAbsolute, join, resolve } from "node:path";
 import type { DependencyStatus } from "../../hooks/skeleton.js";
 import { getDependencyPath, resolveDependency } from "../../settings.js";
 
 // ─── File extension → language mapping ────────────────────────────────────
+
+const require = createRequire(import.meta.url);
+
+function resolveBundledTypeScriptCli(): string {
+  try {
+    const cli = join(dirname(require.resolve("typescript/package.json")), "bin", "tsc");
+    if (existsSync(cli)) return cli;
+  } catch {
+    // Fall through to the actionable error below.
+  }
+  throw new Error("Bundled TypeScript 7 LSP is missing; reinstall decorated-pi");
+}
 
 const EXTENSION_LANGUAGES: Record<string, string> = {
   ".ts": "typescript", ".tsx": "typescript", ".mts": "typescript", ".cts": "typescript",
@@ -28,9 +41,9 @@ export interface LanguageConfig {
 
 const LANGUAGE_SERVERS: Record<string, Omit<LanguageConfig, "is_project_local">> = {
   typescript: {
-    language: "typescript", command: "typescript-language-server",
-    args: ["--stdio"],
-    install_hint: "Install TypeScript LSP with: pnpm add -D typescript typescript-language-server",
+    language: "typescript", command: "tsc",
+    args: ["--lsp", "--stdio"],
+    install_hint: "The native TypeScript 7 LSP is bundled with decorated-pi; reinstall decorated-pi if it is missing",
   },
   c: {
     language: "c", command: "clangd", args: ["--background-index"],
@@ -102,6 +115,7 @@ export function listSupportedLanguages(): string[] {
 export function listLspBinaryNames(): string[] {
   const seen = new Set<string>();
   for (const lang of Object.keys(LANGUAGE_SERVERS)) {
+    if (lang === "typescript") continue;
     seen.add(LANGUAGE_SERVERS[lang].command);
   }
   return [...seen].sort();
@@ -113,6 +127,15 @@ export function getServerConfig(
 ): LanguageConfig | undefined {
   const base = LANGUAGE_SERVERS[language];
   if (!base) return undefined;
+
+  if (language === "typescript") {
+    return {
+      ...base,
+      command: process.execPath,
+      args: [resolveBundledTypeScriptCli(), ...base.args],
+      is_project_local: false,
+    };
+  }
 
   const override = getDependencyPath(base.command);
   if (override) {
@@ -163,6 +186,7 @@ export function collectLspDependencyStatuses(cwd: string): DependencyStatus[] {
   const statuses: DependencyStatus[] = [];
   const seen = new Set<string>();
   for (const language of listSupportedLanguages()) {
+    if (language === "typescript") continue;
     const base = LANGUAGE_SERVERS[language];
     if (!base || seen.has(base.command)) continue;
     seen.add(base.command);
