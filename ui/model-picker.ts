@@ -6,10 +6,11 @@
 import { DynamicBorder, keyHint, rawKeyHint, type Theme } from "@earendil-works/pi-coding-agent";
 import { Container, fuzzyFilter, getKeybindings, Input, Spacer, Text, type TUI } from "@earendil-works/pi-tui";
 import type { Model } from "@earendil-works/pi-ai";
-import { getImageModelKey, getCompactModelKey, setImageModelKey, setCompactModelKey, formatModelKey, parseModelKey } from "../settings.js";
+import { getImageModelKey, getCompactModelKey, setImageModelKey, setCompactModelKey, getCodeReviewModelKey, setCodeReviewModelKey, formatModelKey, parseModelKey } from "../settings.js";
 
 const TAB_IMAGE = 0;
 const TAB_COMPACT = 1;
+const TAB_REVIEW = 2;
 
 export class ModelPickerComponent extends Container {
   private searchInput: Input;
@@ -20,6 +21,7 @@ export class ModelPickerComponent extends Container {
   private activeTab = TAB_IMAGE;
   private imageKey: string | null;
   private compactKey: string | null;
+  private reviewKey: string | null;
   private allItems: { label: string; desc: string; model: Model<any> | null; modelName?: string }[] = [];
   private filtered: typeof this.allItems = [];
   private selectedIndex = 0;
@@ -35,6 +37,7 @@ export class ModelPickerComponent extends Container {
     this.onDone = onDone;
     this.imageKey = getImageModelKey();
     this.compactKey = getCompactModelKey();
+    this.reviewKey = getCodeReviewModelKey();
 
     this.addChild(new DynamicBorder());
     this.addChild(new Spacer(1));
@@ -70,8 +73,16 @@ export class ModelPickerComponent extends Container {
     }
   }
 
-  private currentKey() { return this.activeTab === TAB_IMAGE ? this.imageKey : this.compactKey; }
-  private currentKind() { return this.activeTab === TAB_IMAGE ? "image" : "compact"; }
+  private currentKey(): string | null {
+    if (this.activeTab === TAB_IMAGE) return this.imageKey;
+    if (this.activeTab === TAB_COMPACT) return this.compactKey;
+    return this.reviewKey;
+  }
+  private currentKind(): string {
+    if (this.activeTab === TAB_IMAGE) return "image";
+    if (this.activeTab === TAB_COMPACT) return "compact";
+    return "review";
+  }
 
   private switchTab(tab: number) {
     this.activeTab = tab;
@@ -98,9 +109,11 @@ export class ModelPickerComponent extends Container {
     const t = this.theme;
     const im = this.activeTab === TAB_IMAGE ? t.fg("accent", "●") : "○";
     const cm = this.activeTab === TAB_COMPACT ? t.fg("accent", "●") : "○";
+    const rv = this.activeTab === TAB_REVIEW ? t.fg("accent", "●") : "○";
     const il = this.activeTab === TAB_IMAGE ? t.bold("Image") : t.fg("dim", "Image");
     const cl = this.activeTab === TAB_COMPACT ? t.bold("Compact") : t.fg("dim", "Compact");
-    this.tabTitle.setText(`${im} ${il}  |  ${cm} ${cl}`);
+    const rl = this.activeTab === TAB_REVIEW ? t.bold("Review") : t.fg("dim", "Review");
+    this.tabTitle.setText(`${im} ${il}  |  ${cm} ${cl}  |  ${rv} ${rl}`);
     const key = this.currentKey();
     this.subtitleText.setText(key ? t.fg("warning", `Current ${this.currentKind()} model: ${key}`) : t.fg("warning", `No ${this.currentKind()} model set`));
   }
@@ -108,7 +121,7 @@ export class ModelPickerComponent extends Container {
   handleInput(keyData: string) {
     const kb = getKeybindings();
     if (kb.matches(keyData, "tui.input.tab")) {
-      const next = this.activeTab === TAB_IMAGE ? TAB_COMPACT : TAB_IMAGE;
+      const next = this.activeTab === TAB_IMAGE ? TAB_COMPACT : this.activeTab === TAB_COMPACT ? TAB_REVIEW : TAB_IMAGE;
       this.switchTab(next); this.tui.requestRender(); return;
     }
     if (kb.matches(keyData, "tui.select.up")) { this.selectedIndex = this.selectedIndex === 0 ? this.filtered.length - 1 : this.selectedIndex - 1; this.updateList(); return; }
@@ -130,13 +143,16 @@ export class ModelPickerComponent extends Container {
     const kind = this.currentKind();
     if (model) {
       if (kind === "image") setImageModelKey(formatModelKey(model));
-      else setCompactModelKey(formatModelKey(model));
+      else if (kind === "compact") setCompactModelKey(formatModelKey(model));
+      else setCodeReviewModelKey(formatModelKey(model));
     } else {
       if (kind === "image") setImageModelKey(null);
-      else setCompactModelKey(null);
+      else if (kind === "compact") setCompactModelKey(null);
+      else setCodeReviewModelKey(null);
     }
     if (kind === "image") this.imageKey = model ? formatModelKey(model) : null;
-    else this.compactKey = model ? formatModelKey(model) : null;
+    else if (kind === "compact") this.compactKey = model ? formatModelKey(model) : null;
+    else this.reviewKey = model ? formatModelKey(model) : null;
     this.switchTab(this.activeTab); this.tui.requestRender();
   }
 

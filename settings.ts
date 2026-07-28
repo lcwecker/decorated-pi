@@ -91,6 +91,7 @@ export interface DependencyView extends DependencySettings {
 }
 
 export interface DecoratedPiConfig {
+  codeReviewModelKey?: string | null;
   imageModelKey?: string | null;
   compactModelKey?: string | null;
   dependencies?: Record<string, DependencySettings>;
@@ -192,6 +193,10 @@ function saveProjectConfig(cwd: string, partial: Partial<DecoratedPiConfig>) {
 
 // ─── Getter ─────────────────────────────────────────────────────────────────
 
+export function getCodeReviewModelKey(): string | null {
+  return loadConfig().codeReviewModelKey ?? null;
+}
+
 export function getImageModelKey(): string | null {
   return loadConfig().imageModelKey ?? null;
 }
@@ -272,6 +277,10 @@ export function resolveDependency(name: string, opts?: { extendPath?: string[] }
 }
 
 // ─── Setter ─────────────────────────────────────────────────────────────────
+
+export function setCodeReviewModelKey(key: string | null) {
+  saveConfig({ codeReviewModelKey: key });
+}
 
 export function setImageModelKey(key: string | null) {
   saveConfig({ imageModelKey: key });

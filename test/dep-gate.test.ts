@@ -73,6 +73,7 @@ function makeMockPi(): any {
     on: (event: string) => log.events.push(event),
     registerTool: (tool: any) => log.tools.push(tool.name),
     registerCommand: (name: string) => log.commands.push(name),
+    registerMessageRenderer: () => {},
     getActiveTools: () => ["read", "bash", "write", "edit", "grep", "find", "ls"],
     setActiveTools: () => {},
     sendMessage: () => {},

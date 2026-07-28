@@ -36,12 +36,14 @@ import { setupCompaction } from "./hooks/compaction.js";
 import { McpRuntime, createMcpModule } from "./hooks/mcp.js";
 import { setupWakatime } from "./hooks/wakatime.js";
 import { setupRtk } from "./hooks/rtk.js";
+import { createCodeReviewModule } from "./hooks/code-review.js";
 
 import { registerPatchTool } from "./tools/patch/index.js";
 import { registerLspTools } from "./tools/lsp/tools.js";
 import { LspServerManager } from "./tools/lsp/manager.js";
 import { collectLspDependencyStatuses } from "./tools/lsp/servers.js";
 import { registerAskTool } from "./tools/ask/index.js";
+import { CodeReviewRuntime, registerCodeReviewRenderer } from "./tools/code-review/index.js";
 import {
     resolveMcpConfigs,
     migrateLegacyGlobalMcpConfig,
@@ -53,6 +55,7 @@ import { registerDpSettingsCommand } from "./commands/dp-settings.js";
 import { registerMcpStatusCommand } from "./commands/mcp-status.js";
 import { registerRetryCommand } from "./commands/retry.js";
 import { registerUsageCommand } from "./commands/usage.js";
+import { registerCodeReviewCommand } from "./commands/code-review.js";
 
 import { captureModuleSnapshot, isModuleEnabled } from "./settings.js";
 
@@ -205,6 +208,8 @@ function installGuidelines(pi: ExtensionAPI): void {
 }
 
 export default async function (pi: ExtensionAPI) {
+    const codeReviewRuntime = new CodeReviewRuntime();
+
     // Snapshot the module settings that pi is about to load. /dp-settings
     // compares against this to avoid prompting for reload when the user
     // has only returned the settings to the currently-loaded state.
@@ -227,6 +232,7 @@ export default async function (pi: ExtensionAPI) {
     // pi-tool-filter must register first so native tools are dropped before
     // anything else inspects the tool list.
     sk.register(piToolFilterModule);
+    sk.register(createCodeReviewModule(codeReviewRuntime));
     sk.register(sessionTitleModule);
     if (isModuleEnabled("atOverride")) sk.register(createSmartAtModule());
 
@@ -234,6 +240,9 @@ export default async function (pi: ExtensionAPI) {
     setupCompaction(sk);
     if (isModuleEnabled("rtk")) setupRtk(sk);
     if (isModuleEnabled("wakatime")) setupWakatime(sk);
+
+    // Code review is command-driven and never registered as an LLM-callable tool.
+    registerCodeReviewRenderer(pi, codeReviewRuntime);
 
     // ── Tools (conditional on module switches) ────────────────────────────
     if (isModuleEnabled("patchOverrideEdit")) registerPatchTool(pi);
@@ -297,6 +306,7 @@ export default async function (pi: ExtensionAPI) {
     registerDpSettingsCommand(pi);
     if (isModuleEnabled("retry")) registerRetryCommand(pi);
     if (isModuleEnabled("usage")) registerUsageCommand(pi);
+    registerCodeReviewCommand(pi, codeReviewRuntime);
 
     // ── Install skeleton (last) ────────────────────────────────────────────
     sk.install(pi);

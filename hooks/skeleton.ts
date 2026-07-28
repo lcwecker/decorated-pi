@@ -23,6 +23,7 @@ export type HookEvent =
   | "before_agent_start"
   | "agent_start"
   | "agent_end"
+  | "context"
   | "input"
   | "tool_call"
   | "tool_result"
@@ -65,6 +66,7 @@ export interface Module {
     before_agent_start?: ComposeHandler<"before_agent_start">[];
     agent_start?: ParallelHandler<"agent_start">[];
     agent_end?: ParallelHandler<"agent_end">[];
+    context?: ComposeHandler<"context">[];
     input?: ParallelHandler<"input">[];
     tool_call?: ComposeHandler<"tool_call">[];
     tool_result?: ComposeHandler<"tool_result">[];
@@ -99,6 +101,7 @@ export interface DependencyStatus {
 
 const COMPOSE_EVENTS = new Set<HookEvent>([
   "before_agent_start",
+  "context",
   "tool_call",
   "tool_result",
   "message_end",

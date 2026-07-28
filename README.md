@@ -129,6 +129,7 @@ Use `/mcp` to view connection status and toggle servers.
 
 ### 4. Other
 
+- `/code-review [prompt]` — start a non-blocking headless Pi review for files reported by `git status` or `svn status`. The isolated reviewer is instructed to work read-only and can use the full tool set; press Esc while it runs to cancel. Model configurable via `/dp-model` → Review tab, falling back to the current model. Progress and the final report appear in a Ctrl+O-foldable history block, then a hidden result message triggers normal parent-model analysis.
 - `/usage` — token stats with cache‑hit rate, per‑model breakdown (Session / Today / This Week / This Month / All Time)
 - `/retry` — continue after interruption
 - Progressive context — supports subdirectory `AGENTS.md` / `CLAUDE.md` discovery and injection
