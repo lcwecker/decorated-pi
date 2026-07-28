@@ -78,7 +78,7 @@ export function buildMcpTool(
   promptSnippet: string;
   renderResult: (result: any, options: { expanded: boolean }, theme: any, context: any) => any;
   parameters: Record<string, unknown> | undefined;
-  execute: (id: string, params: any, signal: any, update: any, ctx: any) => Promise<any>;
+  execute: (id: string, params: any, signal: AbortSignal | undefined, update: any, ctx: any) => Promise<any>;
 } {
   const toolName = makeToolName(config.name, toolEntry.name);
   const desc = toolEntry.description || `${toolEntry.name} (MCP tool)`;
@@ -89,7 +89,7 @@ export function buildMcpTool(
     promptSnippet: desc || `MCP tool ${config.name}/${toolEntry.name}`,
     renderResult: renderMcpResult,
     parameters: toolEntry.inputSchema,
-    execute: async (_id: string, params: any, _signal: any, _update: any, _ctx: any) => {
+    execute: async (_id: string, params: any, signal: AbortSignal | undefined, _update: any, _ctx: any) => {
       const conn = findConnection(config.name);
       if (!conn) {
         return {
@@ -99,9 +99,10 @@ export function buildMcpTool(
         };
       }
       try {
-        const text = await conn.callTool(toolEntry.name, params ?? {});
+        const text = await conn.callTool(toolEntry.name, params ?? {}, signal);
         return { content: [{ type: "text", text }], isError: false, details: {} };
       } catch (err) {
+        if (signal?.aborted) throw err;
         const msg = err instanceof Error ? err.message : String(err);
         return { content: [{ type: "text", text: `MCP tool "${toolName}" error: ${msg}` }], isError: true, details: {} };
       }

@@ -223,10 +223,28 @@ describe("McpConnection — callTool()", () => {
     const client = mockClientInstances[mockClientInstances.length - 1];
     client.callTool.mockResolvedValueOnce({ content: [] });
     await conn.callTool("echo", { msg: "hi" });
-    expect(client.callTool).toHaveBeenCalledWith({
-      name: "echo",
-      arguments: { msg: "hi" },
-    });
+    expect(client.callTool).toHaveBeenCalledWith(
+      {
+        name: "echo",
+        arguments: { msg: "hi" },
+      },
+      undefined,
+      { signal: undefined },
+    );
+  });
+
+  it("forwards the abort signal through the MCP SDK request options", async () => {
+    const conn = new McpConnection("abort", baseConfig({ command: "bin" }));
+    await conn.connect();
+    const client = mockClientInstances[mockClientInstances.length - 1];
+    const controller = new AbortController();
+    client.callTool.mockResolvedValueOnce({ content: [] });
+    await conn.callTool("echo", {}, controller.signal);
+    expect(client.callTool).toHaveBeenCalledWith(
+      { name: "echo", arguments: {} },
+      undefined,
+      { signal: controller.signal },
+    );
   });
 
   it("joins multiple text content blocks with newlines", async () => {

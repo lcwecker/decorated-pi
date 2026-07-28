@@ -66,7 +66,7 @@ describe("buildMcpTool", () => {
     const conn = { callTool: vi.fn(async () => "raw tool output") };
     const tool = __mcpIndexTest.buildMcpTool(SAMPLE_CONFIG, { name: "explore" }, () => conn as any);
     const result = await tool.execute("id1", { q: "test" }, undefined, () => {}, {});
-    expect(conn.callTool).toHaveBeenCalledWith("explore", { q: "test" });
+    expect(conn.callTool).toHaveBeenCalledWith("explore", { q: "test" }, undefined);
     expect((result.content[0] as { text: string }).text).toBe("raw tool output");
     expect(result.isError).toBe(false);
   });
@@ -75,7 +75,7 @@ describe("buildMcpTool", () => {
     const conn = { callTool: vi.fn(async () => "ok") };
     const tool = __mcpIndexTest.buildMcpTool(SAMPLE_CONFIG, { name: "explore" }, () => conn as any);
     await tool.execute("id1", undefined, undefined, () => {}, {});
-    expect(conn.callTool).toHaveBeenCalledWith("explore", {});
+    expect(conn.callTool).toHaveBeenCalledWith("explore", {}, undefined);
   });
 
   it("execute returns the error message when the connection throws", async () => {

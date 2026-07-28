@@ -97,14 +97,18 @@ export class McpConnection {
     }
   }
 
-  async callTool(name: string, args: Record<string, unknown>): Promise<string> {
+  async callTool(name: string, args: Record<string, unknown>, signal?: AbortSignal): Promise<string> {
     if (!this.connected) {
       throw new Error(`MCP ${this.serverName}: not connected`);
     }
-    const result = (await this.client.callTool({
-      name,
-      arguments: args,
-    })) as unknown as {
+    const result = (await this.client.callTool(
+      {
+        name,
+        arguments: args,
+      },
+      undefined,
+      { signal },
+    )) as unknown as {
       content?: Array<{ type: string; text?: string }>;
       isError?: boolean;
     };

@@ -87,9 +87,18 @@ describe("buildMcpTool", () => {
     const conn = { callTool: vi.fn().mockResolvedValue("the result") };
     const tool = buildMcpTool(baseConfig, { name: "x" }, () => conn as any);
     const result = await tool.execute("id", { q: "hi" }, undefined, undefined, {});
-    expect(conn.callTool).toHaveBeenCalledWith("x", { q: "hi" });
+    expect(conn.callTool).toHaveBeenCalledWith("x", { q: "hi" }, undefined);
     expect(result.isError).toBe(false);
     expect(result.content[0].text).toBe("the result");
+  });
+
+  it("execute forwards the abort signal to callTool", async () => {
+    const { buildMcpTool } = await import("../tools/mcp/tool-definition.js");
+    const conn = { callTool: vi.fn().mockResolvedValue("ok") };
+    const tool = buildMcpTool(baseConfig, { name: "x" }, () => conn as any);
+    const controller = new AbortController();
+    await tool.execute("id", {}, controller.signal, undefined, {});
+    expect(conn.callTool).toHaveBeenCalledWith("x", {}, controller.signal);
   });
 
   it("execute catches callTool errors and returns them as isError", async () => {
@@ -99,6 +108,18 @@ describe("buildMcpTool", () => {
     const result = await tool.execute("id", {}, undefined, undefined, {});
     expect(result.isError).toBe(true);
     expect(result.content[0].text).toContain("server crash");
+  });
+
+  it("execute rethrows cancellation instead of returning a tool error", async () => {
+    const { buildMcpTool } = await import("../tools/mcp/tool-definition.js");
+    const controller = new AbortController();
+    const abortError = new DOMException("This operation was aborted", "AbortError");
+    const conn = { callTool: vi.fn().mockImplementation(async () => {
+      controller.abort();
+      throw abortError;
+    }) };
+    const tool = buildMcpTool(baseConfig, { name: "x" }, () => conn as any);
+    await expect(tool.execute("id", {}, controller.signal, undefined, {})).rejects.toBe(abortError);
   });
 
   it("execute handles non-Error thrown values", async () => {
@@ -115,7 +136,7 @@ describe("buildMcpTool", () => {
     const conn = { callTool: vi.fn().mockResolvedValue("ok") };
     const tool = buildMcpTool(baseConfig, { name: "x" }, () => conn as any);
     await tool.execute("id", undefined, undefined, undefined, {});
-    expect(conn.callTool).toHaveBeenCalledWith("x", {});
+    expect(conn.callTool).toHaveBeenCalledWith("x", {}, undefined);
   });
 });
 
