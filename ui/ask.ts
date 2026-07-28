@@ -35,15 +35,18 @@ export interface AskAnswer {
   value: string | string[];
 }
 
+export interface TextInputState {
+  value: string;
+  /** Cursor position within value (0 = before first character). */
+  cursor: number;
+}
+
 interface QuestionState {
+  /** Selected option(s) for choice questions. */
   value: string | string[];
-  /** Cursor position within value for text type (0 = before first char). */
-  textCursor: number;
+  /** Main input for text questions; "Other" input for choice questions. */
+  input: TextInputState;
   cursor: number; // option cursor; opts.length maps to the "Other" row
-  /** Typed text when the cursor sits on the "Other" row (single or multi). */
-  customText: string;
-  /** Cursor position within customText (0 = before first char). */
-  customCursor: number;
   /** Multi only: whether "Other" is currently toggled into the selection. */
   customSelected: boolean;
 }
@@ -51,16 +54,16 @@ interface QuestionState {
 function parseDefault(type: AskQuestionType, options: string[] | undefined, defaultValue: string | undefined): QuestionState {
   if (type === "text") {
     const v = defaultValue ?? "";
-    return { value: v, textCursor: v.length, cursor: 0, customText: "", customCursor: 0, customSelected: false };
+    return { value: "", input: { value: v, cursor: v.length }, cursor: 0, customSelected: false };
   }
   const opts = options ?? [];
   if (type === "single") {
     const idx = defaultValue ? Math.max(0, opts.indexOf(defaultValue)) : 0;
-    return { value: opts[idx] ?? "", textCursor: 0, cursor: idx, customText: "", customCursor: 0, customSelected: false };
+    return { value: opts[idx] ?? "", input: { value: "", cursor: 0 }, cursor: idx, customSelected: false };
   }
   // multi: comma-separated default, or empty
   const selected = defaultValue ? defaultValue.split(",").map(s => s.trim()).filter(Boolean) : [];
-  return { value: selected, textCursor: 0, cursor: 0, customText: "", customCursor: 0, customSelected: false };
+  return { value: selected, input: { value: "", cursor: 0 }, cursor: 0, customSelected: false };
 }
 
 /** Returns true for single/multi choice questions, which always get an
@@ -96,6 +99,42 @@ function extractBracketedPaste(data: string): { content: string; remaining: stri
  *  expand tabs to spaces (matches pi-tui's built-in Input behavior). */
 function cleanPastedText(text: string): string {
   return text.replace(/\r\n/g, "").replace(/\r/g, "").replace(/\n/g, "").replace(/\t/g, "    ");
+}
+
+/** Insert text at the cursor and move the cursor past the inserted content. */
+export function insertText(input: TextInputState, text: string): void {
+  input.value = input.value.slice(0, input.cursor) + text + input.value.slice(input.cursor);
+  input.cursor += text.length;
+}
+
+export type TextInputAction = "none" | "delete" | "move" | "insert";
+
+/** Apply a keypress shared by text questions and choice-question "Other" inputs. */
+export function handleTextInput(input: TextInputState, data: string): TextInputAction {
+  if (data === "\x7f" || data === "backspace") {
+    if (input.cursor > 0) {
+      input.value = input.value.slice(0, input.cursor - 1) + input.value.slice(input.cursor);
+      input.cursor--;
+    }
+    return "delete";
+  }
+  if (matchesKey(data, Key.left)) {
+    if (input.cursor > 0) input.cursor--;
+    return "move";
+  }
+  if (matchesKey(data, Key.right)) {
+    if (input.cursor < input.value.length) input.cursor++;
+    return "move";
+  }
+  if (data.length > 0 && data.charCodeAt(0) >= 0x20) {
+    insertText(input, data);
+    return "insert";
+  }
+  return "none";
+}
+
+function renderTextInput(input: TextInputState, cursor: string): string {
+  return input.value.slice(0, input.cursor) + cursor + input.value.slice(input.cursor);
 }
 
 class DynamicBorder implements Component {
@@ -161,17 +200,17 @@ export class AskComponent extends Container {
   private isCurrentValid(): boolean {
     const q = this.currentQuestion();
     const state = this.currentState();
-    if (q.type === "text") return (state.value as string).trim() !== "";
+    if (q.type === "text") return state.input.value.trim() !== "";
     if (q.type === "single") {
       if (state.cursor === (q.options?.length ?? 0)) {
-        return state.customText.trim() !== "";
+        return state.input.value.trim() !== "";
       }
       return (state.value as string) !== "";
     }
     // multi: valid if any regular option is selected, or "Other" is
     // toggled AND has non-empty custom text.
     if (state.customSelected) {
-      return state.customText.trim() !== "" || (state.value as string[]).length > 0;
+      return state.input.value.trim() !== "" || (state.value as string[]).length > 0;
     }
     return (state.value as string[]).length > 0;
   }
@@ -181,18 +220,18 @@ export class AskComponent extends Container {
   private committedValue(q: AskQuestion, state: QuestionState): string | string[] {
     if (q.type === "single") {
       if (state.cursor === (q.options?.length ?? 0)) {
-        return state.customText.trim();
+        return state.input.value.trim();
       }
       return state.value as string;
     }
     if (q.type === "multi") {
       const base = state.value as string[];
-      if (state.customSelected && state.customText.trim() !== "") {
-        return [...base, state.customText.trim()];
+      if (state.customSelected && state.input.value.trim() !== "") {
+        return [...base, state.input.value.trim()];
       }
       return base;
     }
-    return state.value;
+    return state.input.value;
   }
 
   private goToQuestion(index: number): void {
@@ -250,11 +289,11 @@ export class AskComponent extends Container {
         const q = this.currentQuestion();
         const state = this.currentState();
         if (q.type === "text") {
-          state.value = (state.value as string) + text;
+          insertText(state.input, text);
         } else if (hasOtherRow(q)) {
           const opts = q.options ?? [];
           if (state.cursor === opts.length) {
-            state.customText += text;
+            insertText(state.input, text);
             if (q.type === "multi") {
               state.customSelected = true;
             }
@@ -312,24 +351,7 @@ export class AskComponent extends Container {
     const state = this.currentState();
 
     if (q.type === "text") {
-      const tc = state.textCursor;
-      const val = state.value as string;
-      if (data === "\x7f" || data === "backspace") {
-        if (tc > 0) {
-          state.value = val.slice(0, tc - 1) + val.slice(tc);
-          state.textCursor--;
-        }
-      } else if (matchesKey(data, Key.left)) {
-        if (tc > 0) state.textCursor--;
-      } else if (matchesKey(data, Key.right)) {
-        if (tc < val.length) state.textCursor++;
-      } else if (data.length > 0 && data.charCodeAt(0) >= 0x20) {
-        // Accept any printable character: ASCII, Latin-1, CJK, emoji
-        // surrogate pairs. The earlier `>= " " && <= "~"` filter
-        // rejected every code point above U+007F (i.e. all Chinese).
-        state.value = val.slice(0, tc) + data + val.slice(tc);
-        state.textCursor += data.length;
-      }
+      handleTextInput(state.input, data);
     } else if (q.type === "single" && q.options) {
       const opts = q.options;
       const totalLen = effectiveOptionCount(q);
@@ -344,19 +366,7 @@ export class AskComponent extends Container {
         state.cursor = next;
         state.value = next < opts.length ? opts[next] : "";
       } else if (onCustomRow) {
-        if (data === "\x7f" || data === "backspace") {
-          if (state.customCursor > 0) {
-            state.customText = state.customText.slice(0, state.customCursor - 1) + state.customText.slice(state.customCursor);
-            state.customCursor--;
-          }
-        } else if (matchesKey(data, Key.left)) {
-          if (state.customCursor > 0) state.customCursor--;
-        } else if (matchesKey(data, Key.right)) {
-          if (state.customCursor < state.customText.length) state.customCursor++;
-        } else if (data.length > 0 && data.charCodeAt(0) >= 0x20) {
-          state.customText = state.customText.slice(0, state.customCursor) + data + state.customText.slice(state.customCursor);
-          state.customCursor += data.length;
-        }
+        handleTextInput(state.input, data);
       } else if (data >= "1" && data <= "9") {
         const idx = parseInt(data, 10) - 1;
         if (idx < totalLen) {
@@ -384,19 +394,8 @@ export class AskComponent extends Container {
           state.value = Array.from(selected);
         }
       } else if (onCustomRow) {
-        if (data === "\x7f" || data === "backspace") {
-          if (state.customCursor > 0) {
-            state.customText = state.customText.slice(0, state.customCursor - 1) + state.customText.slice(state.customCursor);
-            state.customCursor--;
-          }
-        } else if (matchesKey(data, Key.left)) {
-          if (state.customCursor > 0) state.customCursor--;
-        } else if (matchesKey(data, Key.right)) {
-          if (state.customCursor < state.customText.length) state.customCursor++;
-        } else if (data.length > 0 && data.charCodeAt(0) >= 0x20) {
+        if (handleTextInput(state.input, data) === "insert") {
           state.customSelected = true;
-          state.customText = state.customText.slice(0, state.customCursor) + data + state.customText.slice(state.customCursor);
-          state.customCursor += data.length;
         }
       } else if (data >= "1" && data <= "9") {
         const idx = parseInt(data, 10) - 1;
@@ -443,12 +442,7 @@ export class AskComponent extends Container {
     lines.push("");
 
     if (q.type === "text") {
-      const value = state.value as string;
-      const tc = state.textCursor;
-      const before = value.slice(0, tc);
-      const after = value.slice(tc);
-      const cursor = this.theme.fg("accent", "|");
-      lines.push(`${before}${cursor}${after}`);
+      lines.push(renderTextInput(state.input, this.theme.fg("accent", "|")));
     } else if (q.type === "single" && q.options) {
       const opts = q.options;
       const totalLen = effectiveOptionCount(q);
@@ -458,18 +452,14 @@ export class AskComponent extends Container {
         const selected = isCustomRow ? false : optLabel === state.value;
         const atCursor = j === state.cursor;
         // "Other" row gets ● when focused (it's the chosen answer in the
-        // sense that customText will be submitted); regular rows use the
+        // sense that its input will be submitted); regular rows use the
         // value match.
         const icon = isCustomRow ? (atCursor ? "●" : "○") : (selected ? "●" : "○");
         let line: string;
         if (isCustomRow) {
-          const text = state.customText;
-          const cc = state.customCursor;
-          const before = text.slice(0, cc);
-          const after = text.slice(cc);
           const cmark = atCursor ? this.theme.fg("accent", "|") : "";
           const hl = atCursor ? this.theme.fg("accent", `  ${icon} ${optLabel}: `) : `  ${icon} ${optLabel}: `;
-          line = `${hl}${before}${cmark}${after}`;
+          line = hl + renderTextInput(state.input, cmark);
         } else {
           line = atCursor ? this.theme.fg("accent", `  ${icon} ${optLabel}`) : `  ${icon} ${optLabel}`;
         }
@@ -487,13 +477,9 @@ export class AskComponent extends Container {
         const icon = inValue || customOn ? "●" : "○";
         let line: string;
         if (isCustomRow) {
-          const text = state.customText;
-          const cc = state.customCursor;
-          const before = text.slice(0, cc);
-          const after = text.slice(cc);
           const cmark = atCursor ? this.theme.fg("accent", "|") : "";
           const hl = atCursor ? this.theme.fg("accent", `  ${icon} ${optLabel}: `) : `  ${icon} ${optLabel}: `;
-          line = `${hl}${before}${cmark}${after}`;
+          line = hl + renderTextInput(state.input, cmark);
         } else {
           line = atCursor ? this.theme.fg("accent", `  ${icon} ${optLabel}`) : `  ${icon} ${optLabel}`;
         }

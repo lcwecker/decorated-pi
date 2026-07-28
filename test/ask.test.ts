@@ -337,14 +337,46 @@ describe("AskComponent — wizard flow", () => {
     expect(result).toEqual([{ id: "langs", value: ["Python"] }]);
   });
 
-  it("text question: bracketed paste inserts content", () => {
+  it("multi: Backspace edits a deselected Other without reselecting it", () => {
+    let result: any = undefined;
+    const questions: AskQuestion[] = [{
+      id: "langs",
+      type: "multi",
+      question: "Languages?",
+      options: ["Python"],
+    }];
+    const comp = new AskComponent(mockTui(), mockTheme(), questions, (ans) => { result = ans; });
+    comp.handleInput(" "); // toggle Python
+    comp.handleInput("\x1b[B"); // down to Other
+    comp.handleInput("rust"); // auto-select Other
+    comp.handleInput(" "); // deselect Other
+    comp.handleInput("\x7f"); // edit to "rus" without reselecting Other
+    comp.handleInput("\r");
+    comp.handleInput("\r");
+    expect(result).toEqual([{ id: "langs", value: ["Python"] }]);
+  });
+
+  it("text question: bracketed paste inserts content and advances the cursor", () => {
     let result: any = undefined;
     const questions: AskQuestion[] = [{ id: "q", type: "text", question: "Name?" }];
     const comp = new AskComponent(mockTui(), mockTheme(), questions, (ans) => { result = ans; });
     comp.handleInput("\x1b[200~pasted text\x1b[201~");
+    comp.handleInput("!");
     comp.handleInput("\r");
     comp.handleInput("\r");
-    expect(result).toEqual([{ id: "q", value: "pasted text" }]);
+    expect(result).toEqual([{ id: "q", value: "pasted text!" }]);
+  });
+
+  it("text question: bracketed paste inserts at the cursor", () => {
+    let result: any = undefined;
+    const questions: AskQuestion[] = [{ id: "q", type: "text", question: "Name?" }];
+    const comp = new AskComponent(mockTui(), mockTheme(), questions, (ans) => { result = ans; });
+    comp.handleInput("ac");
+    comp.handleInput("\x1b[D");
+    comp.handleInput("\x1b[200~b\x1b[201~");
+    comp.handleInput("\r");
+    comp.handleInput("\r");
+    expect(result).toEqual([{ id: "q", value: "abc" }]);
   });
 
   it("text question: paste strips newlines and tabs", () => {
@@ -367,7 +399,7 @@ describe("AskComponent — wizard flow", () => {
     expect(result).toEqual([{ id: "q", value: "你好，世界 🌍" }]);
   });
 
-  it("single: paste into Other row inserts custom text", () => {
+  it("single: paste into Other row inserts custom text and advances the cursor", () => {
     let result: any = undefined;
     const questions: AskQuestion[] = [{
       id: "color",
@@ -379,9 +411,10 @@ describe("AskComponent — wizard flow", () => {
     comp.handleInput("\x1b[B"); // red → green
     comp.handleInput("\x1b[B"); // green → Other
     comp.handleInput("\x1b[200~custom value\x1b[201~");
+    comp.handleInput("!");
     comp.handleInput("\r");
     comp.handleInput("\r");
-    expect(result).toEqual([{ id: "color", value: "custom value" }]);
+    expect(result).toEqual([{ id: "color", value: "custom value!" }]);
   });
 
   it("single: paste is ignored on regular option rows", () => {
@@ -400,7 +433,7 @@ describe("AskComponent — wizard flow", () => {
     expect(result).toEqual([{ id: "color", value: "red" }]);
   });
 
-  it("multi: paste into Other row selects and fills it", () => {
+  it("multi: paste into Other row selects it and advances the cursor", () => {
     let result: any = undefined;
     const questions: AskQuestion[] = [{
       id: "langs",
@@ -411,9 +444,10 @@ describe("AskComponent — wizard flow", () => {
     const comp = new AskComponent(mockTui(), mockTheme(), questions, (ans) => { result = ans; });
     comp.handleInput("\x1b[B"); // down to Other
     comp.handleInput("\x1b[200~Rust\x1b[201~");
+    comp.handleInput("!");
     comp.handleInput("\r");
     comp.handleInput("\r");
-    expect(result).toEqual([{ id: "langs", value: ["Rust"] }]);
+    expect(result).toEqual([{ id: "langs", value: ["Rust!"] }]);
   });
 
   it("summary mode: bracketed paste is ignored", () => {
