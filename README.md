@@ -6,7 +6,9 @@
 
 ```bash
 pi install npm:decorated-pi
+# or
 pi install git:github.com/lcwecker/decorated-pi
+# or
 pi install /path/to/decorated-pi
 ```
 
@@ -18,9 +20,9 @@ Multiple layers of token savings that compound across every session.
 
 **Talk Normal Prompt** — injects a compact response-style prompt adapted from [talk-normal](https://github.com/hexiecs/talk-normal), trimming filler, summary stamps, conditional follow-up menus, and verbose framing. This reduces assistant output tokens and keeps visible reasoning / explanation blocks tighter.
 
-**RTK** — integrates [RTK](https://github.com/rtk-ai/rtk) to compress bash output into structured summaries, so the LLM never sees raw noise. **Just install the CLI, zero config**.
+**RTK** — integrates [RTK](https://github.com/rtk-ai/rtk) to rewrite supported shell commands into compact, structured output, falling back to the original command if RTK fails. **Just install the CLI, zero config**.
 
-**Codegraph** — integrates [codegraph](https://github.com/colbymchenry/codegraph) to offer a code map of your project, so the LLM can navigate symbols and call graphs without chaining `ls` → `grep` → `read`. **You should manage the code source index yourself, see [codegraph doc](https://github.com/colbymchenry/codegraph/blob/main/README.md)**.
+**Codegraph** — integrates [codegraph](https://github.com/colbymchenry/codegraph) to offer a code map of your project, so the LLM can navigate symbols and call graphs without chaining `ls` → `grep` → `read`. **Create and maintain the project index yourself; see the [codegraph documentation](https://github.com/colbymchenry/codegraph/blob/main/README.md).**
 
 **Auxiliary Models** — offloads heavy-but-dumb tasks to cheaper models so your primary model only pays for the hard work:
 
@@ -31,20 +33,20 @@ Multiple layers of token savings that compound across every session.
 
 **Cache‑friendly Design** — stable system prompt prefix:
 
-- tool definitions, guidelines, and skills are sorted alphabetically so the system prompt is identical across sessions
-- MCP tool schemas are persisted to a local cache, so the tool list stays stable regardless of network conditions or server availability
+- tool definitions, guidelines, and skills are sorted alphabetically so the system prompt stays deterministic for the same project and configuration
+- MCP tool schemas are persisted after a successful connection, keeping the tool list stable across restarts and temporary server outages
 
 **Pi Native Prompt Slimming**
 
-- move the default Pi documentation block out of the system prompt and into a builtin `pi-docs` skill, so the docs reference loads on demand instead of sitting in every turn's prompt
+- moves the default Pi documentation block out of the system prompt and into a builtin `pi-docs` skill, so the docs reference loads on demand instead of sitting in every turn's prompt
 
 **Large Result Externalization**
 
-- a `tool_result` hook that catches ANY tool output (bash, read, MCP, etc.) exceeding 30 KB and saves the full content to `/tmp/decorated-pi-results/<tool>-<callId>.txt`. Pi's native truncation still keeps a chunk of the original content in the prompt; this replaces it entirely with a one‑line pointer (`[Output too long, saved to /tmp/…]`) so the LLM knows where the result is and reads it on demand — strictly fewer tokens per turn
+- a `tool_result` hook that saves a tool's first text result when it exceeds 30,000 characters to `/tmp/decorated-pi-results/<tool>-<callId>.txt`, replacing it with a one-line pointer (`[Output too long, saved to /tmp/…]`) that the LLM can read on demand
 
 ### 2. Smarter Tools
 
-Drop‑in replacements for Pi's built‑in tools, with better UX and fewer wasted turns.
+LLM-callable tools and workflow upgrades with better UX and fewer wasted turns.
 
 #### Patch Tool
 
@@ -61,29 +63,8 @@ Drop‑in replacements for Pi's built‑in tools, with better UX and fewer waste
 
 | Aspect | Pi native `@` | `decorated-pi` (FFF) |
 | ------ | :---: | :---: |
-| **Speed** | ❌ walks filesystem via `fd` subprocess on every keystroke | ✅ in‑memory index built once per session, ~0.1 ms / query |
-| **Ranking** | ❌ 4‑bucket case‑sensitive score (exact/starts/contains/path) | ✅ fuzzy match + frecency + git status (boots from git log) |
-| **Noise** | ❌ shows every file in the project, including `.git`, `node_modules`, `dist` | ✅ filters `git‑ignored` files; substring filter on path keeps short queries relevant |
-
-###### Benchmark of `@`
-
-```
-┌─ smart-at benchmark
-├─ generated 500,000 files in 3.9 s
-├─ FFF scan complete in 664 ms
-│  RSS after FFF index: 408 MB  (+330 MB over baseline)
-├─ accuracy (14 queries)
-│                  top‑1   top‑3   top‑5   false‑pos
-│  smart-at         93%     93%     93%    0
-│  native (fd)      86%     93%     93%    0
-└─ corpus cleaned
-
-name                                            hz      mean
-· smart-at                                      8.10    123 ms
-· native @  (fd subprocess)                     3.12    320 ms
-
-Summary: smart-at is 2.59x faster than native @  (fd subprocess)
-```
+| **Search** | launches an `fd` subprocess for each query | queries a persistent in-memory index |
+| **Ranking** | basic string/path matching | native fuzzy score + frecency + git status |
 
 #### LSP support
 
@@ -91,7 +72,7 @@ Covers what codegraph can't: real-time compiler and lint errors.
 
 - **`lsp_diagnostics`** — file diagnostics with severity filtering
 
-Supported languages: c/cpp, go, java, lua, json, python, ruby, rust, svelte, typescript
+Supported languages: c/cpp, go, java, lua, json, python, ruby, rust, svelte, typescript. TypeScript and JSON support are bundled; other languages require their corresponding language-server binaries.
 
 ### 3. MCP Ecosystem
 
@@ -101,9 +82,9 @@ Zero-config MCP client with built-in servers:
 | --- | --- | --- |
 | Context7 | `context7_*` | `https://mcp.context7.com/mcp` |
 | Exa | `exa_*` | `https://mcp.exa.ai/mcp` |
-| codegraph | `codegraph_*` | bundled binary |
+| codegraph | `codegraph_*` | local `codegraph` CLI |
 
-**Custom servers** in `.pi/agent/mcp.json` (project) or `~/.pi/agent/mcp.json` (global). Project overrides global. Tool prompts and schemas are cached locally so MCP tools are available immediately on startup.
+**Custom servers** in `.pi/agent/mcp.json` (project) or `~/.pi/agent/mcp.json` (global). Project entries override global entries with the same name. Tool prompts and schemas are cached after a successful connection for fast startup on subsequent sessions.
 
 ```json
 {
@@ -129,15 +110,16 @@ Use `/mcp` to view connection status and toggle servers.
 
 ### 4. Other
 
-- `/code-review [prompt]` — start a non-blocking headless Pi review for files reported by `git status` or `svn status`. The isolated reviewer is instructed to work read-only and can use the full tool set; press Esc while it runs to cancel. Model configurable via `/dp-model` → Review tab, falling back to the current model. Progress and the final report appear in a Ctrl+O-foldable history block, then a hidden result message triggers normal parent-model analysis.
+- **`ask` tool** — collect text, single-choice, and multi-choice answers through an interactive wizard when the agent needs clarification.
+- `/code-review [prompt]` — offload review of current changes to a separately configured model, avoiding a `/model` switch in the main session and preserving its prompt cache.
 - `/usage` — token stats with cache‑hit rate, per‑model breakdown (Session / Today / This Week / This Month / All Time)
 - `/retry` — continue after interruption
-- Progressive context — supports subdirectory `AGENTS.md` / `CLAUDE.md` discovery and injection
+- **Progressive context** — supports subdirectory `AGENTS.md` / `CLAUDE.md` discovery and injection
 - **WakaTime** — coding activity tracking via [WakaTime](https://wakatime.com)
 
 ## Configuration
 
-Runtime settings in `~/.pi/agent/decorated-pi.json`. run `/dp-settings` to configure it.
+Runtime settings live in `~/.pi/agent/decorated-pi.json`. Run `/dp-settings` to configure modules and dependency paths, and `/dp-model` to configure auxiliary models.
 
 ```json
 {
@@ -171,7 +153,7 @@ Runtime settings in `~/.pi/agent/decorated-pi.json`. run `/dp-settings` to confi
 ```
 
 - `modules` can be toggled on/off to enable/disable features. All are enabled by default.
-- `dependencies[binaryName].path` overrides the lookup location for a binary (file or directory). `dependencies[binaryName].dontBother` silences missing-dependency notifications for that binary. Both are optional
+- `dependencies[binaryName].path` overrides the lookup location for a binary (file or directory). `dependencies[binaryName].dontBother` silences missing-dependency notifications for that binary. Both are optional.
 
 ## License
 
