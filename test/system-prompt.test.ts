@@ -4,7 +4,13 @@
 
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { sortSystemPromptOptions } from "../hooks/skeleton.js";
-import { stripPiDocsBlock, sortSkillsInSystemPrompt, getBuiltinSkillPaths } from "../index.js";
+import {
+  buildPiDocsSkill,
+  getBuiltinSkillPaths,
+  resolveActivePiPackageDir,
+  sortSkillsInSystemPrompt,
+  stripPiDocsBlock,
+} from "../index.js";
 
 describe("sortSystemPromptOptions", () => {
   it("sorts toolSnippets keys alphabetically", () => {
@@ -157,14 +163,11 @@ describe("Decorated Pi Guidance structure", () => {
   });
 
   it("pi-docs skill mirrors Pi's original documentation block", () => {
-    const src = fs.readFileSync(
-      path.join(import.meta.dirname, "../skills/pi-docs/SKILL.md"),
-      "utf-8",
-    );
+    const src = buildPiDocsSkill("/active/pi");
     expect(src).toMatch(/name: pi-docs/);
     expect(src).toMatch(/description: pi docs resources/);
     expect(src).toMatch(/Pi documentation \(read only when the user asks about pi itself/);
-    expect(src).toMatch(/npm root -g\)/);
+    expect(src).toMatch(/\/active\/pi\/README\.md/);
     expect(src).toMatch(/Main documentation:/);
     expect(src).toMatch(/Always read pi \.md files completely/);
   });
@@ -208,12 +211,90 @@ describe("stripPiDocsBlock", () => {
   });
 });
 
+describe("Pi package root resolution", () => {
+  let tmpDir: string;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "decorated-pi-docs-"));
+  });
+
+  afterEach(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  function createPiPackage(name: string): string {
+    const root = path.join(tmpDir, name);
+    fs.mkdirSync(path.join(root, "dist"), { recursive: true });
+    fs.writeFileSync(
+      path.join(root, "package.json"),
+      JSON.stringify({ name: "@earendil-works/pi-coding-agent" }),
+    );
+    fs.writeFileSync(path.join(root, "dist", "cli.js"), "");
+    return root;
+  }
+
+  it("prefers a valid PI_PACKAGE_DIR override", () => {
+    const override = createPiPackage("override");
+    const entrypointRoot = createPiPackage("entrypoint");
+
+    expect(resolveActivePiPackageDir({
+      env: { PI_PACKAGE_DIR: override },
+      entrypoint: path.join(entrypointRoot, "dist", "cli.js"),
+    })).toBe(override);
+  });
+
+  it("resolves the package root from the active Pi entrypoint", () => {
+    const root = createPiPackage("entrypoint");
+
+    expect(resolveActivePiPackageDir({
+      env: {},
+      entrypoint: path.join(root, "dist", "cli.js"),
+    })).toBe(root);
+  });
+
+  it("falls back to the Pi command path", () => {
+    const root = createPiPackage("command");
+
+    expect(resolveActivePiPackageDir({
+      env: {},
+      entrypoint: "",
+      commandPath: path.join(root, "dist", "cli.js"),
+    })).toBe(root);
+  });
+
+  it("uses the executable directory for a Bun binary", () => {
+    const executableDir = path.join(tmpDir, "bun-binary");
+    const executablePath = path.join(executableDir, "pi");
+    fs.mkdirSync(executableDir);
+    fs.writeFileSync(executablePath, "");
+
+    expect(resolveActivePiPackageDir({
+      env: {},
+      entrypoint: "",
+      commandPath: "",
+      executablePath,
+      isBunBinary: true,
+    })).toBe(executableDir);
+  });
+
+});
+
 describe("Builtin skills", () => {
-  it("exposes the plugin's skills/ directory as an absolute path", () => {
-    const paths = getBuiltinSkillPaths();
+  it("writes the builtin skill to an absolute temporary path", () => {
+    const paths = getBuiltinSkillPaths("/active/pi");
     expect(paths).toHaveLength(1);
-    expect(fs.existsSync(paths[0])).toBe(true);
+    expect(path.isAbsolute(paths[0])).toBe(true);
     expect(fs.existsSync(path.join(paths[0], "pi-docs", "SKILL.md"))).toBe(true);
+  });
+
+  it("writes the resolved Pi root into the runtime pi-docs skill", () => {
+    const piRoot = path.join(os.tmpdir(), "pi root");
+    const [skillsRoot] = getBuiltinSkillPaths(piRoot);
+    const skill = fs.readFileSync(path.join(skillsRoot, "pi-docs", "SKILL.md"), "utf-8");
+
+    expect(skill).toContain(`Main documentation: \`${piRoot}/README.md\``);
+    expect(skill).toContain(`Additional docs: \`${piRoot}/docs\``);
+    expect(skill).toContain(`Examples: \`${piRoot}/examples\``);
   });
 
   it("registers resources_discover to inject the builtin skill path", () => {

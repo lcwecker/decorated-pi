@@ -16,7 +16,16 @@
  */
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { fileURLToPath } from "node:url";
+import {
+    existsSync,
+    mkdirSync,
+    readFileSync,
+    realpathSync,
+    statSync,
+    writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
+import { delimiter, dirname, join, resolve } from "node:path";
 
 import { createSkeleton } from "./hooks/skeleton.js";
 
@@ -177,17 +186,123 @@ function canRegisterMcpServer(
     return dep ? dep.state === "ok" : true;
 }
 
-/** Absolute path to the plugin's builtin skills directory.
- *  Used by `resources_discover` so the skill travels with the plugin
- *  regardless of which project pi is running in. */
-export function getBuiltinSkillPaths(): string[] {
-    return [fileURLToPath(new URL("./skills", import.meta.url))];
+const PI_PACKAGE_NAME = "@earendil-works/pi-coding-agent";
+
+interface PiPackageResolveOptions {
+    env?: Record<string, string | undefined>;
+    entrypoint?: string;
+    commandPath?: string;
+    executablePath?: string;
+    isBunBinary?: boolean;
+}
+
+function isPiPackageDir(dir: string): boolean {
+    try {
+        const manifest = JSON.parse(readFileSync(join(dir, "package.json"), "utf-8")) as {
+            name?: string;
+        };
+        return manifest.name === PI_PACKAGE_NAME;
+    } catch {
+        return false;
+    }
+}
+
+function findPiPackageFromPath(startPath: string | undefined): string | undefined {
+    if (!startPath || !existsSync(startPath)) return undefined;
+
+    let current: string;
+    try {
+        const realPath = realpathSync(startPath);
+        current = statSync(realPath).isDirectory() ? realPath : dirname(realPath);
+    } catch {
+        return undefined;
+    }
+
+    while (true) {
+        if (isPiPackageDir(current)) return current;
+        const parent = dirname(current);
+        if (parent === current) return undefined;
+        current = parent;
+    }
+}
+
+function findPiCommand(env: Record<string, string | undefined>): string | undefined {
+    const pathValue = env.PATH;
+    if (!pathValue) return undefined;
+    const names = process.platform === "win32"
+        ? (env.PATHEXT ?? ".COM;.EXE;.BAT;.CMD").split(";").map((ext) => `pi${ext.toLowerCase()}`)
+        : ["pi"];
+
+    for (const dir of pathValue.split(delimiter)) {
+        if (!dir) continue;
+        for (const name of names) {
+            const candidate = resolve(dir, name);
+            if (existsSync(candidate)) return candidate;
+        }
+    }
+    return undefined;
+}
+
+/** Resolve the package root of the Pi instance hosting this extension. */
+export function resolveActivePiPackageDir(
+    options: PiPackageResolveOptions = {},
+): string | undefined {
+    const env = options.env ?? process.env;
+    const override = env.PI_PACKAGE_DIR;
+    if (override) {
+        const resolvedOverride = findPiPackageFromPath(override);
+        if (resolvedOverride) return resolvedOverride;
+    }
+
+    const fromEntrypoint = findPiPackageFromPath(options.entrypoint ?? process.argv[1]);
+    if (fromEntrypoint) return fromEntrypoint;
+
+    const fromCommand = findPiPackageFromPath(options.commandPath ?? findPiCommand(env));
+    if (fromCommand) return fromCommand;
+
+    const isBunBinary = options.isBunBinary ?? Boolean((process.versions as any).bun);
+    if (isBunBinary) {
+        try {
+            return dirname(realpathSync(options.executablePath ?? process.execPath));
+        } catch {
+            return undefined;
+        }
+    }
+    return undefined;
+}
+
+export function buildPiDocsSkill(piPackageDir: string): string {
+    return [
+        "---",
+        "name: pi-docs",
+        "description: pi docs resources",
+        "---",
+        "",
+        "Pi documentation (read only when the user asks about pi itself, its SDK, extensions, themes, skills, or TUI):",
+        `- Main documentation: \`${join(piPackageDir, "README.md")}\``,
+        `- Additional docs: \`${join(piPackageDir, "docs")}\``,
+        `- Examples: \`${join(piPackageDir, "examples")}\` (extensions, custom tools, SDK)`,
+        "- When asked about: extensions (docs/extensions.md, examples/extensions/), themes (docs/themes.md), skills (docs/skills.md), prompt templates (docs/prompt-templates.md), TUI components (docs/tui.md), keybindings (docs/keybindings.md), SDK integrations (docs/sdk.md), custom providers (docs/custom-provider.md), adding models (docs/models.md), pi packages (docs/packages.md)",
+        "- When working on pi topics, read the docs and examples, and follow .md cross-references before implementing",
+        "- Always read pi .md files completely and follow links to related docs (e.g., tui.md for TUI API details)",
+        "",
+    ].join("\n");
+}
+
+/** Write the builtin pi-docs skill with paths for the active Pi installation. */
+export function getBuiltinSkillPaths(piPackageDir: string): string[] {
+    const generatedRoot = join(tmpdir(), "decorated-pi", String(process.pid), "skills");
+    const generatedSkillDir = join(generatedRoot, "pi-docs");
+    mkdirSync(generatedSkillDir, { recursive: true });
+    writeFileSync(join(generatedSkillDir, "SKILL.md"), buildPiDocsSkill(piPackageDir), "utf-8");
+    return [generatedRoot];
 }
 
 /** Register the plugin's builtin skill paths with Pi core. */
 function installBuiltinSkills(pi: ExtensionAPI): void {
+    const piPackageDir = resolveActivePiPackageDir();
     pi.on("resources_discover", async (_event: any) => ({
-        skillPaths: getBuiltinSkillPaths(),
+        skillPaths: piPackageDir ? getBuiltinSkillPaths(piPackageDir) : [],
     }));
 }
 
