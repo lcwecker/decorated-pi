@@ -74,7 +74,7 @@ describe("extension load smoke test", () => {
       modules: {
         tools: { patchOverrideEdit: true, ask: true, lsp: false, mcp: false },
         hooks: { rtk: true, wakatime: true },
-        commands: { atOverride: true, retry: true, usage: true },
+        commands: { retry: true, usage: true },
       },
     };
     if (!fs.existsSync(CONFIG_DIR)) fs.mkdirSync(CONFIG_DIR, { recursive: true });

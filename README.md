@@ -57,15 +57,6 @@ LLM-callable tools and workflow upgrades with better UX and fewer wasted turns.
 | **Edit fault diagnostics** | ❌ only reports "not found" | ✅ pinpoint faults for LLM comprehension |
 | **Stale‑read protection** | ❌ Blind to external changes | ✅ `read` captures mtime, `patch` rejects stale targets |
 
-#### Smarter `@` File Search
-
-`decorated-pi` replaces pi's built-in `@` autocomplete with a high-speed file finder backed by **[`@ff-labs/fff-node`](https://github.com/dmtrKovalenko/fff)**— a Rust SIMD fuzzy file search engine with in-memory index, frecency ranking, and git status awareness. Pi's native provider shells out to `fd` on every keystroke.
-
-| Aspect | Pi native `@` | `decorated-pi` (FFF) |
-| ------ | :---: | :---: |
-| **Search** | launches an `fd` subprocess for each query | queries a persistent in-memory index |
-| **Ranking** | basic string/path matching | native fuzzy score + frecency + git status |
-
 #### LSP support
 
 Covers what codegraph can't: real-time compiler and lint errors.
@@ -135,7 +126,6 @@ Runtime settings live in `~/.pi/agent/decorated-pi.json`. Run `/dp-settings` to 
       "wakatime": true
     },
     "commands": {
-      "atOverride": true,
       "retry": true,
       "usage": true
     }

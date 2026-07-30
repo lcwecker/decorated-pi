@@ -53,8 +53,6 @@ export interface ModuleSettings {
     wakatime?: boolean;
   };
   commands?: {
-    /** Project-aware file search replacing default autocomplete. */
-    atOverride?: boolean;
     /** /retry command to continue after interruption. */
     retry?: boolean;
     /** /usage command for token stats. */
@@ -345,7 +343,6 @@ const DEFAULT_MODULES: Required<ModuleSettings> = {
     wakatime: true,
   },
   commands: {
-    atOverride: true,
     retry: true,
     usage: true,
   },
@@ -359,7 +356,6 @@ const MODULE_TO_CATEGORY: Record<string, keyof ModuleSettings> = {
   mcp: "tools",
   "rtk": "hooks",
   wakatime: "hooks",
-  atOverride: "commands",
   retry: "commands",
   usage: "commands",
 };
@@ -393,8 +389,6 @@ function migrateModuleSettings(config: DecoratedPiConfig): boolean {
     }
   }
   renameInCategory("tools", "patch", "patchOverrideEdit");
-  renameInCategory("commands", "smart-at", "atOverride");
-
   const hooks = result.hooks as Record<string, boolean> | undefined;
   for (const removedKey of ["secretRedaction", "safety"]) {
     if (hooks && removedKey in hooks) {
@@ -411,11 +405,9 @@ function migrateModuleSettings(config: DecoratedPiConfig): boolean {
     mcp: ["tools", "mcp"],
     "rtk": ["hooks", "rtk"],
     wakatime: ["hooks", "wakatime"],
-    atOverride: ["commands", "atOverride"],
     retry: ["commands", "retry"],
     usage: ["commands", "usage"],
     patch: ["tools", "patchOverrideEdit"],
-    "smart-at": ["commands", "atOverride"],
   };
 
   for (const [key, value] of Object.entries(config.modules)) {

@@ -66,7 +66,6 @@ describe("Conditional loading — isModuleEnabled gates", () => {
   it("core modules are enabled by default", () => {
     expect(isModuleEnabled("wakatime")).toBe(true);
     expect(isModuleEnabled("lsp")).toBe(true);
-    expect(isModuleEnabled("atOverride")).toBe(true);
     expect(isModuleEnabled("retry")).toBe(true);
     expect(isModuleEnabled("usage")).toBe(true);
   });
@@ -75,46 +74,32 @@ describe("Conditional loading — isModuleEnabled gates", () => {
     setModuleEnabled("wakatime", false);
     expect(isModuleEnabled("wakatime")).toBe(false);
     expect(isModuleEnabled("lsp")).toBe(true);
-    expect(isModuleEnabled("atOverride")).toBe(true);
   });
 
   it("disabling lsp does not affect other modules", () => {
     setModuleEnabled("lsp", false);
     expect(isModuleEnabled("wakatime")).toBe(true);
     expect(isModuleEnabled("lsp")).toBe(false);
-    expect(isModuleEnabled("atOverride")).toBe(true);
-  });
-
-  it("disabling atOverride does not affect other modules", () => {
-    setModuleEnabled("atOverride", false);
-    expect(isModuleEnabled("wakatime")).toBe(true);
-    expect(isModuleEnabled("lsp")).toBe(true);
-    expect(isModuleEnabled("atOverride")).toBe(false);
   });
 
   it("core modules can be disabled simultaneously", () => {
     setModuleEnabled("wakatime", false);
     setModuleEnabled("lsp", false);
-    setModuleEnabled("atOverride", false);
     const settings = getAllModuleSettings();
     expect(settings.hooks.wakatime).toBe(false);
     expect(settings.tools.lsp).toBe(false);
-    expect(settings.commands.atOverride).toBe(false);
   });
 
   it("core modules can be re-enabled after disabling", () => {
     setModuleEnabled("wakatime", false);
     setModuleEnabled("lsp", false);
-    setModuleEnabled("atOverride", false);
 
     setModuleEnabled("wakatime", true);
     setModuleEnabled("lsp", true);
-    setModuleEnabled("atOverride", true);
 
     const settings = getAllModuleSettings();
     expect(settings.hooks.wakatime).toBe(true);
     expect(settings.tools.lsp).toBe(true);
-    expect(settings.commands.atOverride).toBe(true);
   });
 
   it("config persists across reloads (simulated)", () => {
@@ -197,11 +182,6 @@ describe("index.ts — conditional loading structure (new architecture)", () => 
   it("gates patch tool behind isModuleEnabled", () => {
     expect(indexSrc).toContain('if (isModuleEnabled("patchOverrideEdit"))');
     expect(indexSrc).toContain("registerPatchTool");
-  });
-
-  it("gates atOverride hook behind isModuleEnabled", () => {
-    expect(indexSrc).toContain('if (isModuleEnabled("atOverride"))');
-    expect(indexSrc).toContain("createSmartAtModule");
   });
 
   it("gates rtk and wakatime hooks behind isModuleEnabled", () => {

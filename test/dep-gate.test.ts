@@ -91,7 +91,7 @@ describe("index.ts dep gate", () => {
       modules: {
         tools: { patchOverrideEdit: true, ask: true, lsp: true, mcp: true },
         hooks: { rtk: false, wakatime: false },
-        commands: { atOverride: false, retry: false, usage: false },
+        commands: { retry: false, usage: false },
       },
     };
     if (!fs.existsSync(CONFIG_DIR)) fs.mkdirSync(CONFIG_DIR, { recursive: true });

@@ -25,10 +25,5 @@ export default defineConfig({
         "**/types.ts",
       ],
     },
-    // `vitest bench` should only pick up `*.bench.ts` files, not the
-    // regular `*.test.ts` suite.
-    bench: {
-      include: ["**/*.bench.ts"],
-    },
   },
 });

@@ -150,7 +150,6 @@ describe("Module Settings", () => {
     expect(settings.tools.patchOverrideEdit).toBe(true);
     expect(settings.tools.ask).toBe(true);
     expect(settings.tools.lsp).toBe(true);
-    expect(settings.commands.atOverride).toBe(true);
     expect(settings.commands.retry).toBe(true);
     expect(settings.commands.usage).toBe(true);
   });
@@ -161,12 +160,11 @@ describe("Module Settings", () => {
     expect("codegraph" in settings.tools).toBe(false);
     expect("codegraph" in settings.hooks).toBe(false);
     expect("codegraph" in settings.commands).toBe(false);
-    expect("smart-at" in settings.commands).toBe(false);
   });
 
   it("isModuleEnabled returns true by default", () => {
     expect(isModuleEnabled("lsp")).toBe(true);
-    expect(isModuleEnabled("atOverride")).toBe(true);
+    expect(isModuleEnabled("retry")).toBe(true);
   });
 
   it("setModuleEnabled persists to config file", () => {
@@ -184,11 +182,11 @@ describe("Module Settings", () => {
 
   it("getAllModuleSettings reflects changes", () => {
     setModuleEnabled("wakatime", false);
-    setModuleEnabled("atOverride", false);
+    setModuleEnabled("retry", false);
     const settings = getAllModuleSettings();
     expect(settings.hooks.wakatime).toBe(false);
     expect(settings.tools.lsp).toBe(true);
-    expect(settings.commands.atOverride).toBe(false);
+    expect(settings.commands.retry).toBe(false);
   });
 
   it("config file is valid JSON after setModuleEnabled", () => {
@@ -196,20 +194,6 @@ describe("Module Settings", () => {
     const raw = fs.readFileSync(CONFIG_FILE, "utf-8");
     const parsed = JSON.parse(raw);
     expect(parsed.modules.tools.lsp).toBe(false);
-  });
-
-  it("migrates legacy flat 'smart-at' key to nested commands.atOverride", () => {
-    saveConfig({ modules: { "smart-at": false } as any });
-    const config = loadConfig();
-    expect(config.modules?.commands?.atOverride).toBe(false);
-    expect((config.modules?.commands as any)?.["smart-at"]).toBeUndefined();
-  });
-
-  it("migrates legacy nested 'smart-at' inner name to atOverride", () => {
-    saveConfig({ modules: { commands: { "smart-at": false } } as any });
-    const config = loadConfig();
-    expect(config.modules?.commands?.atOverride).toBe(false);
-    expect((config.modules?.commands as any)?.["smart-at"]).toBeUndefined();
   });
 
   it("migrates legacy flat 'patch' key to nested tools.patchOverrideEdit", () => {
@@ -247,7 +231,7 @@ describe("Module Settings", () => {
       modules: {
         tools: { patchOverrideEdit: false, lsp: true },
         hooks: { rtk: true, wakatime: false },
-        commands: { atOverride: false },
+        commands: {},
       },
     });
     const config = loadConfig();
@@ -255,17 +239,14 @@ describe("Module Settings", () => {
     expect(config.modules?.tools?.lsp).toBe(true);
     expect(config.modules?.hooks?.rtk).toBe(true);
     expect(config.modules?.hooks?.wakatime).toBe(false);
-    expect(config.modules?.commands?.atOverride).toBe(false);
   });
 
   it("multiple module toggles persist independently", () => {
     setModuleEnabled("wakatime", false);
     setModuleEnabled("lsp", false);
-    setModuleEnabled("atOverride", true);
 
     expect(isModuleEnabled("wakatime")).toBe(false);
     expect(isModuleEnabled("lsp")).toBe(false);
-    expect(isModuleEnabled("atOverride")).toBe(true);
   });
 });
 

@@ -38,7 +38,6 @@ import {
     INJECT_AGENTS_MD_GUIDANCE,
 } from "./hooks/inject-agents-md.js";
 import { createImageVisionModule } from "./hooks/image-vision.js";
-import { createSmartAtModule } from "./hooks/smart-at.js";
 import { sessionTitleModule } from "./hooks/session-title.js";
 import { piToolFilterModule } from "./hooks/pi-tool-filter.js";
 import { setupCompaction } from "./hooks/compaction.js";
@@ -349,8 +348,6 @@ export default async function (pi: ExtensionAPI) {
     sk.register(piToolFilterModule);
     sk.register(createCodeReviewModule(codeReviewRuntime));
     sk.register(sessionTitleModule);
-    if (isModuleEnabled("atOverride")) sk.register(createSmartAtModule());
-
     // Compaction + optional integrations.
     setupCompaction(sk);
     if (isModuleEnabled("rtk")) setupRtk(sk);

@@ -15,7 +15,6 @@ import { listMcpBinaryNames } from "../tools/mcp/config.js";
 type ModuleName =
   | "patchOverrideEdit"
   | "lsp"
-  | "atOverride"
   | "mcp"
   | "wakatime"
   | "rtk"
@@ -26,7 +25,6 @@ type ModuleName =
 const MODULE_LABELS: Record<ModuleName, string> = {
   patchOverrideEdit: "patchOverrideEdit",
   lsp: "LSP",
-  atOverride: "@ overload",
   mcp: "MCP",
   wakatime: "WakaTime",
   "rtk": "RTK",
@@ -38,7 +36,6 @@ const MODULE_LABELS: Record<ModuleName, string> = {
 const MODULE_DESCS: Record<ModuleName, string> = {
   patchOverrideEdit: "Replace Pi native edit/write with patch tool (targeted string replacement)",
   lsp: "Language server diagnostics, hover, definition, references, symbols, rename",
-  atOverride: "Project-aware file search replacing default autocomplete",
   mcp: "MCP client with builtin servers (context7, exa, codegraph)",
   wakatime: "Send coding activity heartbeats to WakaTime",
   "rtk": "Rewrite bash through system RTK when available",
@@ -59,7 +56,7 @@ const CATEGORIES: Record<CategoryId, CategoryDef> = {
   commands: {
     label: "Commands",
     description: "Slash commands",
-    modules: ["atOverride", "retry", "usage"],
+    modules: ["retry", "usage"],
   },
   hooks: {
     label: "Hooks",
@@ -101,7 +98,6 @@ const MODULE_TO_CATEGORY: Record<ModuleName, CategoryId> = {
   mcp: "tools",
   "rtk": "hooks",
   wakatime: "hooks",
-  atOverride: "commands",
   retry: "commands",
   usage: "commands",
 };

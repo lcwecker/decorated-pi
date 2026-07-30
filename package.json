@@ -12,9 +12,7 @@
         "lsp",
         "lsp-client",
         "secret-redaction",
-        "codegraph",
-        "fff",
-        "fuzzy-search"
+        "codegraph"
     ],
     "license": "MIT",
     "repository": {
@@ -25,7 +23,6 @@
     "bugs": "https://github.com/lcwecker/decorated-pi/issues",
     "dependencies": {
         "@biomejs/biome": "^2.5.5",
-        "@ff-labs/fff-node": "^0.9.4",
         "@modelcontextprotocol/sdk": "^1.29.0",
         "chardet": "^2.2.0",
         "file-type": "^21.3.4",
@@ -34,6 +31,7 @@
         "typescript": "^7.0.2"
     },
     "peerDependencies": {
+        "@earendil-works/pi-agent-core": "*",
         "@earendil-works/pi-ai": "*",
         "@earendil-works/pi-coding-agent": "*",
         "@earendil-works/pi-tui": "*",
@@ -54,7 +52,7 @@
     "scripts": {
         "prepack": "depcheck --fail-on-missing",
         "test": "vitest run --coverage",
-        "bench": "vitest bench --run",
+
         "typecheck": "tsc --noEmit",
         "prepublishOnly": "npm install --no-audit --no-fund && npm test && npm run typecheck && depcheck --fail-on-missing && publint"
     }
