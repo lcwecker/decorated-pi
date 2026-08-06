@@ -21,10 +21,12 @@ export const CODE_REVIEW_RESULT_MESSAGE = "code-review-result";
 export const CODE_REVIEW_STATE_ENTRY = "decorated-pi.code-review-state";
 
 const REVIEWER_SYSTEM_PROMPT = [
-  "You are a senior code reviewer. Review the current SCM changes carefully.",
+  "You are a senior code reviewer. Review the current changes or the scope described in the task.",
   "",
   "Guidelines:",
   "- This is a strictly read-only review. Use tools only to inspect the changes and surrounding code.",
+  "- Inspect the current changes yourself with read-only SCM commands (git status/diff, svn status/diff) when a repository is present.",
+  "- When there is no repository, review exactly the scope described in the task.",
   "- Do not modify files, SCM state, configuration, dependencies, or the environment.",
   "- Focus on correctness, bugs, security, performance, maintainability, and tests.",
   "- Cite file paths and relevant code context for each finding.",
@@ -173,15 +175,43 @@ export function getScmStatusArgs(scm: "git" | "svn"): string[] {
   return scm === "git" ? ["status", "--short", "--untracked-files=all"] : ["status"];
 }
 
-export function buildReviewTask(scm: "git" | "svn", status: string, prompt: string): string {
+/**
+ * True when status contains at least one tracked change. Any status row
+ * other than untracked or ignored counts: A/M/D/R/C/U/T, svn missing (!),
+ * replaced (R), etc. Pure untracked rows (git "??", svn "? ") and ignored
+ * rows (git "!", svn "I") do not — they need an explicit prompt to scope
+ * the review.
+ */
+export function hasTrackedChanges(scm: "git" | "svn", status: string): boolean {
+  for (const line of status.split("\n")) {
+    if (!line.trim()) continue;
+    const x = line[0];
+    const y = line[1];
+    if (x === "?" || y === "?") continue; // untracked (git "??", svn "? ")
+    if (scm === "git" && (x === "!" || y === "!")) continue; // git ignored
+    if (scm === "svn" && x === "I") continue; // svn ignored
+    return true;
+  }
+  return false;
+}
+
+export function buildReviewTask(scm: "git" | "svn" | null, prompt: string): string {
+  const context = scm
+    ? [
+        `The current project's SCM is ${scm}.`,
+        "Inspect the current changes yourself with read-only SCM commands:",
+        scm === "git"
+          ? "  git status --short --untracked-files=all, git diff, git diff --cached"
+          : "  svn status, svn diff",
+        "Review the changes you find and the relevant surrounding code.",
+      ]
+    : [
+        "There is no version control in the current directory.",
+        "Review exactly the scope described below using the available tools.",
+      ];
   return [
-    `The current project's SCM is ${scm}.`,
+    ...context,
     "",
-    "The SCM status below lists the changed files to review:",
-    "<status>",
-    status,
-    "</status>",
-    "Use the available tools to inspect the changes and relevant surrounding code.",
     prompt.trim(),
     "Report actionable findings when the review is complete.",
   ].filter(Boolean).join("\n");
@@ -442,7 +472,7 @@ export function renderReviewDetails(
     : theme.fg("error", "✗");
   component.addChild(new Text(
     `${icon} ${theme.fg("accent", reviewStatusLabel(details.status))}` +
-    (details.scm ? theme.fg("muted", ` [${details.scm} status, ${details.changedFiles ?? 0} files]`) : ""),
+    (details.scm ? theme.fg("muted", ` [${details.scm}]`) : ""),
     0,
     0,
   ));

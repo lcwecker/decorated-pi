@@ -17,6 +17,7 @@ import {
   getFinalOutput,
   getReviewFailure,
   getScmStatusArgs,
+  hasTrackedChanges,
   registerCodeReviewRenderer,
   renderReviewDetails,
   runReviewSubprocess,
@@ -106,12 +107,43 @@ describe("SCM helpers", () => {
     expect(getScmStatusArgs("svn")).toEqual(["status"]);
   });
 
-  it("builds the review task from status and optional instructions", () => {
-    const status = " M src/main.ts\n?? test/new.test.ts\n";
-    const task = buildReviewTask("git", status, "Focus on test coverage");
-    expect(task).toContain(status);
+  it("recognizes tracked changes but not untracked rows", () => {
+    expect(hasTrackedChanges("git", " M src/main.ts\n")).toBe(true);
+    expect(hasTrackedChanges("git", "A  new.ts\nD  old.ts\n")).toBe(true);
+    expect(hasTrackedChanges("git", "MM src/main.ts\n")).toBe(true);
+    expect(hasTrackedChanges("git", "R  README -> README1\n")).toBe(true);
+    expect(hasTrackedChanges("git", "UU conflicted.ts\n")).toBe(true);
+    expect(hasTrackedChanges("git", "?? build/out.js\n")).toBe(false);
+    expect(hasTrackedChanges("git", " M src/main.ts\n?? notes.txt\n")).toBe(true);
+    expect(hasTrackedChanges("svn", "M file.ts\n")).toBe(true);
+    expect(hasTrackedChanges("svn", "R file.ts\n")).toBe(true);
+    expect(hasTrackedChanges("svn", "! deleted-file.ts\n")).toBe(true);
+    expect(hasTrackedChanges("svn", "? scratch.txt\n")).toBe(false);
+    expect(hasTrackedChanges("svn", "I config-local.txt\n")).toBe(false);
+    expect(hasTrackedChanges("git", "!! ignored.txt\n")).toBe(false);
+    expect(hasTrackedChanges("git", "")).toBe(false);
+  });
+
+  it("builds a git review task that has the reviewer inspect SCM itself", () => {
+    const task = buildReviewTask("git", "Focus on test coverage");
+    expect(task).toContain("git status --short --untracked-files=all");
+    expect(task).toContain("git diff");
     expect(task).toContain("Focus on test coverage");
-    expect(task).toContain("Use the available tools to inspect the changes");
+    expect(task).not.toContain("M src/main.ts");
+  });
+
+  it("builds an svn review task", () => {
+    const task = buildReviewTask("svn", "Focus on tests");
+    expect(task).toContain("svn status");
+    expect(task).toContain("svn diff");
+    expect(task).toContain("Focus on tests");
+  });
+
+  it("builds a no-SCM review task from the user prompt", () => {
+    const task = buildReviewTask(null, "Review src/ for race conditions");
+    expect(task).toContain("no version control");
+    expect(task).toContain("Review src/ for race conditions");
+    expect(task).not.toContain("git");
   });
 
   it("resolves a local Pi CLI when the current entry script is unavailable", () => {
@@ -349,7 +381,7 @@ describe("history rendering", () => {
     });
 
     expect(renderReviewDetails(value, false, theme).render(120).join("\n"))
-      .toContain("✓ reviewed [git status, 2 files]");
+      .toContain("✓ reviewed [git]");
     const expanded = renderReviewDetails(value, true, theme).render(120).join("\n");
     expect(expanded).toContain("Thinking: checking lifecycle");
     expect(expanded).toContain("→ read");
@@ -519,6 +551,7 @@ describe("/code-review command", () => {
         customType: CODE_REVIEW_VIEW_MESSAGE,
         display: true,
       }));
+      expect(pi.exec).not.toHaveBeenCalled();
       expect(pi.registerTool).not.toHaveBeenCalled();
       expect(pi.registerProvider).not.toHaveBeenCalled();
 
@@ -541,20 +574,6 @@ describe("/code-review command", () => {
     } finally {
       restore();
     }
-  });
-
-  it("returns a clean result without starting a child process", async () => {
-    pi.exec.mockResolvedValue({ stdout: "", stderr: "", code: 0, killed: false });
-    await handler("", context());
-    await vi.waitFor(() => expect(pi.sendMessage).toHaveBeenCalledWith(
-      expect.objectContaining({
-        customType: CODE_REVIEW_RESULT_MESSAGE,
-        content: expect.stringContaining("No changes to review"),
-      }),
-      { deliverAs: "followUp" },
-    ));
-    expect(pi.sendUserMessage).toHaveBeenCalledWith("", { deliverAs: "followUp" });
-    expect(runtime.active).toBeNull();
   });
 
   it("treats missing output from a non-clean review as an error", async () => {
@@ -617,6 +636,117 @@ describe("/code-review command", () => {
     const duplicate = context();
     await handler("", duplicate);
     expect(duplicate.ui.notify).toHaveBeenCalledWith(expect.stringContaining("already running"), "warning");
+  });
+
+  it("starts a review without SCM when the prompt describes the scope", async () => {
+    fs.rmSync(path.join(tmp, ".git"), { recursive: true, force: true });
+    const restore = installChild([
+      "process.stdin.resume();",
+      "process.stdin.on('end', () => {",
+      "  console.log(JSON.stringify({ type: 'message_end', message: { role: 'assistant', content: [{ type: 'text', text: 'src review report' }], stopReason: 'stop' } }));",
+      "  console.log(JSON.stringify({ type: 'agent_end' }));",
+      "});",
+    ]);
+    const ctx = context();
+    try {
+      await handler("Review src/", ctx);
+      expect(pi.exec).not.toHaveBeenCalled();
+      await vi.waitFor(() => expect(pi.sendMessage).toHaveBeenCalledWith(
+        expect.objectContaining({
+          customType: CODE_REVIEW_RESULT_MESSAGE,
+          content: expect.stringContaining("src review report"),
+        }),
+        { deliverAs: "followUp" },
+      ));
+      expect(pi.appendEntry).toHaveBeenCalledWith(
+        CODE_REVIEW_STATE_ENTRY,
+        expect.objectContaining({ details: expect.objectContaining({ status: "done" }) }),
+      );
+    } finally {
+      restore();
+    }
+  });
+
+  it("explains the scope requirement when no SCM and no prompt are given", async () => {
+    fs.rmSync(path.join(tmp, ".git"), { recursive: true, force: true });
+    const ctx = context();
+    await handler("", ctx);
+    expect(ctx.ui.notify).toHaveBeenCalledWith(expect.stringContaining("Describe"), "warning");
+    expect(pi.exec).not.toHaveBeenCalled();
+    expect(pi.sendMessage).not.toHaveBeenCalled();
+  });
+
+  it("prompts when the working tree is clean and no prompt is given", async () => {
+    pi.exec.mockResolvedValue({ stdout: "", stderr: "", code: 0, killed: false });
+    const ctx = context();
+    await handler("", ctx);
+    expect(ctx.ui.notify).toHaveBeenCalledWith(expect.stringContaining("No changes detected"), "warning");
+    expect(pi.sendMessage).not.toHaveBeenCalled();
+    expect(runtime.active).toBeNull();
+  });
+
+  it("prompts when only untracked files exist and no prompt is given", async () => {
+    pi.exec.mockResolvedValue({ stdout: "?? build/out.js\n", stderr: "", code: 0, killed: false });
+    const ctx = context();
+    await handler("", ctx);
+    expect(ctx.ui.notify).toHaveBeenCalledWith(expect.stringContaining("Only untracked files"), "warning");
+    expect(pi.sendMessage).not.toHaveBeenCalled();
+    expect(runtime.active).toBeNull();
+  });
+
+  it("runs without a prompt when status only has tracked renames", async () => {
+    pi.exec.mockResolvedValue({ stdout: "R  README -> README1\n", stderr: "", code: 0, killed: false });
+    const restore = installChild([
+      "process.stdin.resume();",
+      "process.stdin.on('end', () => {",
+      "  console.log(JSON.stringify({ type: 'message_end', message: { role: 'assistant', content: [{ type: 'text', text: 'rename review report' }], stopReason: 'stop' } }));",
+      "  console.log(JSON.stringify({ type: 'agent_end' }));",
+      "});",
+    ]);
+    const ctx = context();
+    try {
+      await handler("", ctx);
+      await vi.waitFor(() => expect(pi.sendMessage).toHaveBeenCalledWith(
+        expect.objectContaining({
+          customType: CODE_REVIEW_RESULT_MESSAGE,
+          content: expect.stringContaining("rename review report"),
+        }),
+        { deliverAs: "followUp" },
+      ));
+      expect(ctx.ui.notify).not.toHaveBeenCalledWith(expect.stringContaining("Only untracked"), "warning");
+    } finally {
+      restore();
+    }
+  });
+
+  it("runs even when SCM status fails if the prompt names a scope", async () => {
+    pi.exec.mockResolvedValue({
+      stdout: "",
+      stderr: "fatal: detected dubious ownership in repository",
+      code: 128,
+      killed: false,
+    });
+    const restore = installChild([
+      "process.stdin.resume();",
+      "process.stdin.on('end', () => {",
+      "  console.log(JSON.stringify({ type: 'message_end', message: { role: 'assistant', content: [{ type: 'text', text: 'scoped review report' }], stopReason: 'stop' } }));",
+      "  console.log(JSON.stringify({ type: 'agent_end' }));",
+      "});",
+    ]);
+    const ctx = context();
+    try {
+      await handler("Review src/new-feature.ts", ctx);
+      await vi.waitFor(() => expect(pi.sendMessage).toHaveBeenCalledWith(
+        expect.objectContaining({
+          customType: CODE_REVIEW_RESULT_MESSAGE,
+          content: expect.stringContaining("scoped review report"),
+        }),
+        { deliverAs: "followUp" },
+      ));
+      expect(ctx.ui.notify).not.toHaveBeenCalledWith(expect.stringContaining("status failed"), "error");
+    } finally {
+      restore();
+    }
   });
 });
 

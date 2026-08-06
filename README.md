@@ -102,7 +102,7 @@ Use `/mcp` to view connection status and toggle servers.
 ### 4. Other
 
 - **`ask` tool** — collect text, single-choice, and multi-choice answers through an interactive wizard when the agent needs clarification.
-- `/code-review [prompt]` — offload review of current changes to a separately configured model, avoiding a `/model` switch in the main session and preserving its prompt cache.
+- `/code-review [prompt]` — offload review of current SCM changes, or of a scope described in the prompt (e.g. a file/directory path, also without a git/svn repository), to a separately configured model, avoiding a `/model` switch in the main session and preserving its prompt cache. Without a scope the reviewer inspects the working tree itself via read-only SCM commands, but requires at least one tracked change (A/M/D/R/…); a tree with only untracked files (or none at all) needs an explicit scope.
 - `/usage` — token stats with cache‑hit rate, per‑model breakdown (Session / Today / This Week / This Month / All Time)
 - `/retry` — continue after interruption
 - **Progressive context** — supports subdirectory `AGENTS.md` / `CLAUDE.md` discovery and injection

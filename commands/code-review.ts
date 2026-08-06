@@ -22,6 +22,7 @@ import {
   getFinalOutput,
   getReviewFailure,
   getScmStatusArgs,
+  hasTrackedChanges,
   runReviewSubprocess,
   type ReviewRunDetails,
 } from "../tools/code-review/index.js";
@@ -48,7 +49,7 @@ function reviewResultPrompt(report: string): string {
 
 export function registerCodeReviewCommand(pi: ExtensionAPI, runtime: CodeReviewRuntime): void {
   pi.registerCommand("code-review", {
-    description: "Review current SCM changes with an isolated headless Pi process",
+    description: "Review current SCM changes or a specified file/directory with an isolated headless Pi process",
     handler: async (args, ctx) => {
       if (!ctx.isIdle()) {
         ctx.ui.notify("Wait for the current agent turn to finish before starting code review.", "warning");
@@ -59,8 +60,12 @@ export function registerCodeReviewCommand(pi: ExtensionAPI, runtime: CodeReviewR
         return;
       }
       const scm = detectScm(ctx.cwd);
-      if (!scm) {
-        ctx.ui.notify("No git/svn repository found in the current directory.", "warning");
+      const prompt = args.trim();
+      if (!scm && !prompt) {
+        ctx.ui.notify(
+          "No git/svn repository found. Describe what to review, e.g. /code-review <file-or-directory>.",
+          "warning",
+        );
         return;
       }
       const reviewModel = resolveConfiguredReviewModel(ctx);
@@ -75,34 +80,50 @@ export function registerCodeReviewCommand(pi: ExtensionAPI, runtime: CodeReviewR
       }
 
       const controller = new AbortController();
-      let statusResult;
-      try {
-        statusResult = await pi.exec(scm, getScmStatusArgs(scm), {
-          cwd: ctx.cwd,
-          signal: controller.signal,
-        });
-      } catch (error) {
-        ctx.ui.notify(
-          `${scm} status failed: ${error instanceof Error ? error.message : String(error)}`,
-          "error",
-        );
-        return;
-      }
-      if (statusResult.code !== 0) {
-        ctx.ui.notify(`${scm} status failed: ${statusResult.stderr.trim() || `exit ${statusResult.code}`}`, "error");
-        return;
+      // Status preflight only without an explicit scope: a clean tree or
+      // only untracked files would waste a review round. Prompted reviews
+      // run regardless so a named file/directory can be reviewed even when
+      // SCM is broken or the tree is clean (e.g. gitignored files).
+      if (scm && !prompt) {
+        let statusResult: { stdout: string; stderr: string; code: number };
+        try {
+          statusResult = await pi.exec(scm, getScmStatusArgs(scm), {
+            cwd: ctx.cwd,
+            signal: controller.signal,
+          });
+        } catch (error) {
+          ctx.ui.notify(
+            `${scm} status failed: ${error instanceof Error ? error.message : String(error)}`,
+            "error",
+          );
+          return;
+        }
+        if (statusResult.code !== 0) {
+          ctx.ui.notify(`${scm} status failed: ${statusResult.stderr.trim() || `exit ${statusResult.code}`}`, "error");
+          return;
+        }
+        if (!statusResult.stdout.trim()) {
+          ctx.ui.notify(
+            `No changes detected in the ${scm} working tree. Describe what to review, e.g. /code-review <file-or-directory>.`,
+            "warning",
+          );
+          return;
+        }
+        if (!hasTrackedChanges(scm, statusResult.stdout)) {
+          ctx.ui.notify(
+            `Only untracked files found in the ${scm} working tree. Describe what to review, e.g. /code-review <file-or-directory>.`,
+            "warning",
+          );
+          return;
+        }
       }
 
       const reviewModelKey = `${reviewModel.provider}/${reviewModel.id}`;
       const runId = `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
-      const changedFiles = statusResult.stdout.trim()
-        ? statusResult.stdout.trimEnd().split("\n").length
-        : 0;
       const initial: ReviewRunDetails = {
-        status: statusResult.stdout.trim() ? "running" : "done",
-        scm,
+        status: "running",
+        scm: scm ?? undefined,
         model: reviewModelKey,
-        changedFiles,
         messages: [],
         usage: emptyUsage(),
       };
@@ -146,9 +167,7 @@ export function registerCodeReviewCommand(pi: ExtensionAPI, runtime: CodeReviewR
         if (!shouldDeliver) return;
         pi.appendEntry(CODE_REVIEW_STATE_ENTRY, { runId, details });
         if (details.status === "done") {
-          const report = details.changedFiles === 0
-            ? `No changes to review (${scm} status is clean).`
-            : getFinalOutput(details.messages);
+          const report = getFinalOutput(details.messages);
           const resultMessage = {
             customType: CODE_REVIEW_RESULT_MESSAGE,
             content: reviewResultPrompt(report),
@@ -165,12 +184,7 @@ export function registerCodeReviewCommand(pi: ExtensionAPI, runtime: CodeReviewR
         }
       };
 
-      if (changedFiles === 0) {
-        finish(initial);
-        return;
-      }
-
-      const task = buildReviewTask(scm, statusResult.stdout, args.trim());
+      const task = buildReviewTask(scm, prompt);
       void runReviewSubprocess(
         buildReviewerArgs(reviewModelKey),
         task,
@@ -179,8 +193,7 @@ export function registerCodeReviewCommand(pi: ExtensionAPI, runtime: CodeReviewR
         (partial) => runtime.update(runId, {
           ...partial,
           status: "running",
-          scm,
-          changedFiles,
+          scm: scm ?? undefined,
         }),
         reviewModelKey,
       ).then((result) => {
@@ -191,20 +204,18 @@ export function registerCodeReviewCommand(pi: ExtensionAPI, runtime: CodeReviewR
           finish({
             ...result,
             status: "error",
-            scm,
-            changedFiles,
+            scm: scm ?? undefined,
             error: review ? `${failure}\n\nPartial reviewer output:\n${review}` : failure,
           });
           return;
         }
-        finish({ ...result, status: "done", scm, changedFiles });
+        finish({ ...result, status: "done", scm: scm ?? undefined });
       }).catch((error) => {
         const aborted = controller.signal.aborted;
         finish({
           ...runtime.get(runId) ?? initial,
           status: aborted ? "aborted" : "error",
-          scm,
-          changedFiles,
+          scm: scm ?? undefined,
           error: aborted ? "Code review was cancelled." : error instanceof Error ? error.message : String(error),
         });
       });
