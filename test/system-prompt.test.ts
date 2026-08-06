@@ -160,6 +160,9 @@ describe("Decorated Pi Guidance structure", () => {
     expect(src).toMatch(/Be direct and informative/);
     expect(src).toMatch(/Never restate the question/);
     expect(src).toMatch(/summary-stamp closings/);
+    expect(src).toMatch(/3-5 sentences max for conceptual questions/);
+    expect(src).toMatch(/翻成人话/);
+    expect(src).toMatch(/max 3-4 points per side/);
   });
 
   it("pi-docs skill mirrors Pi's original documentation block", () => {

@@ -18,7 +18,7 @@ pi install /path/to/decorated-pi
 
 Multiple layers of token savings that compound across every session.
 
-**Talk Normal Prompt** — injects a compact response-style prompt adapted from [talk-normal](https://github.com/hexiecs/talk-normal), trimming filler, summary stamps, conditional follow-up menus, and verbose framing. This reduces assistant output tokens and keeps visible reasoning / explanation blocks tighter.
+**Talk Normal Prompt** — injects a response-style prompt adapted from [talk-normal](https://github.com/hexiecs/talk-normal) (prompt.md v0.6.2), trimming filler, summary stamps, conditional follow-up menus, negation-frame phrasing, and verbose framing. This reduces assistant output tokens and keeps visible reasoning / explanation blocks tighter.
 
 **RTK** — integrates [RTK](https://github.com/rtk-ai/rtk) to rewrite supported shell commands into compact, structured output, falling back to the original command if RTK fails. **Just install the CLI, zero config**.
 
