@@ -5,17 +5,9 @@
 import { describe, it, expect } from "vitest";
 import * as os from "node:os";
 import * as path from "node:path";
-import { __imageVisionTest, createImageVisionModule } from "../hooks/image-vision.js";
+import { analyzeImage, __imageVisionTest, createImageVisionModule } from "../hooks/image-vision.js";
 
-const { expandHome, appendCodexSseDelta, codexResponsesUrl, extractCodexAccountId } = __imageVisionTest;
-
-function jwtWithPayload(payload: unknown): string {
-  return [
-    Buffer.from(JSON.stringify({ alg: "none" })).toString("base64url"),
-    Buffer.from(JSON.stringify(payload)).toString("base64url"),
-    "signature",
-  ].join(".");
-}
+const { expandHome } = __imageVisionTest;
 
 describe("image-vision", () => {
   // ─── expandHome ─────────────────────────────────────────────────────
@@ -51,39 +43,47 @@ describe("image-vision", () => {
     });
   });
 
-  // ─── codex ─────────────────────────────────────────────────────────
+  // ─── analyzeImage via model runtime ────────────────────────────────
 
-  describe("codex helpers", () => {
-    it("builds codex responses URL from backend base URL", () => {
-      expect(codexResponsesUrl("https://chatgpt.com/backend-api")).toBe(
-        "https://chatgpt.com/backend-api/codex/responses",
-      );
+  describe("analyzeImage", () => {
+    it("routes through the model runtime with image content and a signal timeout", async () => {
+      let captured: any;
+      const runtime = {
+        complete: async (model: any, context: any, options: any) => {
+          captured = { model, context, options };
+          return { content: [{ type: "text", text: "analysis result" }] };
+        },
+      };
+      const out = await analyzeImage({ api: "openai-responses" } as any, "aGVsbG8=", "image/png", runtime as any);
+      expect(out).toBe("analysis result");
+      expect(captured.model).toEqual({ api: "openai-responses" });
+      expect(captured.context.messages[0].role).toBe("user");
+      expect(captured.context.messages[0].content).toEqual([
+        { type: "text", text: expect.any(String) },
+        { type: "image", data: "aGVsbG8=", mimeType: "image/png" },
+      ]);
+      expect(captured.options.maxTokens).toBe(4096);
+      expect(captured.options.signal).toBeInstanceOf(AbortSignal);
     });
 
-    it("does not duplicate codex responses path", () => {
-      expect(codexResponsesUrl("https://chatgpt.com/backend-api/codex")).toBe(
-        "https://chatgpt.com/backend-api/codex/responses",
-      );
-      expect(codexResponsesUrl("https://chatgpt.com/backend-api/codex/responses")).toBe(
-        "https://chatgpt.com/backend-api/codex/responses",
-      );
+    it("concatenates multiple text parts", async () => {
+      const runtime = {
+        complete: async () => ({
+          content: [
+            { type: "text", text: "first" },
+            { type: "thinking", thinking: "skip me" },
+            { type: "text", text: "second" },
+          ],
+        }),
+      };
+      expect(await analyzeImage({} as any, "", "image/png", runtime as any))
+        .toBe("first\nsecond");
     });
 
-    it("extracts account id from JWT base64url payload", () => {
-      const token = jwtWithPayload({
-        "https://api.openai.com/auth": { chatgpt_account_id: "acct_123" },
-      });
-      expect(extractCodexAccountId(token)).toBe("acct_123");
-    });
-
-    it("returns empty account id for invalid token", () => {
-      expect(extractCodexAccountId("not-a-jwt")).toBe("");
-    });
-
-    it("appends SSE output text delta", () => {
-      const line = `data: ${JSON.stringify({ type: "response.output_text.delta", delta: "hello" })}`;
-      expect(appendCodexSseDelta("", line)).toBe("hello");
-      expect(appendCodexSseDelta("hello", "data: [DONE]")).toBe("hello");
+    it("falls back to a placeholder when the model returns no text", async () => {
+      const runtime = { complete: async () => ({ content: [] }) };
+      expect(await analyzeImage({} as any, "", "image/png", runtime as any))
+        .toBe("No analysis returned.");
     });
   });
 });

@@ -244,6 +244,12 @@ function getPiInvocation(args: string[], cwd = process.cwd()): { command: string
   return { command: piCommand, args };
 }
 
+/** Assemble the sorted per-index parts of a partially streamed assistant
+ *  message (0.84.0 wire `message_update` events are delta-only). */
+function assemblePartialParts(parts: Map<number, any>): any[] {
+  return [...parts.entries()].sort(([a], [b]) => a - b).map(([, part]) => part);
+}
+
 export async function runReviewSubprocess(
   args: string[],
   task: string,
@@ -278,6 +284,10 @@ export async function runReviewSubprocess(
     let settleTimer: ReturnType<typeof setTimeout> | undefined;
     let forceKill: ReturnType<typeof setTimeout> | undefined;
     let partialAssistant: AssistantMessage | undefined;
+    // Streaming parts assembled from delta-only `message_update` events
+    // (0.84.0 removed the cumulative `message` and `assistantMessageEvent.partial`
+    // fields from the wire protocol; we rebuild the partial message ourselves).
+    let partialParts = new Map<number, any>();
 
     const progress = (messages = result.messages) => {
       onProgress({ ...result, messages: [...messages], usage: { ...result.usage } });
@@ -322,11 +332,58 @@ export async function runReviewSubprocess(
       let event: any;
       try { event = JSON.parse(line); } catch { return; }
 
-      if (event.type === "message_update" && event.message?.role === "assistant") {
-        partialAssistant = event.message as AssistantMessage;
-        const updateType = event.assistantMessageEvent?.type;
-        if (updateType === "thinking_end" || updateType === "text_end" || updateType === "toolcall_end") {
-          progress([...result.messages, partialAssistant]);
+      if (event.type === "message_start") {
+        // New turn; reset the per-message assembly state.
+        partialParts = new Map();
+      }
+      if (event.type === "message_update" && event.assistantMessageEvent) {
+        const ue = event.assistantMessageEvent;
+        if (ue.type === "start") {
+          partialParts = new Map();
+        } else {
+          const idx = ue.contentIndex ?? 0;
+          if (ue.type === "text_delta") {
+            const prev = partialParts.get(idx);
+            partialParts.set(idx, {
+              type: "text",
+              text: (prev?.type === "text" ? prev.text : "") + (ue.delta ?? ""),
+            });
+          } else if (ue.type === "thinking_delta") {
+            const prev = partialParts.get(idx);
+            partialParts.set(idx, {
+              type: "thinking",
+              thinking: (prev?.type === "thinking" ? prev.thinking : "") + (ue.delta ?? ""),
+            });
+          } else if (ue.type === "toolcall_delta") {
+            const prev = partialParts.get(idx);
+            partialParts.set(idx, {
+              type: "toolCall",
+              id: prev?.type === "toolCall" ? prev.id : "",
+              name: prev?.type === "toolCall" ? prev.name : "",
+              arguments: (prev?.type === "toolCall" ? prev.arguments ?? "" : "") + (ue.delta ?? ""),
+            });
+          } else if (ue.type === "text_end") {
+            partialParts.set(idx, { type: "text", text: ue.content ?? "" });
+            const partial = { role: "assistant", content: assemblePartialParts(partialParts) } as AssistantMessage;
+            partialAssistant = partial;
+            progress([...result.messages, partial]);
+          } else if (ue.type === "thinking_end") {
+            partialParts.set(idx, { type: "thinking", thinking: ue.content ?? "" });
+            const partial = { role: "assistant", content: assemblePartialParts(partialParts) } as AssistantMessage;
+            partialAssistant = partial;
+            progress([...result.messages, partial]);
+          } else if (ue.type === "toolcall_end") {
+            const toolCall = ue.toolCall ?? {};
+            partialParts.set(idx, {
+              type: "toolCall",
+              id: toolCall.id ?? "",
+              name: toolCall.name ?? "",
+              arguments: toolCall.arguments ?? "",
+            });
+            const partial = { role: "assistant", content: assemblePartialParts(partialParts) } as AssistantMessage;
+            partialAssistant = partial;
+            progress([...result.messages, partial]);
+          }
         }
       }
       if (event.type === "message_end" && event.message?.role === "assistant") {
@@ -335,6 +392,7 @@ export async function runReviewSubprocess(
           ? completed
           : { ...completed, content: partialAssistant.content };
         partialAssistant = undefined;
+        partialParts = new Map();
         result.messages.push(message);
         result.usage.turns++;
         const usage = message.usage;

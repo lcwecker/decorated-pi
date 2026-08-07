@@ -2,6 +2,10 @@
 
 `decorated-pi` is a practical enhancement pack for [Pi](https://github.com/earendil-works/pi) — token-efficient workflow, cache-friendly design, and smarter tools.
 
+## Requirements
+
+Requires **Pi ≥ 0.84.0**. Vision and custom-compaction requests dispatch through the model runtime (`ModelRegistry.complete`) and the code-review runner parses the 0.84 delta-only JSON protocol, so older Pi versions fail at runtime.
+
 ## Install
 
 ```bash

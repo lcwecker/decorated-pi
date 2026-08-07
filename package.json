@@ -27,14 +27,13 @@
         "chardet": "^2.2.0",
         "file-type": "^21.3.4",
         "iconv-lite": "^0.7.2",
-        "openai": "^6.37.0",
         "typescript": "^7.0.2"
     },
     "peerDependencies": {
-        "@earendil-works/pi-agent-core": "*",
-        "@earendil-works/pi-ai": "*",
-        "@earendil-works/pi-coding-agent": "*",
-        "@earendil-works/pi-tui": "*",
+        "@earendil-works/pi-agent-core": ">=0.84.0",
+        "@earendil-works/pi-ai": ">=0.84.0",
+        "@earendil-works/pi-coding-agent": ">=0.84.0",
+        "@earendil-works/pi-tui": ">=0.84.0",
         "typebox": "*"
     },
     "pi": {
@@ -43,6 +42,10 @@
         ]
     },
     "devDependencies": {
+        "@earendil-works/pi-agent-core": "^0.84.0",
+        "@earendil-works/pi-ai": "^0.84.0",
+        "@earendil-works/pi-coding-agent": "^0.84.0",
+        "@earendil-works/pi-tui": "^0.84.0",
         "@types/node": "^22.15.3",
         "@vitest/coverage-v8": "4.1.8",
         "depcheck": "^1.4.7",

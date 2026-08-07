@@ -257,10 +257,11 @@ describe("headless subprocess", () => {
       "process.stdin.resume();",
       "process.stdin.on('end', () => {",
       "  const base = { role: 'assistant', provider: 'review', model: 'reviewer', usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, cost: { total: 0 } } };",
-      "  console.log(JSON.stringify({ type: 'message_update', message: { ...base, content: [{ type: 'thinking', thinking: 'checking files' }] }, assistantMessageEvent: { type: 'thinking_end' } }));",
+      "  console.log(JSON.stringify({ type: 'message_start', message: { ...base, content: [] } }));",
+      "  console.log(JSON.stringify({ type: 'message_update', assistantMessageEvent: { type: 'thinking_end', contentIndex: 0, content: 'checking files' } }));",
       "  console.log(JSON.stringify({ type: 'message_end', message: { ...base, content: [], stopReason: 'toolUse' } }));",
       "  console.log(JSON.stringify({ type: 'tool_execution_start', toolCallId: 'call-1', toolName: 'read', args: { path: 'src/main.ts' } }));",
-      "  console.log(JSON.stringify({ type: 'message_update', message: { ...base, content: [{ type: 'text', text: 'final report' }] }, assistantMessageEvent: { type: 'text_end' } }));",
+      "  console.log(JSON.stringify({ type: 'message_update', assistantMessageEvent: { type: 'text_end', contentIndex: 1, content: 'final report' } }));",
       "  console.log(JSON.stringify({ type: 'message_end', message: { ...base, content: [], stopReason: 'stop' } }));",
       "  console.log(JSON.stringify({ type: 'agent_end' }));",
       "});",
@@ -284,6 +285,51 @@ describe("headless subprocess", () => {
     expect(updates.some((update) => displayItems(update.messages).some(
       (item) => item.type === "tool" && item.name === "read",
     ))).toBe(true);
+  });
+
+  it("assembles streamed deltas across turns with tool calls", async () => {
+    const script = path.join(tmp, "review-child-deltas.mjs");
+    fs.writeFileSync(script, [
+      "process.stdin.resume();",
+      "process.stdin.on('end', () => {",
+      "  const base = { role: 'assistant', provider: 'review', model: 'reviewer', usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, cost: { total: 0 } } };",
+      "  console.log(JSON.stringify({ type: 'message_start', message: { ...base, content: [] } }));",
+      "  console.log(JSON.stringify({ type: 'message_update', assistantMessageEvent: { type: 'thinking_delta', contentIndex: 0, delta: 'check' } }));",
+      "  console.log(JSON.stringify({ type: 'message_update', assistantMessageEvent: { type: 'thinking_delta', contentIndex: 0, delta: 'ing files' } }));",
+      "  console.log(JSON.stringify({ type: 'message_update', assistantMessageEvent: { type: 'thinking_end', contentIndex: 0, content: 'checking files' } }));",
+      "  console.log(JSON.stringify({ type: 'message_update', assistantMessageEvent: { type: 'toolcall_delta', contentIndex: 1, delta: '{\"path\":' } }));",
+      "  console.log(JSON.stringify({ type: 'message_update', assistantMessageEvent: { type: 'toolcall_delta', contentIndex: 1, delta: '\"src/main.ts\"}' } }));",
+      "  console.log(JSON.stringify({ type: 'message_update', assistantMessageEvent: { type: 'toolcall_end', contentIndex: 1, toolCall: { id: 'call-1', name: 'read', arguments: { path: 'src/main.ts' } } } }));",
+      "  console.log(JSON.stringify({ type: 'message_end', message: { ...base, content: [], stopReason: 'toolUse' } }));",
+      "  console.log(JSON.stringify({ type: 'message_start', message: { ...base, content: [] } }));",
+      "  console.log(JSON.stringify({ type: 'message_update', assistantMessageEvent: { type: 'text_delta', contentIndex: 0, delta: 'final re' } }));",
+      "  console.log(JSON.stringify({ type: 'message_update', assistantMessageEvent: { type: 'text_delta', contentIndex: 0, delta: 'port' } }));",
+      "  console.log(JSON.stringify({ type: 'message_update', assistantMessageEvent: { type: 'text_end', contentIndex: 0, content: 'final report' } }));",
+      "  console.log(JSON.stringify({ type: 'message_end', message: { ...base, content: [], stopReason: 'stop' } }));",
+      "  console.log(JSON.stringify({ type: 'agent_end' }));",
+      "});",
+    ].join("\n"));
+    process.argv[1] = script;
+    const updates: any[] = [];
+
+    const result = await runReviewSubprocess(
+      [], "task", tmp, undefined, (update) => updates.push(update), "review/reviewer",
+    );
+
+    // Deltas reassembled in contentIndex order per turn; toolCall shown live.
+    expect(displayItems(result.messages)).toEqual([
+      { type: "thinking", text: "checking files" },
+      { type: "tool", name: "read", args: { path: "src/main.ts" } },
+      { type: "text", text: "final report" },
+    ]);
+    const thinkingUpdate = updates.find((u) => displayItems(u.messages).some(
+      (item: any) => item.type === "thinking" && item.text === "checking files",
+    ));
+    expect(thinkingUpdate).toBeDefined();
+    const textUpdate = updates.find((u) => displayItems(u.messages).some(
+      (item: any) => item.type === "text" && item.text === "final report",
+    ));
+    expect(textUpdate).toBeDefined();
   });
 
   it("waits through auto-retry and keeps only assistant transcript messages", async () => {
