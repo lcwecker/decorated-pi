@@ -15,17 +15,12 @@
  * commands, and guideline injection register themselves directly with pi.
  */
 
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import {
-    existsSync,
-    mkdirSync,
-    readFileSync,
-    realpathSync,
-    statSync,
-    writeFileSync,
-} from "node:fs";
-import { tmpdir } from "node:os";
-import { delimiter, dirname, join, resolve } from "node:path";
+    getAgentDir,
+    type ExtensionAPI,
+} from "@earendil-works/pi-coding-agent";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 
 import { createSkeleton } from "./hooks/skeleton.js";
 
@@ -110,16 +105,26 @@ const TALK_NORMAL_GUIDANCE = [
 
 /** Remove the injected Pi documentation block from the base system prompt.
  *  Matches a line containing "Pi documentation" and deletes it plus all
- *  following non-empty lines, stopping at the first blank line. */
-export function stripPiDocsBlock(prompt: string): string {
+ *  following non-empty lines, stopping at the first blank line.
+ *  Returns the stripped prompt together with the removed block (trimmed),
+ *  so callers can reuse the exact text Pi rendered for this install. */
+export function stripPiDocsBlock(prompt: string): {
+    prompt: string;
+    block: string | undefined;
+} {
     const lines = prompt.split("\n");
     const out: string[] = [];
+    const removed: string[] = [];
     let i = 0;
     while (i < lines.length) {
         const line = lines[i];
         if (line.includes("Pi documentation")) {
+            removed.push(line);
             i++;
-            while (i < lines.length && lines[i].trim() !== "") i++;
+            while (i < lines.length && lines[i].trim() !== "") {
+                removed.push(lines[i]);
+                i++;
+            }
             // Drop the terminating blank line as well so we don't leave orphan whitespace.
             if (i < lines.length && lines[i].trim() === "") i++;
             continue;
@@ -127,7 +132,8 @@ export function stripPiDocsBlock(prompt: string): string {
         out.push(line);
         i++;
     }
-    return out.join("\n");
+    const block = removed.length > 0 ? removed.join("\n").trim() : undefined;
+    return { prompt: out.join("\n"), block };
 }
 
 /** Sort the <available_skills> block in the system prompt by skill name.
@@ -192,124 +198,147 @@ function canRegisterMcpServer(
     return dep ? dep.state === "ok" : true;
 }
 
-const PI_PACKAGE_NAME = "@earendil-works/pi-coding-agent";
+// ─── Builtin pi-docs skill ─────────────────────────────────────────────────
+//
+// A small SKILL.md lives at ~/.pi/agent/skills/pi-docs/ so Pi's own skill
+// discovery picks it up (progressive disclosure: name + description always in
+// context, the full block is loaded on demand via read). The skill body is the
+// exact "Pi documentation" block Pi rendered for the CURRENT install —
+// extracted at agent start (before_agent_start) from the live system prompt,
+// so it can never drift from what Pi would have told the model.
+//
+// Ownership is tracked via a frontmatter marker: if the file exists but lacks
+// the marker it is user-authored and is left untouched.
 
-interface PiPackageResolveOptions {
-    env?: Record<string, string | undefined>;
-    entrypoint?: string;
-    commandPath?: string;
-    executablePath?: string;
-    isBunBinary?: boolean;
+export const PI_DOCS_SKILL_NAME = "pi-docs";
+export const PI_DOCS_MARKER = "source: decorated-pi";
+export const PI_DOCS_DESCRIPTION =
+    "Use when the user asks about pi itself, its SDK, extensions, or themes.";
+
+/** Placeholder body used until the first agent turn replaces it with the
+ *  real rendered block. It is never visible to the model: before_agent_start
+ *  runs before any LLM inference. */
+const PI_DOCS_PLACEHOLDER_BODY =
+    "Placeholder — the full Pi documentation block is written on the first agent turn.\n";
+
+function piDocsSkillDir(agentDir: string): string {
+    return join(agentDir, "skills", PI_DOCS_SKILL_NAME);
 }
 
-function isPiPackageDir(dir: string): boolean {
-    try {
-        const manifest = JSON.parse(readFileSync(join(dir, "package.json"), "utf-8")) as {
-            name?: string;
-        };
-        return manifest.name === PI_PACKAGE_NAME;
-    } catch {
-        return false;
-    }
+function piDocsSkillFile(agentDir: string): string {
+    return join(piDocsSkillDir(agentDir), "SKILL.md");
 }
 
-function findPiPackageFromPath(startPath: string | undefined): string | undefined {
-    if (!startPath || !existsSync(startPath)) return undefined;
-
-    let current: string;
-    try {
-        const realPath = realpathSync(startPath);
-        current = statSync(realPath).isDirectory() ? realPath : dirname(realPath);
-    } catch {
-        return undefined;
-    }
-
-    while (true) {
-        if (isPiPackageDir(current)) return current;
-        const parent = dirname(current);
-        if (parent === current) return undefined;
-        current = parent;
-    }
-}
-
-function findPiCommand(env: Record<string, string | undefined>): string | undefined {
-    const pathValue = env.PATH;
-    if (!pathValue) return undefined;
-    const names = process.platform === "win32"
-        ? (env.PATHEXT ?? ".COM;.EXE;.BAT;.CMD").split(";").map((ext) => `pi${ext.toLowerCase()}`)
-        : ["pi"];
-
-    for (const dir of pathValue.split(delimiter)) {
-        if (!dir) continue;
-        for (const name of names) {
-            const candidate = resolve(dir, name);
-            if (existsSync(candidate)) return candidate;
-        }
-    }
-    return undefined;
-}
-
-/** Resolve the package root of the Pi instance hosting this extension. */
-export function resolveActivePiPackageDir(
-    options: PiPackageResolveOptions = {},
-): string | undefined {
-    const env = options.env ?? process.env;
-    const override = env.PI_PACKAGE_DIR;
-    if (override) {
-        const resolvedOverride = findPiPackageFromPath(override);
-        if (resolvedOverride) return resolvedOverride;
-    }
-
-    const fromEntrypoint = findPiPackageFromPath(options.entrypoint ?? process.argv[1]);
-    if (fromEntrypoint) return fromEntrypoint;
-
-    const fromCommand = findPiPackageFromPath(options.commandPath ?? findPiCommand(env));
-    if (fromCommand) return fromCommand;
-
-    const isBunBinary = options.isBunBinary ?? Boolean((process.versions as any).bun);
-    if (isBunBinary) {
-        try {
-            return dirname(realpathSync(options.executablePath ?? process.execPath));
-        } catch {
-            return undefined;
-        }
-    }
-    return undefined;
-}
-
-export function buildPiDocsSkill(piPackageDir: string): string {
+/** The YAML frontmatter for the generated skill (no trailing newline). */
+export function buildPiDocsFrontmatter(): string {
     return [
         "---",
-        "name: pi-docs",
-        "description: pi docs resources",
+        `name: ${PI_DOCS_SKILL_NAME}`,
+        `description: ${PI_DOCS_DESCRIPTION}`,
+        "metadata:",
+        `  ${PI_DOCS_MARKER}`,
         "---",
-        "",
-        "Pi documentation (read only when the user asks about pi itself, its SDK, extensions, themes, skills, or TUI):",
-        `- Main documentation: \`${join(piPackageDir, "README.md")}\``,
-        `- Additional docs: \`${join(piPackageDir, "docs")}\``,
-        `- Examples: \`${join(piPackageDir, "examples")}\` (extensions, custom tools, SDK)`,
-        "- When asked about: extensions (docs/extensions.md, examples/extensions/), themes (docs/themes.md), skills (docs/skills.md), prompt templates (docs/prompt-templates.md), TUI components (docs/tui.md), keybindings (docs/keybindings.md), SDK integrations (docs/sdk.md), custom providers (docs/custom-provider.md), adding models (docs/models.md), pi packages (docs/packages.md)",
-        "- When working on pi topics, read the docs and examples, and follow .md cross-references before implementing",
-        "- Always read pi .md files completely and follow links to related docs (e.g., tui.md for TUI API details)",
-        "",
     ].join("\n");
 }
 
-/** Write the builtin pi-docs skill with paths for the active Pi installation. */
-export function getBuiltinSkillPaths(piPackageDir: string): string[] {
-    const generatedRoot = join(tmpdir(), "decorated-pi", String(process.pid), "skills");
-    const generatedSkillDir = join(generatedRoot, "pi-docs");
-    mkdirSync(generatedSkillDir, { recursive: true });
-    writeFileSync(join(generatedSkillDir, "SKILL.md"), buildPiDocsSkill(piPackageDir), "utf-8");
-    return [generatedRoot];
+/** Split a SKILL.md file into frontmatter block and body, or undefined when
+ *  the file has no `---` frontmatter. */
+export function splitSkillFile(
+    content: string,
+): { frontmatter: string; body: string } | undefined {
+    const lines = content.split("\n");
+    if (lines[0]?.trim() !== "---") return undefined;
+    let end = -1;
+    for (let i = 1; i < lines.length; i++) {
+        if (lines[i].trim() === "---") {
+            end = i;
+            break;
+        }
+    }
+    if (end === -1) return undefined;
+    return {
+        frontmatter: lines.slice(0, end + 1).join("\n"),
+        body: lines.slice(end + 1).join("\n").replace(/^\n+/, "").replace(/\n+$/, ""),
+    };
 }
 
-/** Register the plugin's builtin skill paths with Pi core. */
-function installBuiltinSkills(pi: ExtensionAPI): void {
-    const piPackageDir = resolveActivePiPackageDir();
-    pi.on("resources_discover", async (_event: any) => ({
-        skillPaths: piPackageDir ? getBuiltinSkillPaths(piPackageDir) : [],
-    }));
+function tryReadFile(file: string): string | undefined {
+    try {
+        return readFileSync(file, "utf-8");
+    } catch {
+        return undefined;
+    }
+}
+
+/** Discovery stage (resources_discover): make sure a pi-docs SKILL.md exists
+ *  with our frontmatter so this session's skill scan picks up the entry.
+ *  Only the entry layer is managed here (file existence + frontmatter); the
+ *  body is managed on the first agent turn.
+ *  Returns the skillPaths to re-scan when the file was created or its
+ *  frontmatter changed; empty otherwise. User-authored files (no marker) are
+ *  never touched. */
+export function ensureSkillFrontmatter(
+    agentDir: string,
+): { skillPaths?: string[] } {
+    const file = piDocsSkillFile(agentDir);
+    const existing = tryReadFile(file);
+
+    if (existing === undefined) {
+        mkdirSync(piDocsSkillDir(agentDir), { recursive: true });
+        writeFileSync(
+            file,
+            `${buildPiDocsFrontmatter()}\n\n${PI_DOCS_PLACEHOLDER_BODY}`,
+            "utf-8",
+        );
+        return { skillPaths: [join(agentDir, "skills")] };
+    }
+
+    if (!existing.includes(PI_DOCS_MARKER)) {
+        // User-authored skill — leave it alone.
+        return {};
+    }
+
+    const split = splitSkillFile(existing);
+    const expected = buildPiDocsFrontmatter();
+    if (split && split.frontmatter === expected) {
+        // Entry layer already up to date; the initial scan covers the file.
+        return {};
+    }
+    const body = split && split.body.length > 0 ? split.body : PI_DOCS_PLACEHOLDER_BODY;
+    writeFileSync(file, `${expected}\n\n${body}`, "utf-8");
+    return { skillPaths: [join(agentDir, "skills")] };
+}
+
+/** Content stage (before_agent_start): sync the skill body with the exact
+ *  "Pi documentation" block Pi rendered for this install. Returns true when
+ *  the file was written. User-authored files (no marker) are untouched. */
+export function updateSkillBody(agentDir: string, block: string): boolean {
+    const file = piDocsSkillFile(agentDir);
+    const existing = tryReadFile(file);
+
+    if (existing === undefined) {
+        mkdirSync(piDocsSkillDir(agentDir), { recursive: true });
+        writeFileSync(file, `${buildPiDocsFrontmatter()}\n\n${block}\n`, "utf-8");
+        return true;
+    }
+    if (!existing.includes(PI_DOCS_MARKER)) {
+        return false; // user-authored
+    }
+    const split = splitSkillFile(existing);
+    if (split && split.body.trim() === block.trim()) {
+        return false; // already in sync
+    }
+    writeFileSync(file, `${buildPiDocsFrontmatter()}\n\n${block}\n`, "utf-8");
+    return true;
+}
+
+/** Register the discovery stage: create/refresh the entry layer and trigger a
+ *  re-scan when needed. */
+function installBuiltinSkillDiscovery(pi: ExtensionAPI): void {
+    pi.on("resources_discover", async () => {
+        const { skillPaths } = ensureSkillFrontmatter(getAgentDir());
+        return skillPaths ? { skillPaths } : undefined;
+    });
 }
 
 /** Install a single before_agent_start handler that appends every
@@ -321,8 +350,9 @@ function installGuidelines(pi: ExtensionAPI): void {
 
     pi.on("before_agent_start", async (event: any) => {
         if (!event.systemPrompt) return undefined;
-        let prompt: string = stripPiDocsBlock(event.systemPrompt);
-        prompt = sortSkillsInSystemPrompt(prompt);
+        const { prompt: stripped, block } = stripPiDocsBlock(event.systemPrompt);
+        if (block) updateSkillBody(getAgentDir(), block);
+        let prompt = sortSkillsInSystemPrompt(stripped);
         if (prompt.includes(marker)) return undefined; // already injected this turn
         return { systemPrompt: `${prompt}\n\n${joined}` };
     });
@@ -415,7 +445,7 @@ export default async function (pi: ExtensionAPI) {
     }
 
     // ── Builtin skills (travel with the plugin in every project) ─────────────
-    installBuiltinSkills(pi);
+    installBuiltinSkillDiscovery(pi);
 
     // ── System-prompt guidelines (single handler, array order = prompt order) ──
     installGuidelines(pi);
