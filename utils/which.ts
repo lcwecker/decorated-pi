@@ -27,7 +27,7 @@ import { homedir } from "node:os";
 
 export interface WhichOptions {
   /** Extra locations to search before $PATH. Each entry can be a file
-   *  path (e.g. "/custom/bin/rtk") or a directory (e.g. "~/.wakatime").
+   *  path (e.g. "/custom/bin/wakatime-cli") or a directory (e.g. "~/.wakatime").
    *  Tried in array order; first executable match wins. */
   extendPath?: string[];
 }

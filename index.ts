@@ -38,7 +38,6 @@ import { piToolFilterModule } from "./hooks/pi-tool-filter.js";
 import { setupCompaction } from "./hooks/compaction.js";
 import { McpRuntime, createMcpModule } from "./hooks/mcp.js";
 import { setupWakatime } from "./hooks/wakatime.js";
-import { setupRtk } from "./hooks/rtk.js";
 import { createCodeReviewModule } from "./hooks/code-review.js";
 
 import { registerPatchTool } from "./tools/patch/index.js";
@@ -387,7 +386,6 @@ export default async function (pi: ExtensionAPI) {
     sk.register(sessionTitleModule);
     // Compaction + optional integrations.
     setupCompaction(sk);
-    if (isModuleEnabled("rtk")) setupRtk(sk);
     if (isModuleEnabled("wakatime")) setupWakatime(sk);
 
     // Code review is command-driven and never registered as an LLM-callable tool.

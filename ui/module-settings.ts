@@ -17,7 +17,6 @@ type ModuleName =
   | "lsp"
   | "mcp"
   | "wakatime"
-  | "rtk"
   | "ask"
   | "retry"
   | "usage";
@@ -27,7 +26,6 @@ const MODULE_LABELS: Record<ModuleName, string> = {
   lsp: "LSP",
   mcp: "MCP",
   wakatime: "WakaTime",
-  "rtk": "RTK",
   ask: "Ask",
   retry: "Retry",
   usage: "Usage",
@@ -38,7 +36,6 @@ const MODULE_DESCS: Record<ModuleName, string> = {
   lsp: "Language server diagnostics, hover, definition, references, symbols, rename",
   mcp: "MCP client with builtin servers (context7, exa, codegraph)",
   wakatime: "Send coding activity heartbeats to WakaTime",
-  "rtk": "Rewrite bash through system RTK when available",
   ask: "Interactive ask tool for user clarification (blocks loop until answered)",
   retry: "/retry command to continue after interruption",
   usage: "/usage command for token stats",
@@ -61,7 +58,7 @@ const CATEGORIES: Record<CategoryId, CategoryDef> = {
   hooks: {
     label: "Hooks",
     description: "Agent-loop event handlers",
-    modules: ["rtk", "wakatime"],
+    modules: ["wakatime"],
   },
   tools: {
     label: "Tools",
@@ -96,7 +93,6 @@ const MODULE_TO_CATEGORY: Record<ModuleName, CategoryId> = {
   ask: "tools",
   lsp: "tools",
   mcp: "tools",
-  "rtk": "hooks",
   wakatime: "hooks",
   retry: "commands",
   usage: "commands",
@@ -233,7 +229,6 @@ class DependenciesSubmenu extends Container {
     super();
     // Builtins we know about plus entries already present in config/shadow.
     this.binaryNames = listDependencyViewNames([
-      "rtk",
       "wakatime-cli",
       ...listLspBinaryNames(),
       ...listMcpBinaryNames(),
@@ -287,7 +282,7 @@ export class ModuleSettingsComponent extends Container {
     categoryItems.splice(1, 0, {
       id: "dependencies",
       label: "Dependencies",
-      description: "Override binary paths (rtk, wakatime-cli, LSP/MCP servers)",
+      description: "Override binary paths (wakatime-cli, LSP/MCP servers)",
       currentValue: summaryForDependencies(),
       submenu: (_currentValue, done) => new DependenciesSubmenu(theme, ui, done),
     });
@@ -314,9 +309,8 @@ export class ModuleSettingsComponent extends Container {
 
 /** Count how many binaries have an explicit override. */
 function summaryForDependencies(): string {
-  // Builtins we know about: rtk, wakatime-cli, LSP servers, MCP servers.
+  // Builtins we know about: wakatime-cli, LSP servers, MCP servers.
   const known = listDependencyViewNames([
-    "rtk",
     "wakatime-cli",
     ...listLspBinaryNames(),
     ...listMcpBinaryNames(),

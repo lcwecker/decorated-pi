@@ -242,7 +242,7 @@ describe("skeleton — dependency check", () => {
 
   it("fires on session_start with reason='startup'", async () => {
     const sk = createSkeleton();
-    sk.declareMissing({ name: "rtk", hint: "install rtk" });
+    sk.declareMissing({ name: "depbin", hint: "install depbin" });
     sk.install(pi as any);
 
     const ctx = makeCtx();
@@ -275,7 +275,7 @@ describe("skeleton — dependency check", () => {
 
   it("skips session_start with reason='new' / 'resume' / 'fork'", async () => {
     const sk = createSkeleton();
-    sk.declareMissing({ name: "rtk" });
+    sk.declareMissing({ name: "depbin" });
     sk.install(pi as any);
 
     for (const reason of ["new", "resume", "fork"] as const) {
@@ -288,7 +288,7 @@ describe("skeleton — dependency check", () => {
 
   it("defers notification with setTimeout(0) so it survives UI rebuild", async () => {
     const sk = createSkeleton();
-    sk.declareMissing({ name: "rtk" });
+    sk.declareMissing({ name: "depbin" });
     sk.install(pi as any);
 
     const ctx = makeCtx();
@@ -332,7 +332,7 @@ describe("skeleton — dependency check", () => {
 
   it("dedupes by binary name (multiple modules can declare the same)", async () => {
     const sk = createSkeleton();
-    sk.declareMissing({ name: "delta", module: "rtk" });
+    sk.declareMissing({ name: "delta", module: "depbin" });
     sk.declareMissing({ name: "delta", module: "diff-command" });
     sk.install(pi as any);
 
@@ -352,14 +352,14 @@ describe("skeleton — dependency check", () => {
     (settings as any).__setDontBother(["wakatime-cli"]);
     try {
       const sk = createSkeleton();
-      sk.declareMissing({ name: "rtk" });
+      sk.declareMissing({ name: "depbin" });
       sk.declareMissing({ name: "wakatime-cli" });
       sk.install(pi as any);
 
       const ctx = makeCtx();
       await pi.handlers.get("session_start")![0]({ reason: "startup" }, ctx as any);
       await vi.advanceTimersByTimeAsync(0);
-      // Only rtk counts (wakatime-cli silenced)
+      // Only depbin counts (wakatime-cli silenced)
       expect(ctx.ui.notify).toHaveBeenCalledWith(
         expect.stringContaining("(1)"),
         "info",
@@ -371,7 +371,7 @@ describe("skeleton — dependency check", () => {
 
   it("swallows notify() throws (stale ctx after reload race)", async () => {
     const sk = createSkeleton();
-    sk.declareMissing({ name: "rtk" });
+    sk.declareMissing({ name: "depbin" });
     sk.install(pi as any);
 
     const ctx = makeCtx({ ui: { notify: vi.fn(() => { throw new Error("ctx stale"); }) } });
@@ -383,7 +383,7 @@ describe("skeleton — dependency check", () => {
 
   it("skips notification when ctx.hasUI is false", async () => {
     const sk = createSkeleton();
-    sk.declareMissing({ name: "rtk" });
+    sk.declareMissing({ name: "depbin" });
     sk.install(pi as any);
 
     const ctx = makeCtx({ hasUI: false });
@@ -394,7 +394,7 @@ describe("skeleton — dependency check", () => {
 
   it("clears a pending notify timer on session_shutdown", async () => {
     const sk = createSkeleton();
-    sk.declareMissing({ name: "rtk" });
+    sk.declareMissing({ name: "depbin" });
     sk.install(pi as any);
 
     const ctx = makeCtx();
@@ -426,9 +426,9 @@ describe("skeleton — dependency check re-runs per session_start", () => {
   });
 
   it("re-evaluates missing set on each session_start (reload cycle)", async () => {
-    // First session: rtk is missing.
+    // First session: depbin is missing.
     const sk1 = createSkeleton();
-    sk1.declareMissing({ name: "rtk" });
+    sk1.declareMissing({ name: "depbin" });
     sk1.install(pi as any);
 
     const ctx1 = makeCtx();
@@ -436,10 +436,10 @@ describe("skeleton — dependency check re-runs per session_start", () => {
     await vi.advanceTimersByTimeAsync(0);
     expect(ctx1.ui.notify).toHaveBeenCalled();
 
-    // Second "reload" — user installed rtk, no declareMissing called.
+    // Second "reload" — user installed depbin, no declareMissing called.
     pi = makePi();
     const sk2 = createSkeleton();
-    // No declareMissing this time — rtk is now found.
+    // No declareMissing this time — depbin is now found.
     sk2.install(pi as any);
 
     const ctx2 = makeCtx();
@@ -462,7 +462,7 @@ describe("skeleton — inspect()", () => {
       name: "beta",
       hooks: { agent_end: [() => {}], session_start: [() => {}] },
     });
-    sk.declareMissing({ name: "rtk", hint: "install rtk" });
+    sk.declareMissing({ name: "depbin", hint: "install depbin" });
 
     const info = sk.inspect();
     expect(info.modules).toEqual(["alpha", "beta"]);
@@ -471,7 +471,7 @@ describe("skeleton — inspect()", () => {
       { module: "beta", order: 1 },
     ]);
     expect(info.events.agent_end).toEqual([{ module: "beta", order: 0 }]);
-    expect(info.dependencies).toEqual([{ name: "rtk", module: undefined, hint: "install rtk" }]);
+    expect(info.dependencies).toEqual([{ name: "depbin", module: undefined, hint: "install depbin" }]);
   });
 
   it("returns empty inspection for a fresh skeleton", () => {

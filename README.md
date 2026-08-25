@@ -24,8 +24,6 @@ Multiple layers of token savings that compound across every session.
 
 **Talk Normal Prompt** — injects a response-style prompt adapted from [talk-normal](https://github.com/hexiecs/talk-normal) (prompt.md v0.6.2), trimming filler, summary stamps, conditional follow-up menus, negation-frame phrasing, and verbose framing. This reduces assistant output tokens and keeps visible reasoning / explanation blocks tighter.
 
-**RTK** — integrates [RTK](https://github.com/rtk-ai/rtk) to rewrite supported shell commands into compact, structured output, falling back to the original command if RTK fails. **Just install the CLI, zero config**.
-
 **Codegraph** — integrates [codegraph](https://github.com/colbymchenry/codegraph) to offer a code map of your project, so the LLM can navigate symbols and call graphs without chaining `ls` → `grep` → `read`. **Create and maintain the project index yourself; see the [codegraph documentation](https://github.com/colbymchenry/codegraph/blob/main/README.md).**
 
 **Auxiliary Models** — offloads heavy-but-dumb tasks to cheaper models so your primary model only pays for the hard work:
@@ -126,7 +124,6 @@ Runtime settings live in `~/.pi/agent/decorated-pi.json`. Run `/dp-settings` to 
       "mcp": true
     },
     "hooks": {
-      "rtk": true,
       "wakatime": true
     },
     "commands": {
@@ -135,10 +132,6 @@ Runtime settings live in `~/.pi/agent/decorated-pi.json`. Run `/dp-settings` to 
     }
   },
   "dependencies": {
-    "rtk": {
-      "path": "/custom/bin/rtk",
-      "dontBother": false
-    },
     "wakatime-cli": {
       "dontBother": true
     }

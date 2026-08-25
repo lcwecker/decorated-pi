@@ -73,7 +73,7 @@ describe("extension load smoke test", () => {
     const clean = {
       modules: {
         tools: { patchOverrideEdit: true, ask: true, lsp: false, mcp: false },
-        hooks: { rtk: true, wakatime: true },
+        hooks: { wakatime: true },
         commands: { retry: true, usage: true },
       },
     };

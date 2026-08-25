@@ -230,14 +230,13 @@ describe("Module Settings", () => {
     saveConfig({
       modules: {
         tools: { patchOverrideEdit: false, lsp: true },
-        hooks: { rtk: true, wakatime: false },
+        hooks: { wakatime: false },
         commands: {},
       },
     });
     const config = loadConfig();
     expect(config.modules?.tools?.patchOverrideEdit).toBe(false);
     expect(config.modules?.tools?.lsp).toBe(true);
-    expect(config.modules?.hooks?.rtk).toBe(true);
     expect(config.modules?.hooks?.wakatime).toBe(false);
   });
 
@@ -311,61 +310,61 @@ describe("dependencies", () => {
   });
 
   it("getDependencyPath returns null when not configured", () => {
-    expect(getDependencyPath("rtk")).toBe(null);
+    expect(getDependencyPath("depbin")).toBe(null);
   });
 
   it("setDependencyPath persists and getDependencyPath reads back", () => {
-    setDependencyPath("rtk", "/custom/rtk");
-    expect(getDependencyPath("rtk")).toBe("/custom/rtk");
+    setDependencyPath("depbin", "/custom/depbin");
+    expect(getDependencyPath("depbin")).toBe("/custom/depbin");
   });
 
   it("setDependencyPath null clears the override", () => {
-    setDependencyPath("rtk", "/custom/rtk");
-    expect(getDependencyPath("rtk")).toBe("/custom/rtk");
-    setDependencyPath("rtk", null);
-    expect(getDependencyPath("rtk")).toBe(null);
+    setDependencyPath("depbin", "/custom/depbin");
+    expect(getDependencyPath("depbin")).toBe("/custom/depbin");
+    setDependencyPath("depbin", null);
+    expect(getDependencyPath("depbin")).toBe(null);
   });
 
   it("dependencies are independent per binary name", () => {
-    setDependencyPath("rtk", "/a/rtk");
+    setDependencyPath("depbin", "/a/depbin");
     setDependencyPath("wakatime-cli", "/b/wakatime-cli");
-    expect(getDependencyPath("rtk")).toBe("/a/rtk");
+    expect(getDependencyPath("depbin")).toBe("/a/depbin");
     expect(getDependencyPath("wakatime-cli")).toBe("/b/wakatime-cli");
   });
 
   it("moduleSnapshotChanged returns true after dependency path changes", () => {
     captureModuleSnapshot();
     expect(moduleSnapshotChanged()).toBe(false);
-    setDependencyPath("rtk", "/custom/rtk");
+    setDependencyPath("depbin", "/custom/depbin");
     expect(moduleSnapshotChanged()).toBe(true);
   });
 
   it("moduleSnapshotChanged returns false after dependency cleared back to baseline", () => {
-    setDependencyPath("rtk", "/custom/rtk");
+    setDependencyPath("depbin", "/custom/depbin");
     captureModuleSnapshot();
-    setDependencyPath("rtk", null);
+    setDependencyPath("depbin", null);
     expect(moduleSnapshotChanged()).toBe(true);
-    setDependencyPath("rtk", "/custom/rtk");
+    setDependencyPath("depbin", "/custom/depbin");
     expect(moduleSnapshotChanged()).toBe(false);
   });
 
   it("setDependencyPath doesn't clobber other dependencies", () => {
-    setDependencyPath("rtk", "/a/rtk");
+    setDependencyPath("depbin", "/a/depbin");
     setDependencyPath("gopls", "/b/gopls");
     setDependencyPath("wakatime-cli", "/c/wakatime-cli");
-    expect(getDependencyPath("rtk")).toBe("/a/rtk");
+    expect(getDependencyPath("depbin")).toBe("/a/depbin");
     expect(getDependencyPath("gopls")).toBe("/b/gopls");
     expect(getDependencyPath("wakatime-cli")).toBe("/c/wakatime-cli");
   });
 
   it("setDontBother preserves path override", () => {
-    setDependencyPath("rtk", "/custom/rtk");
-    setDontBother("rtk", true);
-    expect(getDependencyPath("rtk")).toBe("/custom/rtk");
-    expect(isDontBother("rtk")).toBe(true);
-    setDontBother("rtk", false);
-    expect(getDependencyPath("rtk")).toBe("/custom/rtk");
-    expect(isDontBother("rtk")).toBe(false);
+    setDependencyPath("depbin", "/custom/depbin");
+    setDontBother("depbin", true);
+    expect(getDependencyPath("depbin")).toBe("/custom/depbin");
+    expect(isDontBother("depbin")).toBe(true);
+    setDontBother("depbin", false);
+    expect(getDependencyPath("depbin")).toBe("/custom/depbin");
+    expect(isDontBother("depbin")).toBe(false);
   });
 
   it("resolveDependency records runtime shadow without persisting it", () => {

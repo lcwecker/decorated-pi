@@ -47,8 +47,6 @@ export interface ModuleSettings {
     mcp?: boolean;
   };
   hooks?: {
-    /** Rewrite bash through system RTK when available. */
-    "rtk"?: boolean;
     /** Send coding activity heartbeats to WakaTime. */
     wakatime?: boolean;
   };
@@ -68,7 +66,7 @@ export interface UsageIndexEntry {
 
 /** Per-binary dependency override.
  *
- *  Keyed by binary name (e.g. "rtk", "wakatime-cli", "gopls",
+ *  Keyed by binary name (e.g. "wakatime-cli", "gopls",
  *  "codegraph"). `path` injects an extra search location into which();
  *  `dontBother` silences missing-dependency notifications for this binary. */
 export interface DependencySettings {
@@ -238,10 +236,10 @@ export function getDependencyView(name: string): DependencyView {
 }
 
 export function listDependencyViewNames(extraNames: string[] = []): string[] {
-  return [...new Set([
-    ...extraNames,
-    ...Object.keys(getConfigView().dependencies ?? {}),
-  ])].sort();
+  // Only the known binaries (builtins) are listed. Config keys that aren't a
+  // known binary are intentionally excluded, so a stale entry for a removed
+  // tool never surfaces in /dp-settings.
+  return [...new Set(extraNames)].sort();
 }
 
 export function recordDependencyResolution(name: string, resolvedPath: string | null): void {
@@ -339,7 +337,6 @@ const DEFAULT_MODULES: Required<ModuleSettings> = {
     mcp: true,
   },
   hooks: {
-    "rtk": true,
     wakatime: true,
   },
   commands: {
@@ -354,7 +351,6 @@ const MODULE_TO_CATEGORY: Record<string, keyof ModuleSettings> = {
   ask: "tools",
   lsp: "tools",
   mcp: "tools",
-  "rtk": "hooks",
   wakatime: "hooks",
   retry: "commands",
   usage: "commands",
@@ -403,7 +399,6 @@ function migrateModuleSettings(config: DecoratedPiConfig): boolean {
     ask: ["tools", "ask"],
     lsp: ["tools", "lsp"],
     mcp: ["tools", "mcp"],
-    "rtk": ["hooks", "rtk"],
     wakatime: ["hooks", "wakatime"],
     retry: ["commands", "retry"],
     usage: ["commands", "usage"],
@@ -479,7 +474,7 @@ export function moduleSnapshotChanged(): boolean {
   // Dependencies changes don't strictly require reload (which() reads the
   // config file on every call), but prompt for consistency — the user
   // might be mid-session and expect the new path to be picked up by hooks
-  // that captured the binary path at startup (rtk/wakatime).
+  // that captured the binary path at startup (wakatime).
   const currentDeps = loadConfig().dependencies ?? {};
   if (JSON.stringify(loadedDependenciesSnapshot) !== JSON.stringify(currentDeps)) return true;
   return false;

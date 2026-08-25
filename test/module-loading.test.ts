@@ -184,9 +184,7 @@ describe("index.ts — conditional loading structure (new architecture)", () => 
     expect(indexSrc).toContain("registerPatchTool");
   });
 
-  it("gates rtk and wakatime hooks behind isModuleEnabled", () => {
-    expect(indexSrc).toContain('if (isModuleEnabled("rtk"))');
-    expect(indexSrc).toContain("setupRtk");
+  it("gates wakatime hook behind isModuleEnabled", () => {
     expect(indexSrc).toContain('if (isModuleEnabled("wakatime"))');
     expect(indexSrc).toContain("setupWakatime");
   });
