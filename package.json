@@ -24,15 +24,14 @@
         "@biomejs/biome": "^2.5.5",
         "@modelcontextprotocol/sdk": "^1.29.0",
         "chardet": "^2.2.0",
-        "file-type": "^21.3.4",
         "iconv-lite": "^0.7.2",
         "typescript": "^7.0.2"
     },
     "peerDependencies": {
-        "@earendil-works/pi-agent-core": ">=0.84.0",
-        "@earendil-works/pi-ai": ">=0.84.0",
-        "@earendil-works/pi-coding-agent": ">=0.84.0",
-        "@earendil-works/pi-tui": ">=0.84.0",
+        "@earendil-works/pi-agent-core": ">=0.84.4",
+        "@earendil-works/pi-ai": ">=0.84.4",
+        "@earendil-works/pi-coding-agent": ">=0.84.4",
+        "@earendil-works/pi-tui": ">=0.84.4",
         "typebox": "*"
     },
     "pi": {
@@ -41,10 +40,10 @@
         ]
     },
     "devDependencies": {
-        "@earendil-works/pi-agent-core": "^0.84.0",
-        "@earendil-works/pi-ai": "^0.84.0",
-        "@earendil-works/pi-coding-agent": "^0.84.0",
-        "@earendil-works/pi-tui": "^0.84.0",
+        "@earendil-works/pi-agent-core": "^0.84.4",
+        "@earendil-works/pi-ai": "^0.84.4",
+        "@earendil-works/pi-coding-agent": "^0.84.4",
+        "@earendil-works/pi-tui": "^0.84.4",
         "@types/node": "^22.15.3",
         "@vitest/coverage-v8": "4.1.8",
         "depcheck": "^1.4.7",

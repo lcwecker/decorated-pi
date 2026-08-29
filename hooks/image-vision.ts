@@ -10,10 +10,10 @@
  * messages).
  */
 
-import { fileTypeFromFile } from "file-type";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import { resolve } from "node:path";
+import { detectSupportedImageMimeTypeFromFile } from "@earendil-works/pi-coding-agent";
 import type { ModelRegistry } from "@earendil-works/pi-coding-agent";
 import type { Model } from "@earendil-works/pi-ai";
 import { getImageModelKey, parseModelKey } from "../settings.js";
@@ -29,9 +29,9 @@ function expandHome(filePath: string): string {
 
 async function detectImageMimeType(filePath: string): Promise<string | null> {
   try {
-    const type = await fileTypeFromFile(filePath);
-    if (!type || !SUPPORTED_IMAGE_TYPES.has(type.mime)) return null;
-    return type.mime;
+    const mime = await detectSupportedImageMimeTypeFromFile(filePath);
+    if (!mime || !SUPPORTED_IMAGE_TYPES.has(mime)) return null;
+    return mime;
   } catch {
     return null;
   }
@@ -147,4 +147,4 @@ export function createImageVisionModule(): Module {
   };
 }
 
-export const __imageVisionTest = { expandHome };
+export const __imageVisionTest = { expandHome, detectImageMimeType };

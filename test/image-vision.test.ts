@@ -2,12 +2,13 @@
  * Tests for image-vision.ts — vision model analysis of image reads.
  */
 
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { analyzeImage, __imageVisionTest, createImageVisionModule } from "../hooks/image-vision.js";
 
-const { expandHome } = __imageVisionTest;
+const { expandHome, detectImageMimeType } = __imageVisionTest;
 
 describe("image-vision", () => {
   // ─── expandHome ─────────────────────────────────────────────────────
@@ -116,5 +117,72 @@ describe("createImageVisionModule state isolation", () => {
     await aCall(makeToolCallEvent("a-1"), { cwd: process.cwd() });
     const bResultValue = await bResult(makeToolResultEvent("a-1"), { cwd: process.cwd() });
     expect(bResultValue).toBeUndefined();
+  });
+});
+
+describe("detectImageMimeType (real files)", () => {
+  let dir: string;
+
+  beforeEach(() => {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), "imgv-"));
+  });
+
+  afterEach(() => {
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  function writeFile(name: string, buf: Buffer): string {
+    const p = path.join(dir, name);
+    fs.writeFileSync(p, buf);
+    return p;
+  }
+
+  // Real magic-byte buffers for each format (sniffed by Pi's helper, which
+  // reads the first ~4 KB and inspects the signature — it does not decode).
+  const PNG = Buffer.concat([
+    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+    Buffer.from([0, 0, 0, 13]),
+    Buffer.from("IHDR"),
+  ]);
+  const JPEG = Buffer.from([0xff, 0xd8, 0xff, 0xe0]);
+  const GIF = Buffer.from("GIF89a");
+  const WEBP = Buffer.concat([Buffer.from("RIFF"), Buffer.alloc(4), Buffer.from("WEBP")]);
+  const BMP = (() => {
+    const pixelOffset = 54;
+    const buf = Buffer.alloc(pixelOffset + 4);
+    buf.write("BM", 0, "ascii");
+    buf.writeUInt32LE(buf.length, 2);
+    buf.writeUInt32LE(0, 6);
+    buf.writeUInt32LE(pixelOffset, 10);
+    buf.writeUInt32LE(40, 14);
+    buf.writeInt32LE(1, 18);
+    buf.writeInt32LE(1, 22);
+    buf.writeUInt16LE(1, 26);
+    buf.writeUInt16LE(24, 28);
+    buf.writeUInt32LE(0, 30);
+    buf.writeUInt32LE(4, 34);
+    buf.writeInt32LE(2835, 38);
+    buf.writeInt32LE(2835, 42);
+    buf.writeUInt32LE(0, 46);
+    buf.writeUInt32LE(0, 50);
+    buf[54] = 0; buf[55] = 0; buf[56] = 255; buf[57] = 0; // 1x1 red pixel
+    return buf;
+  })();
+
+  it("detects each supported format", async () => {
+    expect(await detectImageMimeType(writeFile("a.png", PNG))).toBe("image/png");
+    expect(await detectImageMimeType(writeFile("a.jpg", JPEG))).toBe("image/jpeg");
+    expect(await detectImageMimeType(writeFile("a.gif", GIF))).toBe("image/gif");
+    expect(await detectImageMimeType(writeFile("a.webp", WEBP))).toBe("image/webp");
+  });
+
+  it("returns null for unsupported types Pi still detects (e.g. BMP)", async () => {
+    expect(await detectImageMimeType(writeFile("a.bmp", BMP))).toBeNull();
+  });
+
+  it("returns null for non-image and malformed files", async () => {
+    expect(await detectImageMimeType(writeFile("a.txt", Buffer.from("not an image")))).toBeNull();
+    // A PNG signature alone (truncated) is malformed — no valid IHDR chunk.
+    expect(await detectImageMimeType(writeFile("a.t.png", PNG.subarray(0, 8)))).toBeNull();
   });
 });
