@@ -39,7 +39,7 @@ const PatchSchema = Type.Object({
     }),
     edits: Type.Array(EditSchema, {
         description:
-            "Targeted replacements applied sequentially. Each edit does exact string replacement with optional anchor.",
+            "Array of edit objects applied sequentially — always an array, even for a single edit. Each edit does exact string replacement with optional anchor. Must be a real JSON array, not a string containing JSON.",
     }),
 });
 
@@ -85,21 +85,56 @@ function jsonParseWithNewlineFix(str: string): any {
     }
 }
 
+const EDITS_SHAPE_HINT =
+    'edits must be a JSON array of objects, e.g. "edits": [{"old_str": "a", "new_str": "b"}] — never a string containing JSON.';
+
+function isEditObject(value: any): boolean {
+    return (
+        !!value &&
+        typeof value === "object" &&
+        !Array.isArray(value) &&
+        typeof value.old_str === "string" &&
+        typeof value.new_str === "string"
+    );
+}
+
+/** Normalize whatever the model sent for `edits` into an array of edit objects. */
+function normalizeEdits(edits: any): any {
+    // "[{...}]" / "{...}" — the whole array (or a lone edit) arrived stringified.
+    if (typeof edits === "string") {
+        const trimmed = edits.trim();
+        if (!trimmed) return edits;
+        const parsed = jsonParseWithNewlineFix(trimmed);
+        if (Array.isArray(parsed)) return normalizeEdits(parsed);
+        if (isEditObject(parsed)) return [parsed];
+        throw new Error(
+            `patch: could not parse the "edits" string as a JSON array. ${EDITS_SHAPE_HINT}`,
+        );
+    }
+    // { old_str, new_str } — a single edit sent without the array wrapper.
+    if (isEditObject(edits)) return [edits];
+    if (!Array.isArray(edits)) return edits;
+    // ["{...}", {...}] — individual entries arrived stringified.
+    return edits.map((entry) => {
+        if (typeof entry !== "string") return entry;
+        const parsed = jsonParseWithNewlineFix(entry);
+        if (isEditObject(parsed)) return parsed;
+        throw new Error(
+            `patch: could not parse edits entry as an edit object. ${EDITS_SHAPE_HINT}`,
+        );
+    });
+}
+
 export function preparePatchArguments(input: any): any {
     if (!input || typeof input !== "object") return input;
     const args = input as Record<string, any>;
-    if (typeof args.edits === "string") {
-        try {
-            const parsed = jsonParseWithNewlineFix(args.edits);
-            if (Array.isArray(parsed)) args.edits = parsed;
-        } catch {
-            /* keep original */
-        }
+    if (args.edits !== undefined && args.edits !== null) {
+        args.edits = normalizeEdits(args.edits);
     }
     if (typeof args.old_str === "string" && typeof args.new_str === "string") {
         const edit: any = { old_str: args.old_str, new_str: args.new_str };
         if (typeof args.anchor === "string") edit.anchor = args.anchor;
-        args.edits = args.edits ? [...args.edits, edit] : [edit];
+        args.edits = Array.isArray(args.edits) ? [...args.edits, edit] : [edit];
         delete args.old_str;
         delete args.new_str;
         delete args.anchor;
@@ -287,10 +322,13 @@ export function registerPatchTool(pi: ExtensionAPI): void {
                 "Edits a file using exact string replacement, with anchor support.",
                 "When old_str is not unique, add more surrounding context or use anchor to narrow search.",
                 "",
-                "Examples:",
-                '  { path: "src/foo.ts", edits: [{ old_str: "return 1", new_str: "return 42" }] }',
-                '  { path: "src/foo.ts", edits: [{ anchor: "function bar() {", old_str: "return x", new_str: "return x + 1" }] }',
-                '  { path: "src/foo.ts", edits: [{ anchor: "function init() {", old_str: "const DEBUG = true;", new_str: "const DEBUG = false;" }, { old_str: "log(\\"debug\\");", new_str: "// debug disabled" }] }',
+                'Arguments are JSON. "edits" is ALWAYS an array of edit objects — also for a single edit.',
+                'Never send "edits" as a string containing JSON.',
+                "",
+                "Examples (valid JSON):",
+                '  {"path": "src/foo.ts", "edits": [{"old_str": "return 1", "new_str": "return 42"}]}',
+                '  {"path": "src/foo.ts", "edits": [{"anchor": "function bar() {", "old_str": "return x", "new_str": "return x + 1"}]}',
+                '  {"path": "src/foo.ts", "edits": [{"anchor": "function init() {", "old_str": "const DEBUG = true;", "new_str": "const DEBUG = false;"}, {"old_str": "log(\\"debug\\");", "new_str": "// debug disabled"}]}',
                 "",
                 "Anchor (optional): narrows old_str search to lines after a unique marker.",
                 "  Code: use the enclosing definition — function/class/struct/method signature.",

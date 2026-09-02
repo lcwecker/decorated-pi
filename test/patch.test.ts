@@ -18,7 +18,7 @@ import {
   __patchCoreTest,
 } from "../tools/patch/core.js";
 import { detectFileEncoding, readFileDecoded, writeFileEncoded } from "../tools/patch/encoding.js";
-import { preparePatchArguments, formatPatchMetaLine } from "../tools/patch/index.js";
+import { preparePatchArguments, formatPatchMetaLine, registerPatchTool } from "../tools/patch/index.js";
 
 // ═══════════════════════════════════════════════════════════════════════════
 // applyPatches Tests
@@ -819,6 +819,51 @@ describe("applyPatches", () => {
     expect(result.edits).toEqual([{ old_str: "x", new_str: "y" }]);
   });
 
+
+  it("passes through normal multi-edit array unchanged", () => {
+    const edits = [
+      { old_str: "x", new_str: "y" },
+      { anchor: "fn f() {", old_str: "a", new_str: "b" },
+    ];
+    const result = preparePatchArguments({ path: "a.ts", edits });
+    expect(result.edits).toEqual(edits);
+  });
+
+  it("repairs a single edit object sent without the array wrapper", () => {
+    const result = preparePatchArguments({
+      path: "a.ts",
+      edits: { old_str: "x", new_str: "y" },
+    });
+    expect(result.edits).toEqual([{ old_str: "x", new_str: "y" }]);
+  });
+
+  it("repairs a stringified single edit object", () => {
+    const result = preparePatchArguments({
+      path: "a.ts",
+      edits: JSON.stringify({ old_str: "x", new_str: "y" }),
+    });
+    expect(result.edits).toEqual([{ old_str: "x", new_str: "y" }]);
+  });
+
+  it("repairs an array whose entries are stringified edit objects", () => {
+    const result = preparePatchArguments({
+      path: "a.ts",
+      edits: [JSON.stringify({ old_str: "x", new_str: "y" })],
+    });
+    expect(result.edits).toEqual([{ old_str: "x", new_str: "y" }]);
+  });
+
+  it("throws an actionable error for a malformed edits string", () => {
+    expect(() =>
+      preparePatchArguments({ path: "a.ts", edits: "[{old_str: x" }),
+    ).toThrow(/edits must be a JSON array of objects/);
+  });
+
+  it("throws an actionable error for a malformed stringified entry", () => {
+    expect(() =>
+      preparePatchArguments({ path: "a.ts", edits: ["not json"] }),
+    ).toThrow(/edits must be a JSON array of objects/);
+  });
 
   it("repairs edits serialized as string", () => {
     const edits = [{ old_str: "x", new_str: "y" }];
@@ -2048,5 +2093,41 @@ describe("computePatchPreview — uniqueness parity with apply", () => {
     expect(p.error).toBeDefined();
     expect(p.error).toMatch(/appears|times|unique/i);
     expect(p.diff).toBeUndefined();
+  });
+});
+
+// ─── tool description: examples must be valid JSON ────────────────────────
+
+describe("patch tool description", () => {
+  function getPatchDefinition(): any {
+    let definition: any;
+    registerPatchTool({
+      registerTool: (def: any) => {
+        definition = def;
+      },
+    } as any);
+    return definition;
+  }
+
+  it("documents examples as valid JSON with an edits array", () => {
+    const description: string = getPatchDefinition().description;
+    const examples = description
+      .split("\n")
+      .map((l) => l.trim())
+      .filter((l) => l.startsWith("{"));
+
+    expect(examples.length).toBeGreaterThan(0);
+    for (const example of examples) {
+      const parsed = JSON.parse(example);
+      expect(typeof parsed.path).toBe("string");
+      expect(Array.isArray(parsed.edits)).toBe(true);
+      expect(typeof parsed.edits[0].old_str).toBe("string");
+      expect(typeof parsed.edits[0].new_str).toBe("string");
+    }
+  });
+
+  it("states that edits is always an array", () => {
+    const description: string = getPatchDefinition().description;
+    expect(description).toMatch(/ALWAYS an array/);
   });
 });
