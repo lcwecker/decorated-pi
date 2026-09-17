@@ -20,6 +20,9 @@
     },
     "homepage": "https://github.com/lcwecker/decorated-pi#readme",
     "bugs": "https://github.com/lcwecker/decorated-pi/issues",
+    "engines": {
+        "node": ">=22.19.0"
+    },
     "dependencies": {
         "@biomejs/biome": "^2.5.5",
         "@modelcontextprotocol/sdk": "^1.29.0",
