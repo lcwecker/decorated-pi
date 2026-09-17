@@ -18,63 +18,31 @@
  *   5. Rebuild: rebuildUsageIndex truncates usage.jsonl and the index
  *      before re-importing.
  *
- * Isolation: PI_CODING_AGENT_DIR is redirected to a tempdir for sessions
- * and the usage JSONL. The real ~/.pi/agent/decorated-pi.json is
- * backed up and restored around each test (settings.ts hardcodes the path).
+ * Isolation: PI_CODING_AGENT_DIR is redirected to a per-spec tempdir, so the
+ * sessions dir, the usage JSONL, and decorated-pi.json are all throwaway.
  */
 
 import * as fs from "node:fs";
 import * as fsPromises from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import { readUsageEntries, rebuildUsageIndex, syncUsageIndex } from "../commands/usage.js";
+import { agentDir } from "./agent-dir.js";
 
 // ─── Environment isolation ─────────────────────────────────────────────────
 
-const REAL_CONFIG_DIR = path.join(os.homedir(), ".pi", "agent");
-const REAL_CONFIG_FILE = path.join(REAL_CONFIG_DIR, "decorated-pi.json");
+// The vitest setup file (test/setup-agent-dir.ts) points PI_CODING_AGENT_DIR
+// at a per-spec temp directory, so every path here — the usage jsonl, the
+// sessions dir, and decorated-pi.json — is throwaway.
 
-let tempDir: string;
-let originalEnv: string | undefined;
-let originalConfig: string | null = null;
+const tempDir = agentDir();
 
 beforeEach(async () => {
-  tempDir = await fsPromises.mkdtemp(path.join(os.tmpdir(), "usage-sync-"));
-  originalEnv = process.env.PI_CODING_AGENT_DIR;
-  process.env.PI_CODING_AGENT_DIR = tempDir;
-
-  // Backup real decorated-pi.json (settings.ts hardcodes the path)
-  try {
-    originalConfig = await fsPromises.readFile(REAL_CONFIG_FILE, "utf-8");
-    await fsPromises.unlink(REAL_CONFIG_FILE);
-  } catch {
-    originalConfig = null;
+  // Start each test from a clean usage state.
+  for (const entry of ["sessions", "decorated-pi-usage.jsonl", "decorated-pi.json"]) {
+    await fsPromises.rm(path.join(tempDir, entry), { recursive: true, force: true });
   }
-});
-
-afterEach(async () => {
-  // Restore real config
-  if (originalConfig !== null) {
-    if (!fs.existsSync(REAL_CONFIG_DIR)) fs.mkdirSync(REAL_CONFIG_DIR, { recursive: true });
-    await fsPromises.writeFile(REAL_CONFIG_FILE, originalConfig, "utf-8");
-  } else {
-    try {
-      await fsPromises.unlink(REAL_CONFIG_FILE);
-    } catch {
-      /* ok */
-    }
-  }
-
-  // Restore env
-  if (originalEnv === undefined) {
-    delete process.env.PI_CODING_AGENT_DIR;
-  } else {
-    process.env.PI_CODING_AGENT_DIR = originalEnv;
-  }
-
-  // Clean temp
-  await fsPromises.rm(tempDir, { recursive: true, force: true });
 });
 
 // ─── Fixtures ──────────────────────────────────────────────────────────────

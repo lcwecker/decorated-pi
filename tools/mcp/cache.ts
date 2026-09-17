@@ -3,8 +3,8 @@
  * Stored at `~/.pi/agent/mcp-cache.json` (global) and `<cwd>/.pi/agent/mcp-cache.json` (project).
  */
 import * as fs from "node:fs";
-import * as os from "node:os";
 import * as path from "node:path";
+import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import type { McpServerConfig } from "./config.js";
 
 export interface McpToolCache {
@@ -24,7 +24,7 @@ export interface McpCache {
 }
 
 function globalCachePath(): string {
-  return path.join(os.homedir(), ".pi/agent/mcp-cache.json");
+  return path.join(getAgentDir(), "mcp-cache.json");
 }
 
 function projectCachePath(cwd: string): string {

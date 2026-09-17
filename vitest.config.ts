@@ -2,9 +2,9 @@ import { defineConfig } from "vitest/config";
 export default defineConfig({
   test: {
     testTimeout: 30000,
-    // Run test files sequentially to avoid config file collisions
-    // (settings tests share ~/.pi/agent/decorated-pi.json)
-    fileParallelism: false,
+    // Redirect the agent dir per spec file so the suite never reads or writes
+    // the user's real ~/.pi/agent state. See test/setup-agent-dir.ts.
+    setupFiles: ["./test/setup-agent-dir.ts"],
     coverage: {
       provider: "v8",
       reporter: ["text"],

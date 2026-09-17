@@ -10,10 +10,9 @@
 
 import * as fs from "node:fs";
 import * as fsPromises from "node:fs/promises";
-import * as os from "node:os";
 import * as path from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { DynamicBorder } from "@earendil-works/pi-coding-agent";
+import { DynamicBorder, getAgentDir } from "@earendil-works/pi-coding-agent";
 import { Container, matchesKey, Spacer, Text } from "@earendil-works/pi-tui";
 
 import { loadUsageIndex, saveUsageIndex } from "../settings.js";
@@ -21,16 +20,12 @@ import { UsageReportComponent } from "../ui/usage.js";
 
 // ─── Paths ─────────────────────────────────────────────────────────────────
 
-function agentDir(): string {
-  return process.env.PI_CODING_AGENT_DIR || path.join(os.homedir(), ".pi", "agent");
-}
-
 function usageFilePath(): string {
-  return path.join(agentDir(), "decorated-pi-usage.jsonl");
+  return path.join(getAgentDir(), "decorated-pi-usage.jsonl");
 }
 
 function sessionsDir(): string {
-  return path.join(agentDir(), "sessions");
+  return path.join(getAgentDir(), "sessions");
 }
 
 // ─── Types ─────────────────────────────────────────────────────────────────

@@ -5,12 +5,20 @@
  */
 import * as fs from "node:fs";
 import * as path from "node:path";
-import * as os from "node:os";
 import type { Model } from "@earendil-works/pi-ai";
+import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { which } from "./utils/which.js";
 
-const CONFIG_DIR = path.join(os.homedir(), ".pi", "agent");
-const CONFIG_FILE = path.join(CONFIG_DIR, "decorated-pi.json");
+/** Resolve the config location per call rather than caching it at module load:
+ *  `getAgentDir()` honours `PI_CODING_AGENT_DIR`, so a relocated agent dir —
+ *  and the test suite's temp dirs — take effect without re-importing. */
+function configDir(): string {
+  return getAgentDir();
+}
+
+function configFile(): string {
+  return path.join(configDir(), "decorated-pi.json");
+}
 
 export interface ProviderModelEntry {
   id: string;
@@ -107,8 +115,9 @@ export interface DecoratedPiConfigView extends Omit<DecoratedPiConfig, "dependen
 
 export function loadConfig(): DecoratedPiConfig {
   try {
-    if (fs.existsSync(CONFIG_FILE)) {
-      const config = JSON.parse(fs.readFileSync(CONFIG_FILE, "utf-8")) as DecoratedPiConfig;
+    const file = configFile();
+    if (fs.existsSync(file)) {
+      const config = JSON.parse(fs.readFileSync(file, "utf-8")) as DecoratedPiConfig;
       // Mutate in place. Do NOT call saveConfig here — saveConfig calls
       // loadConfig first, which would re-trigger the migration (and the
       // file on disk hasn't been written yet), causing deep recursion.
@@ -121,9 +130,10 @@ export function loadConfig(): DecoratedPiConfig {
 }
 
 export function saveConfig(config: Partial<DecoratedPiConfig>) {
-  if (!fs.existsSync(CONFIG_DIR)) fs.mkdirSync(CONFIG_DIR, { recursive: true });
+  const dir = configDir();
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
   const current = loadConfig();
-  fs.writeFileSync(CONFIG_FILE, JSON.stringify({ ...current, ...config }, null, 2), "utf-8");
+  fs.writeFileSync(configFile(), JSON.stringify({ ...current, ...config }, null, 2), "utf-8");
 }
 
 // Runtime-only shadow for the whole config. It mirrors DecoratedPiConfig's
@@ -150,18 +160,19 @@ export function loadProvider(name: string): ProviderCache | null {
 }
 
 export function saveProvider(name: string, data: ProviderCache) {
-  if (!fs.existsSync(CONFIG_DIR)) fs.mkdirSync(CONFIG_DIR, { recursive: true });
+  const dir = configDir();
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
   const current = loadConfig();
   if (!current.providers) current.providers = {};
   current.providers[name] = data;
-  fs.writeFileSync(CONFIG_FILE, JSON.stringify(current, null, 2) + "\n", "utf-8");
+  fs.writeFileSync(configFile(), JSON.stringify(current, null, 2) + "\n", "utf-8");
 }
 
 export function removeProvider(name: string) {
   const current = loadConfig();
   if (current.providers?.[name]) {
     delete current.providers[name];
-    fs.writeFileSync(CONFIG_FILE, JSON.stringify(current, null, 2) + "\n", "utf-8");
+    fs.writeFileSync(configFile(), JSON.stringify(current, null, 2) + "\n", "utf-8");
   }
 }
 

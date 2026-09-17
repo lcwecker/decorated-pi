@@ -13,8 +13,8 @@
  * data to `~/.pi/agent/mcp.json` on first read.
  */
 import * as fs from "node:fs";
-import * as os from "node:os";
 import * as path from "node:path";
+import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { isModuleEnabled, resolveDependency } from "../../settings.js";
 import type { DependencyStatus } from "../../hooks/skeleton.js";
 import { BUILTIN_MCP_SERVERS } from "./builtin/index.js";
@@ -38,7 +38,7 @@ export interface McpServerConfig {
 }
 
 function globalMcpJsonPath(): string {
-  return path.join(os.homedir(), ".pi", "agent", "mcp.json");
+  return path.join(getAgentDir(), "mcp.json");
 }
 
 function readMcpJson(filePath: string): Record<string, { url?: string; command?: string; args?: string[]; env?: Record<string, string>; enabled?: boolean; description?: string }> | null {
@@ -67,7 +67,7 @@ function readMcpJson(filePath: string): Record<string, { url?: string; command?:
  *     `mcpServers`, so a second call is a no-op.
  */
 export function migrateLegacyGlobalMcpConfig(): void {
-  const legacyPath = path.join(os.homedir(), ".pi", "agent", "decorated-pi.json");
+  const legacyPath = path.join(getAgentDir(), "decorated-pi.json");
   const newPath = globalMcpJsonPath();
 
   let legacy: Record<string, any> | null = null;

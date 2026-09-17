@@ -18,11 +18,12 @@ import {
   BUILTIN_MCP_SERVERS,
 } from "../tools/mcp/config.js";
 import { setModuleEnabled } from "../settings.js";
+import { agentDirFile } from "./agent-dir.js";
 
 const PROJECT_CWD = process.cwd();
-const CONFIG_DIR = path.join(os.homedir(), ".pi", "agent");
-const CONFIG_FILE = path.join(CONFIG_DIR, "mcp.json");
-const LEGACY_CONFIG_FILE = path.join(CONFIG_DIR, "decorated-pi.json");
+// Isolated by test/setup-agent-dir.ts — never the developer's real agent dir.
+const CONFIG_FILE = agentDirFile("mcp.json");
+const LEGACY_CONFIG_FILE = agentDirFile("decorated-pi.json");
 
 function writeCodegraphEnabled(enabled: boolean): void {
   let parsed: Record<string, any> = {};
@@ -37,26 +38,10 @@ function writeCodegraphEnabled(enabled: boolean): void {
 }
 
 describe.sequential("codegraph end-to-end integration", () => {
-  let prevConfigRaw: string | null = null;
-  let prevLegacyRaw: string | null = null;
-  let hadConfig = false;
-  let hadLegacyConfig = false;
-
   beforeEach(() => {
-    if (fs.existsSync(CONFIG_FILE)) {
-      hadConfig = true;
-      prevConfigRaw = fs.readFileSync(CONFIG_FILE, "utf-8");
-      fs.unlinkSync(CONFIG_FILE);
-    } else {
-      hadConfig = false;
-      prevConfigRaw = null;
-    }
-    if (fs.existsSync(LEGACY_CONFIG_FILE)) {
-      hadLegacyConfig = true;
-      prevLegacyRaw = fs.readFileSync(LEGACY_CONFIG_FILE, "utf-8");
-    } else {
-      hadLegacyConfig = false;
-      prevLegacyRaw = null;
+    // Start from a clean slate inside the isolated agent dir.
+    for (const file of [CONFIG_FILE, LEGACY_CONFIG_FILE]) {
+      if (fs.existsSync(file)) fs.unlinkSync(file);
     }
     // Ensure a clean module state for these tests. mcp must be on for
     // resolveMcpConfigs to return servers.
@@ -65,15 +50,8 @@ describe.sequential("codegraph end-to-end integration", () => {
   });
 
   afterEach(() => {
-    if (hadConfig && prevConfigRaw !== null) {
-      fs.writeFileSync(CONFIG_FILE, prevConfigRaw, "utf-8");
-    } else if (fs.existsSync(CONFIG_FILE)) {
-      fs.unlinkSync(CONFIG_FILE);
-    }
-    if (hadLegacyConfig && prevLegacyRaw !== null) {
-      fs.writeFileSync(LEGACY_CONFIG_FILE, prevLegacyRaw, "utf-8");
-    } else if (fs.existsSync(LEGACY_CONFIG_FILE)) {
-      fs.unlinkSync(LEGACY_CONFIG_FILE);
+    for (const file of [CONFIG_FILE, LEGACY_CONFIG_FILE]) {
+      if (fs.existsSync(file)) fs.unlinkSync(file);
     }
   });
 

@@ -12,7 +12,8 @@
 import * as fs from "fs";
 import * as path from "path";
 import * as os from "node:os";
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach } from "vitest";
+import { agentDir, agentDirFile } from "./agent-dir.js";
 import {
   formatModelKey,
   parseModelKey,
@@ -37,38 +38,11 @@ import {
   type ModuleSettings,
 } from "../settings.js";
 
-// ─── Mock config file path ──────────────────────────────────────────────────
-// settings.ts uses a hardcoded path, so we need to test with the real module
-// but save/restore state around each test.
+// ─── Config file under test ─────────────────────────────────────────────────
+// Every agent-dir path resolves through getAgentDir(), which the vitest
+// setup file points at a per-spec temp directory.
 
-let originalConfig: string | null = null;
-const CONFIG_DIR = path.join(os.homedir(), ".pi", "agent");
-const CONFIG_FILE = path.join(CONFIG_DIR, "decorated-pi.json");
-
-function backupConfig() {
-  try {
-    if (fs.existsSync(CONFIG_FILE)) {
-      originalConfig = fs.readFileSync(CONFIG_FILE, "utf-8");
-      fs.unlinkSync(CONFIG_FILE);
-    } else {
-      originalConfig = null;
-    }
-  } catch {
-    originalConfig = null;
-  }
-}
-
-function restoreConfig() {
-  try {
-    if (fs.existsSync(CONFIG_FILE)) {
-      fs.unlinkSync(CONFIG_FILE);
-    }
-    if (originalConfig !== null) {
-      if (!fs.existsSync(CONFIG_DIR)) fs.mkdirSync(CONFIG_DIR, { recursive: true });
-      fs.writeFileSync(CONFIG_FILE, originalConfig, "utf-8");
-    }
-  } catch { /* best effort */ }
-}
+const CONFIG_FILE = agentDirFile("decorated-pi.json");
 
 // ═══════════════════════════════════════════════════════════════════════════
 // formatModelKey / parseModelKey
@@ -134,15 +108,10 @@ describe("formatModelKey ↔ parseModelKey roundtrip", () => {
 
 describe("Module Settings", () => {
   beforeEach(() => {
-    backupConfig();
     // Start with clean config
     try {
       if (fs.existsSync(CONFIG_FILE)) fs.unlinkSync(CONFIG_FILE);
     } catch {}
-  });
-
-  afterEach(() => {
-    restoreConfig();
   });
 
   it("defaults all modules to enabled", () => {
@@ -255,14 +224,9 @@ describe("Module Settings", () => {
 
 describe("moduleSnapshot", () => {
   beforeEach(() => {
-    backupConfig();
     try {
       if (fs.existsSync(CONFIG_FILE)) fs.unlinkSync(CONFIG_FILE);
     } catch {}
-  });
-
-  afterEach(() => {
-    restoreConfig();
   });
 
   it("moduleSnapshotChanged returns false after capture with no subsequent change", () => {
@@ -299,14 +263,9 @@ describe("moduleSnapshot", () => {
 
 describe("dependencies", () => {
   beforeEach(() => {
-    backupConfig();
     try {
       if (fs.existsSync(CONFIG_FILE)) fs.unlinkSync(CONFIG_FILE);
     } catch {}
-  });
-
-  afterEach(() => {
-    restoreConfig();
   });
 
   it("getDependencyPath returns null when not configured", () => {
@@ -408,14 +367,9 @@ describe("dependencies", () => {
 
 describe("loadConfig / saveConfig", () => {
   beforeEach(() => {
-    backupConfig();
     try {
       if (fs.existsSync(CONFIG_FILE)) fs.unlinkSync(CONFIG_FILE);
     } catch {}
-  });
-
-  afterEach(() => {
-    restoreConfig();
   });
 
   it("loadConfig returns empty object when no config file", () => {
@@ -458,12 +412,7 @@ describe("loadConfig / saveConfig", () => {
 
 describe("Model key getters/setters", () => {
   beforeEach(() => {
-    backupConfig();
     try { if (fs.existsSync(CONFIG_FILE)) fs.unlinkSync(CONFIG_FILE); } catch {}
-  });
-
-  afterEach(() => {
-    restoreConfig();
   });
 
   it("getImageModelKey returns null by default", () => {
@@ -510,5 +459,18 @@ describe("Model key getters/setters", () => {
     setCompactModelKey("provider-b/model-y");
     setImageModelKey("provider-c/model-z");
     expect(getCompactModelKey()).toBe("provider-b/model-y");
+  });
+});
+
+// ── Agent dir resolution ──────────────────────────────────────────────────
+
+describe("agent dir resolution", () => {
+  it("writes decorated-pi.json under PI_CODING_AGENT_DIR", () => {
+    // settings.ts must resolve through pi's getAgentDir(). Hardcoding
+    // os.homedir() would ignore a relocated agent dir and would also defeat
+    // the per-spec isolation in test/setup-agent-dir.ts.
+    saveConfig({ imageModelKey: "resolution/model" });
+    expect(fs.existsSync(path.join(agentDir(), "decorated-pi.json"))).toBe(true);
+    expect(getImageModelKey()).toBe("resolution/model");
   });
 });

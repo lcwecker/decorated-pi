@@ -15,10 +15,9 @@
  * `spawnSync` failing too as a defensive belt-and-suspenders.
  */
 
-import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { describe, it, expect, beforeEach, vi } from "vitest";
 import * as fs from "node:fs";
-import * as os from "node:os";
-import * as path from "node:path";
+import { agentDir, agentDirFile } from "./agent-dir.js";
 
 vi.mock("node:child_process", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:child_process")>();
@@ -42,26 +41,10 @@ vi.mock("node:fs", async (importOriginal) => {
   };
 });
 
-const CONFIG_DIR = path.join(os.homedir(), ".pi", "agent");
-const CONFIG_FILE = path.join(CONFIG_DIR, "decorated-pi.json");
-let originalConfig: string | null = null;
-
-function backupConfig() {
-  try {
-    originalConfig = fs.existsSync(CONFIG_FILE) ? fs.readFileSync(CONFIG_FILE, "utf-8") : null;
-  } catch { originalConfig = null; }
-}
-
-function restoreConfig() {
-  try {
-    if (originalConfig === null) {
-      if (fs.existsSync(CONFIG_FILE)) fs.unlinkSync(CONFIG_FILE);
-    } else {
-      if (!fs.existsSync(CONFIG_DIR)) fs.mkdirSync(CONFIG_DIR, { recursive: true });
-      fs.writeFileSync(CONFIG_FILE, originalConfig, "utf-8");
-    }
-  } catch { /* best effort */ }
-}
+// Isolated by test/setup-agent-dir.ts — never the developer's real agent dir.
+const CONFIG_DIR = agentDir();
+const CONFIG_FILE = agentDirFile("decorated-pi.json");
+const MCP_FILE = agentDirFile("mcp.json");
 
 function makeMockPi(): any {
   const log = {
@@ -86,7 +69,6 @@ function makeMockPi(): any {
 
 describe("index.ts dep gate", () => {
   beforeEach(() => {
-    backupConfig();
     const clean = {
       modules: {
         tools: { patchOverrideEdit: true, ask: true, lsp: true, mcp: true },
@@ -96,10 +78,20 @@ describe("index.ts dep gate", () => {
     };
     if (!fs.existsSync(CONFIG_DIR)) fs.mkdirSync(CONFIG_DIR, { recursive: true });
     fs.writeFileSync(CONFIG_FILE, JSON.stringify(clean, null, 2) + "\n", "utf-8");
-  });
 
-  afterEach(() => {
-    restoreConfig();
+    // Keep the MCP loop offline. The isolated agent dir has a cold MCP cache,
+    // so the two builtin URL servers would otherwise attempt a real network
+    // connection on every import. This spec only cares about the codegraph
+    // binary gate, so disabling them changes nothing it asserts.
+    fs.writeFileSync(
+      MCP_FILE,
+      JSON.stringify(
+        { mcpServers: { context7: { enabled: false }, exa: { enabled: false } } },
+        null,
+        2,
+      ) + "\n",
+      "utf-8",
+    );
   });
 
   it("LSP module: bundled TypeScript 7 makes diagnostics available", async () => {
@@ -117,8 +109,8 @@ describe("index.ts dep gate", () => {
 
     // codegraph uses a command (binary) and its tool names start with
     // `codegraph_`. With the binary missing, those tools must NOT be
-    // registered. context7/exa (URL-based) have no binary dep and
-    // would still be registered — that's expected and correct.
+    // registered. context7/exa are disabled in this spec's mcp.json so the
+    // import stays offline.
     const codegraphTools = mockPi.log.tools.filter((t: string) => t.startsWith("codegraph_"));
     expect(codegraphTools).toEqual([]);
   });

@@ -13,41 +13,16 @@
 
 import * as fs from "fs";
 import * as path from "path";
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach } from "vitest";
 import {
   isModuleEnabled,
   setModuleEnabled,
   getAllModuleSettings,
 } from "../settings.js";
+import { agentDirFile } from "./agent-dir.js";
 
-// ─── Config backup/restore ──────────────────────────────────────────────────
-
-import * as os from "node:os";
-const CONFIG_DIR = path.join(os.homedir(), ".pi", "agent");
-const CONFIG_FILE = path.join(CONFIG_DIR, "decorated-pi.json");
-
-let originalConfig: string | null = null;
-
-function backupConfig() {
-  try {
-    if (fs.existsSync(CONFIG_FILE)) {
-      originalConfig = fs.readFileSync(CONFIG_FILE, "utf-8");
-      fs.unlinkSync(CONFIG_FILE);
-    } else {
-      originalConfig = null;
-    }
-  } catch { originalConfig = null; }
-}
-
-function restoreConfig() {
-  try {
-    if (fs.existsSync(CONFIG_FILE)) fs.unlinkSync(CONFIG_FILE);
-    if (originalConfig !== null) {
-      if (!fs.existsSync(CONFIG_DIR)) fs.mkdirSync(CONFIG_DIR, { recursive: true });
-      fs.writeFileSync(CONFIG_FILE, originalConfig, "utf-8");
-    }
-  } catch { /* best effort */ }
-}
+// Isolated by test/setup-agent-dir.ts — never the developer's real agent dir.
+const CONFIG_FILE = agentDirFile("decorated-pi.json");
 
 // ═══════════════════════════════════════════════════════════════════════════
 // Conditional loading logic
@@ -55,12 +30,7 @@ function restoreConfig() {
 
 describe("Conditional loading — isModuleEnabled gates", () => {
   beforeEach(() => {
-    backupConfig();
     try { if (fs.existsSync(CONFIG_FILE)) fs.unlinkSync(CONFIG_FILE); } catch {}
-  });
-
-  afterEach(() => {
-    restoreConfig();
   });
 
   it("core modules are enabled by default", () => {

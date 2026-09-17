@@ -30,6 +30,7 @@ import {
   cleanupStaleCache,
   type McpCache,
 } from "../tools/mcp/cache.js";
+import { agentDirFile } from "./agent-dir.js";
 
 // ─── Temp dir helpers ────────────────────────────────────────────────────────
 
@@ -54,54 +55,12 @@ function rmrf(dir: string): void {
 }
 
 // ─── Config file mock ────────────────────────────────────────────────────────
-// loadGlobalMcpConfigs reads from ~/.pi/agent/mcp.json.
-// We backup/restore the real file around each test.
+// loadGlobalMcpConfigs reads mcp.json from the agent dir.
 
-const CONFIG_DIR = path.join(os.homedir(), ".pi", "agent");
-const CONFIG_FILE = path.join(CONFIG_DIR, "mcp.json");
-const LEGACY_CONFIG_FILE = path.join(CONFIG_DIR, "decorated-pi.json");
-let globalConfigBackup: string | null = null;
-let legacyConfigBackup: string | null = null;
-
-function backupGlobalConfig() {
-  try {
-    if (fs.existsSync(CONFIG_FILE)) {
-      globalConfigBackup = fs.readFileSync(CONFIG_FILE, "utf-8");
-      fs.unlinkSync(CONFIG_FILE);
-    } else {
-      globalConfigBackup = null;
-    }
-  } catch {
-    globalConfigBackup = null;
-  }
-  try {
-    if (fs.existsSync(LEGACY_CONFIG_FILE)) {
-      legacyConfigBackup = fs.readFileSync(LEGACY_CONFIG_FILE, "utf-8");
-      fs.unlinkSync(LEGACY_CONFIG_FILE);
-    } else {
-      legacyConfigBackup = null;
-    }
-  } catch {
-    legacyConfigBackup = null;
-  }
-}
-
-function restoreGlobalConfig() {
-  try {
-    if (fs.existsSync(CONFIG_FILE)) fs.unlinkSync(CONFIG_FILE);
-    if (globalConfigBackup !== null) {
-      if (!fs.existsSync(CONFIG_DIR)) fs.mkdirSync(CONFIG_DIR, { recursive: true });
-      fs.writeFileSync(CONFIG_FILE, globalConfigBackup, "utf-8");
-    }
-  } catch { /* best effort */ }
-  try {
-    if (fs.existsSync(LEGACY_CONFIG_FILE)) fs.unlinkSync(LEGACY_CONFIG_FILE);
-    if (legacyConfigBackup !== null) {
-      if (!fs.existsSync(CONFIG_DIR)) fs.mkdirSync(CONFIG_DIR, { recursive: true });
-      fs.writeFileSync(LEGACY_CONFIG_FILE, legacyConfigBackup, "utf-8");
-    }
-  } catch { /* best effort */ }
-}
+// Isolated by test/setup-agent-dir.ts — never the developer's real agent dir.
+const CONFIG_FILE = agentDirFile("mcp.json");
+const LEGACY_CONFIG_FILE = agentDirFile("decorated-pi.json");
+const GLOBAL_CACHE_FILE = agentDirFile("mcp-cache.json");
 
 // ═════════════════════════════════════════════════════════════════════════════
 // isSseUrl
@@ -270,12 +229,7 @@ describe("loadProjectMcpConfigs", () => {
 
 describe("loadGlobalMcpConfigs", () => {
   beforeEach(() => {
-    backupGlobalConfig();
     try { if (fs.existsSync(CONFIG_FILE)) fs.unlinkSync(CONFIG_FILE); } catch {}
-  });
-
-  afterEach(() => {
-    restoreGlobalConfig();
   });
 
   it("returns empty array when no config file", () => {
@@ -391,13 +345,11 @@ describe("resolveMcpConfigs priority", () => {
 
   beforeEach(() => {
     tmpDir = mkTempDir("mcp-test-");
-    backupGlobalConfig();
     try { if (fs.existsSync(CONFIG_FILE)) fs.unlinkSync(CONFIG_FILE); } catch {}
   });
 
   afterEach(() => {
     rmrf(tmpDir);
-    restoreGlobalConfig();
   });
 
   it("includes builtin servers", () => {
@@ -566,72 +518,44 @@ describe("loadMcpCache", () => {
   });
 
   it("global cache overrides builtin for same server", () => {
-    const globalCachePath = path.join(os.homedir(), ".pi/agent/mcp-cache.json");
-    const backup = fs.existsSync(globalCachePath) ? fs.readFileSync(globalCachePath, "utf-8") : null;
-    try {
-      saveMcpCache({
-        servers: {
-          context7: {
-            description: "overridden",
-            tools: [{ name: "custom-tool", description: "custom", inputSchema: {} }],
-            cachedAt: 12345,
-          },
+    saveMcpCache({
+      servers: {
+        context7: {
+          description: "overridden",
+          tools: [{ name: "custom-tool", description: "custom", inputSchema: {} }],
+          cachedAt: 12345,
         },
-      }, "global");
+      },
+    }, "global");
 
-      const cache = loadMcpCache(tmpDir);
-      expect(cache!.servers["context7"].description).toBe("overridden");
-      expect(cache!.servers["context7"].tools).toHaveLength(1);
-      expect(cache!.servers["context7"].tools[0].name).toBe("custom-tool");
-    } finally {
-      if (backup !== null) {
-        fs.writeFileSync(globalCachePath, backup, "utf-8");
-      } else if (fs.existsSync(globalCachePath)) {
-        fs.unlinkSync(globalCachePath);
-      }
-    }
+    const cache = loadMcpCache(tmpDir);
+    expect(cache!.servers["context7"].description).toBe("overridden");
+    expect(cache!.servers["context7"].tools).toHaveLength(1);
+    expect(cache!.servers["context7"].tools[0].name).toBe("custom-tool");
   });
 
   it("project cache overrides global cache", () => {
-    const globalCachePath = path.join(os.homedir(), ".pi/agent/mcp-cache.json");
-    const backup = fs.existsSync(globalCachePath) ? fs.readFileSync(globalCachePath, "utf-8") : null;
-    try {
-      saveMcpCache({
-        servers: {
-          exa: { description: "global-exa", tools: [], cachedAt: 1 },
-        },
-      }, "global");
+    saveMcpCache({
+      servers: {
+        exa: { description: "global-exa", tools: [], cachedAt: 1 },
+      },
+    }, "global");
 
-      saveMcpCache({
-        servers: {
-          exa: { description: "project-exa", tools: [], cachedAt: 2 },
-        },
-      }, "project", tmpDir);
+    saveMcpCache({
+      servers: {
+        exa: { description: "project-exa", tools: [], cachedAt: 2 },
+      },
+    }, "project", tmpDir);
 
-      const cache = loadMcpCache(tmpDir);
-      expect(cache!.servers["exa"].description).toBe("project-exa");
-    } finally {
-      if (backup !== null) {
-        fs.writeFileSync(globalCachePath, backup, "utf-8");
-      } else if (fs.existsSync(globalCachePath)) {
-        fs.unlinkSync(globalCachePath);
-      }
-    }
+    const cache = loadMcpCache(tmpDir);
+    expect(cache!.servers["exa"].description).toBe("project-exa");
   });
 
   it("returns empty cache when no file cache", () => {
-    const globalCachePath = path.join(os.homedir(), ".pi/agent/mcp-cache.json");
-    const backup = fs.existsSync(globalCachePath) ? fs.readFileSync(globalCachePath, "utf-8") : null;
-    try {
-      // Ensure no global cache exists
-      if (fs.existsSync(globalCachePath)) fs.unlinkSync(globalCachePath);
-      const cache = loadMcpCache(tmpDir);
-      expect(Object.keys(cache!.servers)).toHaveLength(0);
-    } finally {
-      if (backup !== null) {
-        fs.writeFileSync(globalCachePath, backup, "utf-8");
-      }
-    }
+    // Ensure no global cache exists.
+    if (fs.existsSync(GLOBAL_CACHE_FILE)) fs.unlinkSync(GLOBAL_CACHE_FILE);
+    const cache = loadMcpCache(tmpDir);
+    expect(Object.keys(cache!.servers)).toHaveLength(0);
   });
 });
 
@@ -850,23 +774,11 @@ describe("toggleMcpServerEnabled", () => {
 
   // Regression test for the `require("../settings.js")` ESM bug that
   // made global toggles fail silently (UI showed "Failed to toggle").
-  it("toggles a global server (writes to ~/.pi/agent/mcp.json)", () => {
-    const GLOBAL_MCP_FILE = path.join(os.homedir(), ".pi/agent/mcp.json");
-    const original = fs.existsSync(GLOBAL_MCP_FILE)
-      ? fs.readFileSync(GLOBAL_MCP_FILE, "utf-8")
-      : null;
-    try {
-      const result = toggleMcpServerEnabled("context7", false, "global");
-      expect(result).toBe(true);
-      const loaded = JSON.parse(fs.readFileSync(GLOBAL_MCP_FILE, "utf-8"));
-      expect(loaded.mcpServers?.["context7"]?.enabled).toBe(false);
-    } finally {
-      if (original === null) {
-        try { fs.unlinkSync(GLOBAL_MCP_FILE); } catch {}
-      } else {
-        fs.writeFileSync(GLOBAL_MCP_FILE, original, "utf-8");
-      }
-    }
+  it("toggles a global server (writes to the agent dir's mcp.json)", () => {
+    const result = toggleMcpServerEnabled("context7", false, "global");
+    expect(result).toBe(true);
+    const loaded = JSON.parse(fs.readFileSync(CONFIG_FILE, "utf-8"));
+    expect(loaded.mcpServers?.["context7"]?.enabled).toBe(false);
   });
 });
 
