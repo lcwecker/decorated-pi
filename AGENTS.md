@@ -148,3 +148,5 @@ A push to `main` runs `.github/workflows/ci.yml`; when the head commit's subject
 - The npm trusted publisher on `decorated-pi`: owner `lcwecker`, repository `decorated-pi`, workflow filename `release.yml`.
 
 **Never**: put a token in the publish step (`NODE_AUTH_TOKEN` set to anything, empty included, disables the OIDC fallback), or push the release tag by hand.
+
+**Release notes** are filled in after the workflow creates the release, with `gh release edit vX.Y.Z --notes-file <file>`: follow the `## What changed` shape of earlier releases and name the issue a change closes. Installation stays in the README, so the notes leave it out.
