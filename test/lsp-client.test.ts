@@ -58,6 +58,7 @@ describe("LspClient", () => {
       "initialize",
       expect.objectContaining({ rootUri: "file:///ws" }),
       4321,
+      undefined,
     );
     expect(protocol.notify).toHaveBeenCalledWith("initialized", {});
   });
@@ -86,6 +87,7 @@ describe("LspClient", () => {
       "textDocument/diagnostic",
       { textDocument: { uri: "file:///a.ts" } },
       1000,
+      undefined,
     );
   });
 
@@ -106,5 +108,70 @@ describe("LspClient", () => {
     protocol.emit("diagnostics", { uri: "file:///a.ts", diagnostics });
 
     await expect(pending).resolves.toEqual(diagnostics);
+  });
+
+  it("forwards the abort signal to initialize during start", async () => {
+    const client = new LspClient({
+      command: "tsserver",
+      args: ["--stdio"],
+      root_uri: "file:///ws",
+      language_id_for_uri: () => "typescript",
+    });
+    const controller = new AbortController();
+    await client.start(4321, controller.signal);
+    expect(lastProtocol().request).toHaveBeenCalledWith(
+      "initialize",
+      expect.objectContaining({ rootUri: "file:///ws" }),
+      4321,
+      controller.signal,
+    );
+  });
+
+  it("forwards the abort signal to hover", async () => {
+    const client = new LspClient({
+      command: "tsserver",
+      args: ["--stdio"],
+      root_uri: "file:///ws",
+      language_id_for_uri: () => "typescript",
+    });
+    const protocol = lastProtocol();
+    protocol.request.mockResolvedValueOnce({ contents: "hi" });
+    const controller = new AbortController();
+    await client.hover("file:///a.ts", { line: 0, character: 1 }, 1000, controller.signal);
+    expect(protocol.request).toHaveBeenCalledWith(
+      "textDocument/hover",
+      { textDocument: { uri: "file:///a.ts" }, position: { line: 0, character: 1 } },
+      1000,
+      controller.signal,
+    );
+  });
+
+  it("rejects push-wait diagnostics when aborted", async () => {
+    const client = new LspClient({
+      command: "tsserver",
+      args: ["--stdio"],
+      root_uri: "file:///ws",
+      language_id_for_uri: () => "typescript",
+    });
+    const protocol = lastProtocol();
+    const controller = new AbortController();
+    const pending = client.waitForDiagnostics("file:///a.ts", 1000, controller.signal);
+    const assertion = expect(pending).rejects.toMatchObject({ name: "AbortError" });
+    controller.abort();
+    await assertion;
+    // Back to the constructor's permanent cache listener only.
+    expect(protocol.listenerCount("diagnostics")).toBe(1);
+  });
+
+  it("rejects immediately when already aborted", async () => {
+    const client = new LspClient({
+      command: "tsserver",
+      args: ["--stdio"],
+      root_uri: "file:///ws",
+      language_id_for_uri: () => "typescript",
+    });
+    const controller = new AbortController();
+    controller.abort();
+    await expect(client.waitForDiagnostics("file:///a.ts", 1000, controller.signal)).rejects.toMatchObject({ name: "AbortError" });
   });
 });

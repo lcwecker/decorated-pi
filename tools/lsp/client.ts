@@ -66,12 +66,12 @@ export class LspClient {
     return this.#protocol;
   }
 
-  #request(method: string, params: unknown, timeoutMs?: number): Promise<unknown> {
-    return this.#protocol.request(method, params, timeoutMs ?? this.#options.request_timeout_ms ?? 30_000);
+  #request(method: string, params: unknown, timeoutMs?: number, signal?: AbortSignal): Promise<unknown> {
+    return this.#protocol.request(method, params, timeoutMs ?? this.#options.request_timeout_ms ?? 30_000, signal);
   }
 
   /** Start the LSP server and complete initialization handshake. */
-  async start(timeoutMs?: number): Promise<void> {
+  async start(timeoutMs?: number, signal?: AbortSignal): Promise<void> {
     try {
       await this.#protocol.spawn(
         this.#options.command,
@@ -108,7 +108,7 @@ export class LspClient {
           workspace: { workspaceFolders: true, symbol: {} },
         },
         workspaceFolders: [{ uri: this.#options.root_uri, name: "workspace" }],
-      }, timeoutMs) as { capabilities?: { diagnosticProvider?: unknown } } | null;
+      }, timeoutMs, signal) as { capabilities?: { diagnosticProvider?: unknown } } | null;
       this.#supportsPullDiagnostics = Boolean(initializeResult?.capabilities?.diagnosticProvider);
       this.#protocol.notify("initialized", {});
       this.#initialized = true;
@@ -146,13 +146,17 @@ export class LspClient {
     return this.#diagnosticsByUri.get(uri) ?? [];
   }
 
-  /** Wait for diagnostics, with optional timeout. */
-  async waitForDiagnostics(uri: string, timeoutMs = 1500): Promise<LspDiagnostic[]> {
+  /** Wait for diagnostics, with optional timeout. Aborting rejects. */
+  async waitForDiagnostics(uri: string, timeoutMs = 1500, signal?: AbortSignal): Promise<LspDiagnostic[]> {
+    if (signal?.aborted) {
+      throw signal.reason instanceof Error ? signal.reason : new DOMException("This operation was aborted", "AbortError");
+    }
     if (this.#supportsPullDiagnostics) {
       const report = await this.#request(
         "textDocument/diagnostic",
         { textDocument: { uri } },
         timeoutMs,
+        signal,
       ) as { kind?: string; items?: LspDiagnostic[] } | null;
       const diagnostics = report?.kind === "full" && Array.isArray(report.items)
         ? report.items
@@ -164,38 +168,49 @@ export class LspClient {
     if (this.#diagnosticsByUri.has(uri)) {
       return this.getDiagnostics(uri);
     }
-    return new Promise((resolve) => {
+    return new Promise((resolve, reject) => {
       let active = true;
-      const handler = (event: { uri: string; diagnostics: LspDiagnostic[] }) => {
-        if (event.uri !== uri || !active) return;
-        active = false;
-        this.#protocol.off("diagnostics", handler);
-        clearTimeout(timer);
-        resolve(this.getDiagnostics(uri));
-      };
-      const timer = setTimeout(() => {
+      const cleanup = () => {
         if (!active) return;
         active = false;
         this.#protocol.off("diagnostics", handler);
-        resolve(this.getDiagnostics(uri));
+        clearTimeout(timer);
+        signal?.removeEventListener("abort", onAbort);
+      };
+      const handler = (event: { uri: string; diagnostics: LspDiagnostic[] }) => {
+        if (event.uri !== uri || !active) return;
+        const result = this.getDiagnostics(uri);
+        cleanup();
+        resolve(result);
+      };
+      const onAbort = () => {
+        cleanup();
+        reject(signal?.reason instanceof Error ? signal.reason : new DOMException("This operation was aborted", "AbortError"));
+      };
+      const timer = setTimeout(() => {
+        if (!active) return;
+        const result = this.getDiagnostics(uri);
+        cleanup();
+        resolve(result);
       }, timeoutMs);
+      signal?.addEventListener("abort", onAbort, { once: true });
       this.#protocol.on("diagnostics", handler);
     });
   }
 
-  async hover(uri: string, position: LspPosition, timeoutMs?: number): Promise<LspHover | null> {
+  async hover(uri: string, position: LspPosition, timeoutMs?: number, signal?: AbortSignal): Promise<LspHover | null> {
     return (await this.#request("textDocument/hover", {
       textDocument: { uri },
       position,
-    }, timeoutMs)) as LspHover | null;
+    }, timeoutMs, signal)) as LspHover | null;
   }
 
-  async definition(uri: string, position: LspPosition, timeoutMs?: number): Promise<LspLocation[]> {
+  async definition(uri: string, position: LspPosition, timeoutMs?: number, signal?: AbortSignal): Promise<LspLocation[]> {
     return normalizeLocations(
       await this.#request("textDocument/definition", {
         textDocument: { uri },
         position,
-      }, timeoutMs),
+      }, timeoutMs, signal),
     );
   }
 
@@ -204,13 +219,14 @@ export class LspClient {
     position: LspPosition,
     includeDeclaration = true,
     timeoutMs?: number,
+    signal?: AbortSignal,
   ): Promise<LspLocation[]> {
     return normalizeLocations(
       await this.#request("textDocument/references", {
         textDocument: { uri },
         position,
         context: { includeDeclaration },
-      }, timeoutMs),
+      }, timeoutMs, signal),
     );
   }
 
@@ -219,12 +235,13 @@ export class LspClient {
     position: LspPosition,
     newName: string,
     timeoutMs?: number,
+    signal?: AbortSignal,
   ): Promise<Record<string, { oldText: string; newText: string }>> {
     const result = (await this.#request("textDocument/rename", {
       textDocument: { uri },
       position,
       newName,
-    }, timeoutMs)) as { changes?: Record<string, Array<{ range: LspRange; newText: string }>> } | null;
+    }, timeoutMs, signal)) as { changes?: Record<string, Array<{ range: LspRange; newText: string }>> } | null;
 
     const edits: Record<string, { oldText: string; newText: string }> = {};
     if (!result?.changes) return edits;

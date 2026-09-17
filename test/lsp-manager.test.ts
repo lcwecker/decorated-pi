@@ -14,7 +14,7 @@ const state = vi.hoisted(() => ({
   languageIdForFileMock: vi.fn(() => "typescript"),
   filePathToUriMock: vi.fn((p: string) => `file://${p}`),
   clientInstances: [] as any[],
-  startImpl: (timeoutMs?: number) => Promise.resolve() as Promise<void>,
+  startImpl: (timeoutMs?: number, _signal?: AbortSignal) => Promise.resolve() as Promise<void>,
 }));
 
 vi.mock("node:fs/promises", () => ({ readFile: state.readFileMock }));
@@ -28,7 +28,7 @@ vi.mock("../tools/lsp/servers.js", () => ({
 vi.mock("../tools/lsp/client.js", () => {
   class MockLspClient {
     options: any;
-    start = vi.fn((timeoutMs?: number) => state.startImpl(timeoutMs));
+    start = vi.fn((timeoutMs?: number, signal?: AbortSignal) => state.startImpl(timeoutMs, signal));
     ensureDocumentOpen = vi.fn(async () => {});
     stop = vi.fn(async () => {});
 
@@ -68,7 +68,7 @@ describe("LspServerManager", () => {
     expect(result.ok).toBe(true);
     expect(state.createEnvMock).toHaveBeenCalledOnce();
     expect(state.clientInstances[0]!.options.env).toEqual({ PATH: "/mock/bin", HOME: "/tmp/home" });
-    expect(state.clientInstances[0]!.start).toHaveBeenCalledWith(4321);
+    expect(state.clientInstances[0]!.start).toHaveBeenCalledWith(4321, undefined);
     expect(state.clientInstances[0]!.ensureDocumentOpen).toHaveBeenCalledWith("file:///cwd/src/app.ts", "const x = 1;\n");
   });
 
@@ -86,5 +86,32 @@ describe("LspServerManager", () => {
     expect(result.error.kind).toBe("tool_timeout");
     expect(result.error.message).toContain("25ms");
     vi.useRealTimers();
+  });
+
+  it("throws AbortError when already aborted and never starts a server", async () => {
+    const manager = new LspServerManager({ cwd: () => "/cwd" });
+    const controller = new AbortController();
+    controller.abort();
+    await expect(manager.resolveFileState("src/app.ts", { timeoutMs: 1000, signal: controller.signal })).rejects.toMatchObject({ name: "AbortError" });
+    expect(state.clientInstances).toHaveLength(0);
+  });
+
+  it("aborts a hanging startup without caching the failure", async () => {
+    state.startImpl = (_timeoutMs?: number, signal?: AbortSignal) =>
+      new Promise<void>((_, reject) => {
+        signal?.addEventListener("abort", () => reject(new DOMException("This operation was aborted", "AbortError")), { once: true });
+      });
+    const manager = new LspServerManager({ cwd: () => "/cwd" });
+    const controller = new AbortController();
+
+    const pending = manager.resolveFileState("src/app.ts", { timeoutMs: 30_000, signal: controller.signal });
+    const assertion = expect(pending).rejects.toMatchObject({ name: "AbortError" });
+    controller.abort();
+    await assertion;
+
+    // Retry after abort must start a fresh server instead of replaying a cached failure.
+    state.startImpl = () => Promise.resolve();
+    const retry = await manager.resolveFileState("src/app.ts", { timeoutMs: 30_000 });
+    expect(retry.ok).toBe(true);
   });
 });

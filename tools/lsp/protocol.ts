@@ -94,20 +94,56 @@ export class LspProtocol extends EventEmitter {
     });
   }
 
-  /** Send a request and wait for response. */
-  request(method: string, params: unknown, timeoutMs = 30_000): Promise<unknown> {
+  /** Send a request and wait for response. Aborting rejects and notifies $/cancelRequest. */
+  request(method: string, params: unknown, timeoutMs = 30_000, signal?: AbortSignal): Promise<unknown> {
+    if (signal?.aborted) {
+      return Promise.reject(signal.reason instanceof Error ? signal.reason : new DOMException("This operation was aborted", "AbortError"));
+    }
     return new Promise((resolve, reject) => {
       const id = this.#nextId++;
+      let settled = false;
       const timer = setTimeout(() => {
+        if (settled) return;
+        settled = true;
         this.#pending.delete(id);
+        signal?.removeEventListener("abort", onAbort);
         reject(new Error(`LSP request "${method}" timed out after ${timeoutMs}ms`));
       }, timeoutMs);
 
-      this.#pending.set(id, { resolve, reject, timer });
+      const onAbort = () => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        this.#pending.delete(id);
+        try {
+          this.#send({ jsonrpc: "2.0", method: "$/cancelRequest", params: { id } });
+        } catch { /* server gone; nothing to cancel */ }
+        reject(signal?.reason instanceof Error ? signal.reason : new DOMException("This operation was aborted", "AbortError"));
+      };
+
+      const wrapResolve = (value: unknown) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        signal?.removeEventListener("abort", onAbort);
+        resolve(value);
+      };
+      const wrapReject = (error: Error) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        signal?.removeEventListener("abort", onAbort);
+        reject(error);
+      };
+
+      this.#pending.set(id, { resolve: wrapResolve, reject: wrapReject, timer });
+      signal?.addEventListener("abort", onAbort, { once: true });
       try {
         this.#send({ jsonrpc: "2.0", id, method, params });
       } catch (err) {
+        settled = true;
         clearTimeout(timer);
+        signal?.removeEventListener("abort", onAbort);
         this.#pending.delete(id);
         reject(err);
       }

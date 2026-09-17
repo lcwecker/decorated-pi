@@ -141,4 +141,39 @@ describe("LspProtocol", () => {
 
     await expect(req).rejects.toBeInstanceOf(LspProtocolError);
   });
+
+  it("rejects immediately when the signal is already aborted", async () => {
+    const protocol = new LspProtocol();
+    const spawned = protocol.spawn("tsserver", ["--stdio"], {});
+    proc.emit("spawn");
+    await spawned;
+
+    const controller = new AbortController();
+    controller.abort();
+    await expect(protocol.request("initialize", {}, 1000, controller.signal)).rejects.toMatchObject({ name: "AbortError" });
+    expect(proc.stdin.write).not.toHaveBeenCalled();
+  });
+
+  it("rejects the pending request and notifies $/cancelRequest on abort", async () => {
+    const protocol = new LspProtocol();
+    const spawned = protocol.spawn("tsserver", ["--stdio"], {});
+    proc.emit("spawn");
+    await spawned;
+
+    const controller = new AbortController();
+    const req = protocol.request("textDocument/hover", { textDocument: { uri: "file:///a.ts" } }, 1000, controller.signal);
+    const assertion = expect(req).rejects.toMatchObject({ name: "AbortError" });
+    controller.abort();
+    await assertion;
+
+    // Second write is the $/cancelRequest notification for id 1.
+    expect(proc.stdin.write).toHaveBeenCalledTimes(2);
+    const cancelBody = JSON.parse((proc.stdin.write.mock.calls[1][0] as Buffer)
+      .subarray((proc.stdin.write.mock.calls[1][0] as Buffer).indexOf("\r\n\r\n") + 4)
+      .toString("utf8"));
+    expect(cancelBody).toMatchObject({ method: "$/cancelRequest", params: { id: 1 } });
+
+    // A late response for the cancelled id must not throw or resolve anything.
+    emitMessage(proc, { jsonrpc: "2.0", id: 1, result: { ok: true } });
+  });
 });

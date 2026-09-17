@@ -53,13 +53,49 @@ function err(details: any): ToolResult {
   return ok(formatToolError(details), { ok: false, error: details });
 }
 
-function withTimeout(promise: Promise<ToolResult>, ms: number, label: string): Promise<ToolResult> {
-  return Promise.race([
-    promise,
-    new Promise<ToolResult>((resolve) =>
-      setTimeout(() => resolve(err({ kind: "tool_timeout", message: `${label} timed out after ${ms}ms` })), ms)
-    ),
-  ]);
+function abortError(signal?: AbortSignal | null): Error {
+  return signal?.reason instanceof Error ? signal.reason : new DOMException("This operation was aborted", "AbortError");
+}
+
+function isAbortError(error: unknown): boolean {
+  return (error instanceof DOMException && error.name === "AbortError")
+    || (error instanceof Error && error.name === "AbortError");
+}
+
+function withTimeout(promise: Promise<ToolResult>, ms: number, label: string, signal?: AbortSignal): Promise<ToolResult> {
+  if (signal?.aborted) return Promise.reject(abortError(signal));
+  return new Promise<ToolResult>((resolve, reject) => {
+    let settled = false;
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      signal?.removeEventListener("abort", onAbort);
+      resolve(err({ kind: "tool_timeout", message: `${label} timed out after ${ms}ms` }));
+    }, ms);
+    const onAbort = () => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      reject(abortError(signal));
+    };
+    signal?.addEventListener("abort", onAbort, { once: true });
+    promise.then(
+      (value) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        signal?.removeEventListener("abort", onAbort);
+        resolve(value);
+      },
+      (error) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        signal?.removeEventListener("abort", onAbort);
+        reject(error);
+      },
+    );
+  });
 }
 
 function severityLabel(s: number): string {
@@ -86,24 +122,33 @@ export function registerLspTools(pi: ExtensionAPI, manager: LspServerManager) {
       wait_ms: Type.Optional(Type.Number({ description: "Max ms to wait for diagnostics. Default 1500." })),
       timeout_ms: Type.Optional(Type.Number({ description: "Overall max ms including server startup. Default 30000." })),
     }),
-    execute: async (_id, params, _signal, _update, _ctx): Promise<ToolResult> => {
+    execute: async (_id, params, signal, _update, _ctx): Promise<ToolResult> => {
       const waitMs = params.wait_ms ?? 1500;
       const totalTimeout = params.timeout_ms ?? 30_000;
       const severities: ("error"|"warning"|"info"|"hint")[] = params.severity ?? ["error"];
       const minSeverity = Math.min(...severities.map(s => ({ error: 1, warning: 2, info: 3, hint: 4 }[s])));
 
       return withTimeout((async () => {
+        signal?.throwIfAborted?.();
         const results = await Promise.all(params.paths.map(async (file) => {
-          const resolved = await manager.resolveFileState(file, { timeoutMs: totalTimeout });
+          if (signal?.aborted) throw abortError(signal);
+          const resolved = await manager.resolveFileState(file, { timeoutMs: totalTimeout, signal });
           if (!resolved.ok) return { line: formatToolError(resolved.error), diagnostics: 0, errors: 0, warnings: 0, isError: true };
           try {
-            const diagnostics = await resolved.result.state.client.waitForDiagnostics(resolved.result.uri, waitMs);
+            const diagnostics = await resolved.result.state.client.waitForDiagnostics(resolved.result.uri, waitMs, signal);
             const filtered = diagnostics.filter((d: any) => (d.severity ?? 1) <= minSeverity);
             let errors = 0, warnings = 0;
             for (const d of filtered) { if (d.severity === 1) errors++; else if (d.severity === 2) warnings++; }
             return { line: formatDiagnostics(resolved.result.abs, filtered), diagnostics: filtered.length, errors, warnings, isError: false };
-          } catch { return { line: formatToolError({ kind: "tool_execution_failed", file, message: "diagnostics request failed" }), diagnostics: 0, errors: 0, warnings: 0, isError: true }; }
+          } catch (error) {
+            // MCP parity: cancellation must throw so pi treats it as an
+            // aborted tool call, not a tool error result.
+            if (signal?.aborted || isAbortError(error)) throw error;
+            return { line: formatToolError({ kind: "tool_execution_failed", file, message: "diagnostics request failed" }), diagnostics: 0, errors: 0, warnings: 0, isError: true };
+          }
         }));
+
+        if (signal?.aborted) throw abortError(signal);
 
         let totalDiag = 0, totalErr = 0, totalWarn = 0, cleanCount = 0, failCount = 0;
         const lines: string[] = [];
@@ -115,7 +160,7 @@ export function registerLspTools(pi: ExtensionAPI, manager: LspServerManager) {
           ? `Checked ${params.paths.length} file(s): ${totalErr} error(s), ${totalWarn} warning(s), ${totalDiag - totalErr - totalWarn} info/hint(s), ${cleanCount} clean, ${failCount} failed`
           : `Checked ${params.paths.length} file(s): ${totalDiag} diagnostic(s), ${cleanCount} clean, ${failCount} failed`;
         return ok([summary, ...lines].join("\n\n"), { ok: failCount === 0 && totalErr === 0, checked: params.paths.length, diagnostic_count: totalDiag, error_count: totalErr, warning_count: totalWarn });
-      })(), totalTimeout, "LSP diagnostics");
+      })(), totalTimeout, "LSP diagnostics", signal);
     },
   });
 }
@@ -134,4 +179,4 @@ function formatDiagnostics(file: string, diagnostics: any[]): string {
   return lines.join("\n");
 }
 
-export const __lspToolsTest = { collapse_lsp_text: collapseText };
+export const __lspToolsTest = { collapse_lsp_text: collapseText, withTimeout };
