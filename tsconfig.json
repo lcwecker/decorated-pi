@@ -17,7 +17,6 @@
     "tools/**/*.ts",
     "hooks/**/*.ts",
     "commands/**/*.ts",
-    "providers/**/*.ts",
     "ui/**/*.ts",
     "utils/**/*.ts",
     "test/**/*.ts"
