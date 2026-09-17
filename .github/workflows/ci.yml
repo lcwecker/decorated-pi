@@ -21,7 +21,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        node: ["20", "22", "24"]
+        # pi itself requires Node >=22.19 (node:fs globSync), so 20 cannot run
+        # this extension at all.
+        node: ["22", "24"]
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-node@v6
