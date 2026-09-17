@@ -1,0 +1,154 @@
+name: Release
+
+# Publish flow: the version bump lands on main in a commit whose subject is
+# `chore(release): vX.Y.Z`. This workflow then tags that commit and publishes
+# to npm via Trusted Publishing (OIDC) — no NPM_TOKEN involved.
+#
+# One-time setup on npmjs.com: package `decorated-pi` -> Settings -> Trusted
+# Publisher: owner `lcwecker`, repository `decorated-pi`, workflow filename
+# `release.yml`, allowed action `npm publish`.
+
+on:
+  push:
+    branches: [main]
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  # Reuse the CI matrix so a release cannot publish ahead of it.
+  checks:
+    if: startsWith(github.event.head_commit.message, 'chore(release):')
+    permissions:
+      contents: read
+    uses: ./.github/workflows/ci.yml
+
+  release:
+    needs: checks
+    if: startsWith(github.event.head_commit.message, 'chore(release):')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # push the tag
+      id-token: write # mint the OIDC token npm exchanges for a publish token
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24" # npm >= 11.5.1 is required for OIDC publishing
+          registry-url: "https://registry.npmjs.org"
+          package-manager-cache: false
+
+      - name: Resolve release metadata
+        id: meta
+        env:
+          COMMIT_MESSAGE: ${{ github.event.head_commit.message }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          subject=$(printf '%s\n' "$COMMIT_MESSAGE" | head -n1)
+          tag=$(printf '%s' "${subject#chore(release):}" | tr -d '[:space:]')
+
+          if [[ ! "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::commit subject must be 'chore(release): vX.Y.Z' (got: $subject)"
+            exit 1
+          fi
+
+          version=${tag#v}
+          package_version=$(node -p "require('./package.json').version")
+          if [[ "$version" != "$package_version" ]]; then
+            echo "::error::commit announces $tag but package.json is $package_version — bump the version in the same commit"
+            exit 1
+          fi
+
+          tag_exists=false
+          tag_sha=$(git ls-remote --tags origin "refs/tags/$tag^{}" 2>/dev/null | awk '{print $1; exit}')
+          if [[ -z "$tag_sha" ]]; then
+            tag_sha=$(git ls-remote --tags origin "refs/tags/$tag" 2>/dev/null | awk '{print $1; exit}')
+          fi
+          if [[ -n "$tag_sha" ]]; then
+            tag_exists=true
+            # A retry may only reuse a tag that points at this very commit.
+            # Otherwise the tag would keep naming a revision different from
+            # the one npm is about to receive.
+            if [[ "$tag_sha" != "$GITHUB_SHA" ]]; then
+              echo "::error::tag $tag already points at $tag_sha, not at this commit ($GITHUB_SHA); refusing to publish"
+              exit 1
+            fi
+          fi
+
+          if npm view "$(node -p "require('./package.json').name")@$version" version >/dev/null 2>&1; then
+            published=true
+          else
+            published=false
+          fi
+
+          release_status=$(curl -s -o /dev/null -w '%{http_code}' \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/${GITHUB_REPOSITORY}/releases/tags/${tag}")
+          if [[ "$release_status" == "200" ]]; then
+            release_exists=true
+          else
+            release_exists=false
+          fi
+
+          # Idempotency: a re-run after a partial failure only does the part
+          # that is still missing.
+          if [[ "$tag_exists" == "true" && "$published" == "true" ]]; then
+            skip=true
+            echo "v$version is already tagged and published; nothing to do"
+          else
+            skip=false
+          fi
+
+          {
+            echo "tag=$tag"
+            echo "version=$version"
+            echo "tag_exists=$tag_exists"
+            echo "published=$published"
+            echo "release_exists=$release_exists"
+            echo "skip=$skip"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Install dependencies
+        if: steps.meta.outputs.skip != 'true'
+        run: npm ci
+
+      - name: Typecheck
+        if: steps.meta.outputs.skip != 'true'
+        run: npm run typecheck
+
+      - name: Test
+        if: steps.meta.outputs.skip != 'true'
+        run: npm test
+
+      # No NODE_AUTH_TOKEN on purpose: npm only falls back to OIDC when no
+      # token is present. Provenance is attached automatically.
+      - name: Publish to npm
+        if: steps.meta.outputs.published == 'false'
+        run: npm publish
+
+      - name: Push tag
+        if: steps.meta.outputs.tag_exists == 'false'
+        env:
+          TAG: ${{ steps.meta.outputs.tag }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag "$TAG"
+          git push origin "refs/tags/$TAG"
+
+      - name: Create GitHub Release
+        if: steps.meta.outputs.release_exists == 'false'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.meta.outputs.tag }}
+        run: gh release create "$TAG" --title "$TAG" --generate-notes

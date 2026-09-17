@@ -105,3 +105,46 @@ Organization rules:
   - Specs build agent-dir paths with `agentDir()` / `agentDirFile()` from `test/agent-dir.ts` instead of `os.homedir()`.
   - Because the agent dir is throwaway, specs need no `backupConfig` / `restoreConfig` around it.
   - Anything that would reach the network on a cold cache (e.g. the URL-based builtin MCP servers) must be disabled in the spec's `mcp.json`.
+
+## Release
+
+Publishing is a CI pipeline: `.github/workflows/release.yml` creates the tag and publishes to npm. The local repo contributes the version bump and nothing else.
+
+**Release steps** — this is the whole local procedure. `package.json` is the source of truth for the version: it lives in the `version` field, and `package-lock.json` mirrors it. No other file carries it.
+
+1. Bump the version in `package.json`:
+
+   ```bash
+   npm version 0.9.5 --no-git-tag-version   # rewrites package.json + package-lock.json
+   ```
+
+   Editing `version` by hand works too; then sync the lockfile with `npm install --package-lock-only`.
+   `--no-git-tag-version` keeps the tag out of the local repo — CI creates it.
+
+2. Run the same gate CI will run:
+
+   ```bash
+   npm run typecheck && npm test
+   ```
+
+3. Commit. The subject carries the version and acts as the trigger — it must match the field from step 1, in the strict form `chore(release): vX.Y.Z` (a prerelease suffix such as `-rc.1` fails validation):
+
+   ```bash
+   git add package.json package-lock.json
+   git commit -m "chore(release): v0.9.5"
+   ```
+
+4. Push to `main`, then watch with `gh run watch` or the Actions tab:
+
+   ```bash
+   git push origin main
+   ```
+
+A push to `main` runs `.github/workflows/ci.yml`; when the head commit's subject starts with `chore(release):`, the release job runs too. Both workflow files are short — read them for the step sequence and the skip rules. A failed release is retried with `gh run rerun <run-id>`: the commit is already on `main`, so pushing again produces no event.
+
+**Outside the repo** (a failure here surfaces as `ENEEDAUTH` in the publish step):
+
+- 2FA enabled on the npm account — npm requires it for publishing.
+- The npm trusted publisher on `decorated-pi`: owner `lcwecker`, repository `decorated-pi`, workflow filename `release.yml`.
+
+**Never**: put a token in the publish step (`NODE_AUTH_TOKEN` set to anything, empty included, disables the OIDC fallback), or push the release tag by hand.
