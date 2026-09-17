@@ -97,16 +97,15 @@ describe("createChildProcessEnv (tools/lsp/env.ts)", () => {
   });
 });
 
-describe("setupLsp (tools/lsp/index.ts)", () => {
-  it("wires up a manager and registers tools + session_shutdown hook", async () => {
+describe("setupLsp (tools/lsp/index.ts) + createLspModule (hooks/lsp.ts)", () => {
+  it("registers tools, returns the manager, and disposes it on session_shutdown", async () => {
     const { setupLsp } = await import("../tools/lsp/index.js");
-    const events: string[] = [];
+    const { createLspModule } = await import("../hooks/lsp.js");
     const tools: string[] = [];
-    let shutdownHandler: (() => Promise<void>) | null = null;
     const pi = {
-      on: (event: string, handler: any) => {
-        events.push(event);
-        if (event === "session_shutdown") shutdownHandler = handler;
+      // Hard rule: a tool module never registers a hook.
+      on: () => {
+        throw new Error("setupLsp must not call pi.on()");
       },
       registerTool: (tool: any) => tools.push(tool.name),
     };
@@ -120,12 +119,14 @@ describe("setupLsp (tools/lsp/index.ts)", () => {
     };
 
     try {
-      setupLsp(pi as any);
-      expect(events).toContain("session_shutdown");
+      const manager = setupLsp(pi as any);
       expect(tools).toContain("lsp_diagnostics");
 
-      // Simulate session_shutdown firing — verifies the hook calls into the manager
-      await shutdownHandler!();
+      // Session lifecycle is the hook module's job.
+      const module = createLspModule(manager);
+      expect(module.name).toBe("lsp");
+      const shutdown = module.hooks.session_shutdown![0];
+      await shutdown({} as any, {} as any, pi as any);
       expect(clearCalls).toBe(1);
     } finally {
       managerMod.LspServerManager.prototype.clearLanguageState = originalClear;

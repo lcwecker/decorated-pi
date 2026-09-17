@@ -449,6 +449,60 @@ describe("skeleton — dependency check re-runs per session_start", () => {
   });
 });
 
+// ─── resources_discover — collect mode ────────────────────────────────────
+
+describe("skeleton — resources_discover collection", () => {
+  it("concatenates paths from every module instead of overwriting", async () => {
+    const pi = makePi();
+    const sk = createSkeleton();
+    sk.register({
+      name: "a",
+      hooks: { resources_discover: [() => ({ skillPaths: ["/a/skills"] })] },
+    });
+    sk.register({
+      name: "b",
+      hooks: {
+        resources_discover: [
+          () => ({ skillPaths: ["/b/skills"], promptPaths: ["/b/prompts"] }),
+        ],
+      },
+    });
+    sk.install(pi as any);
+
+    const result = await pi.handlers.get("resources_discover")![0](
+      { type: "resources_discover" },
+      makeCtx() as any,
+    );
+    // Pi core accumulates across all extensions, so a later module must not
+    // bury an earlier one's paths.
+    expect(result).toEqual({
+      skillPaths: ["/a/skills", "/b/skills"],
+      promptPaths: ["/b/prompts"],
+    });
+  });
+
+  it("returns undefined when no module contributes paths", async () => {
+    const pi = makePi();
+    const sk = createSkeleton();
+    sk.register({ name: "a", hooks: { resources_discover: [() => undefined] } });
+    sk.register({ name: "b", hooks: { resources_discover: [() => ({})] } });
+    sk.install(pi as any);
+
+    const result = await pi.handlers.get("resources_discover")![0]({}, makeCtx() as any);
+    expect(result).toBeUndefined();
+  });
+
+  it("ignores empty path arrays", async () => {
+    const pi = makePi();
+    const sk = createSkeleton();
+    sk.register({ name: "a", hooks: { resources_discover: [() => ({ skillPaths: [] })] } });
+    sk.install(pi as any);
+
+    const result = await pi.handlers.get("resources_discover")![0]({}, makeCtx() as any);
+    expect(result).toBeUndefined();
+  });
+});
+
 // ─── inspect() ───────────────────────────────────────────────────────────
 
 describe("skeleton — inspect()", () => {

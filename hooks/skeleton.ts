@@ -1,10 +1,9 @@
 /**
  * Skeleton — the only place that calls pi.on(...) for hooks.
  *
- *   sk.register(module)         → installs module's hook handlers
- *   sk.declareDependency({...}) → check now, report on session_start
- *   sk.declareGuideline("...") → skeleton injects on before_agent_start
- *   sk.install(pi)              → call once, after all setup<X> calls
+ *   sk.register(module)      → installs module's hook handlers
+ *   sk.declareMissing({...}) → report on session_start, notify once
+ *   sk.install(pi)           → call once, after all setup<X> calls
  *
  * Handlers receive (event, ctx, pi) so they can call pi.* APIs
  * (setSessionName, registerTool, appendEntry, etc.).
@@ -16,6 +15,7 @@ import { isDontBother } from "../settings.js";
 // ─── Event union ───────────────────────────────────────────────────────────
 
 export type HookEvent =
+  | "resources_discover"
   | "session_start"
   | "session_shutdown"
   | "session_compact"
@@ -56,9 +56,27 @@ export type ResultHandler<E extends HookEvent> = (
   pi: ExtensionAPI,
 ) => any | Promise<any>;
 
+/** Paths a handler contributes to the resource scan. Pi core concatenates
+ *  these across every extension, so the skeleton concatenates them across
+ *  every registered module. */
+export interface DiscoveredPaths {
+  skillPaths?: string[];
+  promptPaths?: string[];
+  themePaths?: string[];
+}
+
+/** Collect: every handler runs and the array-valued fields of their results
+ *  are concatenated. Used for `resources_discover`. */
+export type DiscoverHandler = (
+  event: any,
+  ctx: ExtensionContext,
+  pi: ExtensionAPI,
+) => DiscoveredPaths | undefined | Promise<DiscoveredPaths | undefined>;
+
 export interface Module {
   readonly name: string;
   readonly hooks: {
+    resources_discover?: DiscoverHandler[];
     session_start?: ParallelHandler<"session_start">[];
     session_shutdown?: ParallelHandler<"session_shutdown">[];
     session_compact?: ParallelHandler<"session_compact">[];
@@ -116,9 +134,17 @@ const RESULT_EVENTS = new Set<HookEvent>([
   "session_before_compact",
 ]);
 
+/** Events whose per-handler results are concatenated field-wise instead of
+ *  overwritten. Pi core accumulates `skillPaths` / `promptPaths` /
+ *  `themePaths` from every extension, so the skeleton does the same here. */
+const COLLECT_EVENTS = new Set<HookEvent>([
+  "resources_discover",
+]);
+
+const COLLECT_ARRAY_FIELDS = ["skillPaths", "promptPaths", "themePaths"] as const;
+
 export interface Skeleton {
   register(module: Module): void;
-  /** Returns whether the dependency check passed right now. */
   /** Declare that a binary dependency is missing. Module calls this
    *   after its own which() lookup failed. Skeleton dedupes by name,
    *   honors `dependencies[name].dontBother`, and shows a single
@@ -175,6 +201,21 @@ export function createSkeleton(): Skeleton {
               if (result !== undefined) current = result;
             }
             return current === event ? undefined : current;
+          });
+        } else if (COLLECT_EVENTS.has(event)) {
+          pi.on(event as any, async (event: any, ctx: ExtensionContext) => {
+            const merged: Record<string, string[]> = {};
+            for (const { handler } of handlers) {
+              const result = await handler(event, ctx, pi);
+              if (!result) continue;
+              for (const field of COLLECT_ARRAY_FIELDS) {
+                const paths = (result as any)[field];
+                if (Array.isArray(paths) && paths.length > 0) {
+                  (merged[field] ??= []).push(...paths);
+                }
+              }
+            }
+            return Object.keys(merged).length > 0 ? merged : undefined;
           });
         } else if (RESULT_EVENTS.has(event)) {
           pi.on(event as any, async (event: any, ctx: ExtensionContext) => {

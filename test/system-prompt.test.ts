@@ -7,7 +7,7 @@ import { sortSystemPromptOptions } from "../hooks/skeleton.js";
 import {
   sortSkillsInSystemPrompt,
   stripPiDocsBlock,
-} from "../index.js";
+} from "../hooks/pi-docs.js";
 
 describe("sortSystemPromptOptions", () => {
   it("sorts toolSnippets keys alphabetically", () => {
@@ -161,9 +161,9 @@ describe("Decorated Pi Guidance structure", () => {
     expect(src).toMatch(/max 3-4 points per side/);
   });
 
-  it("pi-docs frontmatter is defined in index.ts with a stable description", () => {
+  it("pi-docs frontmatter is defined in hooks/pi-docs.ts with a stable description", () => {
     const src = fs.readFileSync(
-      path.join(import.meta.dirname, "../index.ts"),
+      path.join(import.meta.dirname, "../hooks/pi-docs.ts"),
       "utf-8",
     );
     expect(src).toMatch(/PI_DOCS_SKILL_NAME/);

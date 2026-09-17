@@ -7,7 +7,7 @@
  *  - the right notification is sent in non-interactive mode
  *  - side effects (sendMessage, abort, toggle) fire as expected
  */
-import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { describe, it, expect, beforeEach, vi } from "vitest";
 
 // ─── Shared mocks ─────────────────────────────────────────────────────────
 
@@ -20,7 +20,6 @@ const mockRegisterShortcut = vi.fn();
 const mockOn = vi.fn();
 
 let lastCommand: { name: string; handler: (...args: any[]) => any } | null = null;
-let lastAgentStartHandler: (() => void) | null = null;
 
 function makeCtx(overrides: Partial<{
   hasUI: boolean;
@@ -49,9 +48,7 @@ function makePi() {
     }),
     registerShortcut: mockRegisterShortcut,
     sendMessage: mockSendMessage,
-    on: mockOn.mockImplementation((event, handler) => {
-      if (event === "agent_start") lastAgentStartHandler = handler;
-    }),
+    on: mockOn,
   };
 }
 
@@ -63,7 +60,6 @@ beforeEach(() => {
   mockRegisterCommand.mockReset();
   mockOn.mockReset();
   lastCommand = null;
-  lastAgentStartHandler = null;
 });
 
 // ─── /dp-model ────────────────────────────────────────────────────────────
@@ -237,19 +233,33 @@ describe("/retry", () => {
     );
   });
 
-  it("agent_start handler resets retryInProgress so next /retry works", async () => {
+  it("registers no agent-loop hook of its own", async () => {
     const { registerRetryCommand } = await import("../commands/retry.js");
     const pi = makePi();
     registerRetryCommand(pi as any);
+
+    // Hard rule: the command stays out of the agent loop. hooks/retry.ts
+    // carries the reset.
+    expect(mockOn).not.toHaveBeenCalled();
+  });
+
+  it("agent_start from hooks/retry.ts resets the guard so the next /retry works", async () => {
+    const { registerRetryCommand } = await import("../commands/retry.js");
+    const { createRetryModule } = await import("../hooks/retry.js");
+    const pi = makePi();
+    const state = registerRetryCommand(pi as any);
+    const module = createRetryModule(state);
 
     const ctx = makeCtx();
     await lastCommand!.handler([], ctx);
     expect(mockSendMessage).toHaveBeenCalledTimes(1);
 
-    // Simulate agent_start firing
-    lastAgentStartHandler!();
-    await lastCommand!.handler([], ctx);
+    // Simulate agent_start firing through the hook module.
+    expect(module.hooks.agent_start).toHaveLength(1);
+    await module.hooks.agent_start![0]({}, ctx as any, pi as any);
+    expect(state.inProgress).toBe(false);
 
+    await lastCommand!.handler([], ctx);
     expect(mockSendMessage).toHaveBeenCalledTimes(2);
   });
 });

@@ -8,21 +8,17 @@
  *
  * Plus:
  *   - system-prompt guidelines: hard-coded base + per-module imports,
- *     concatenated in array order, injected via pi.on("before_agent_start", ...)
- *     in `installGuidelines` below.
+ *     concatenated in array order and handed to the pi-docs module
+ *     (hooks/pi-docs.ts), which appends them on every turn.
  *
- * Skeleton is the only place that calls pi.on(...) for hooks. Tools,
- * commands, and guideline injection register themselves directly with pi.
+ * The skeleton (hooks/skeleton.ts) is the only place that calls pi.on(...).
+ * Everything else registers with pi directly (tools, commands).
  */
 
-import {
-    getAgentDir,
-    type ExtensionAPI,
-} from "@earendil-works/pi-coding-agent";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 import { createSkeleton } from "./hooks/skeleton.js";
+import { createPiDocsModule } from "./hooks/pi-docs.js";
 
 import { externalizeModule } from "./hooks/externalize.js";
 import { normalizeCodeblocksModule } from "./hooks/normalize-codeblocks.js";
@@ -39,10 +35,11 @@ import { setupCompaction } from "./hooks/compaction.js";
 import { McpRuntime, createMcpModule } from "./hooks/mcp.js";
 import { setupWakatime } from "./hooks/wakatime.js";
 import { createCodeReviewModule } from "./hooks/code-review.js";
+import { createLspModule } from "./hooks/lsp.js";
+import { createRetryModule } from "./hooks/retry.js";
 
 import { registerPatchTool } from "./tools/patch/index.js";
-import { registerLspTools } from "./tools/lsp/tools.js";
-import { LspServerManager } from "./tools/lsp/manager.js";
+import { setupLsp } from "./tools/lsp/index.js";
 import { collectLspDependencyStatuses } from "./tools/lsp/servers.js";
 import { registerAskTool } from "./tools/ask/index.js";
 import { CodeReviewRuntime, registerCodeReviewRenderer } from "./tools/code-review/index.js";
@@ -102,83 +99,6 @@ const TALK_NORMAL_GUIDANCE = [
     "- End with a concrete recommendation or next step when relevant. No summary-stamp closings: `In summary`, `Hope this helps`, `Feel free to ask`, `一句话总结`, `一句话落地`, `总结一下`, `简而言之`, `总而言之`, or any `一句话X：` / `X一下：` variant. State the final claim directly.",
 ].join("\n");
 
-/** Remove the injected Pi documentation block from the base system prompt.
- *  Matches a line containing "Pi documentation" and deletes it plus all
- *  following non-empty lines, stopping at the first blank line.
- *  Returns the stripped prompt together with the removed block (trimmed),
- *  so callers can reuse the exact text Pi rendered for this install. */
-export function stripPiDocsBlock(prompt: string): {
-    prompt: string;
-    block: string | undefined;
-} {
-    const lines = prompt.split("\n");
-    const out: string[] = [];
-    const removed: string[] = [];
-    let i = 0;
-    while (i < lines.length) {
-        const line = lines[i];
-        if (line.includes("Pi documentation")) {
-            removed.push(line);
-            i++;
-            while (i < lines.length && lines[i].trim() !== "") {
-                removed.push(lines[i]);
-                i++;
-            }
-            // Drop the terminating blank line as well so we don't leave orphan whitespace.
-            if (i < lines.length && lines[i].trim() === "") i++;
-            continue;
-        }
-        out.push(line);
-        i++;
-    }
-    const block = removed.length > 0 ? removed.join("\n").trim() : undefined;
-    return { prompt: out.join("\n"), block };
-}
-
-/** Sort the <available_skills> block in the system prompt by skill name.
- *  Pi core appends extension-provided skills after user/project skills and does
- *  not sort the XML; this makes the final prompt stable and cache-friendly. */
-export function sortSkillsInSystemPrompt(prompt: string): string {
-    const startMarker = "\n<available_skills>";
-    const endMarker = "</available_skills>";
-    const startIdx = prompt.indexOf(startMarker);
-    if (startIdx === -1) return prompt;
-    const endIdx = prompt.indexOf(endMarker, startIdx);
-    if (endIdx === -1) return prompt;
-
-    const before = prompt.slice(0, startIdx + startMarker.length);
-    const after = prompt.slice(endIdx);
-    const inner = prompt.slice(startIdx + startMarker.length, endIdx);
-
-    const chunks: string[][] = [];
-    let current: string[] = [];
-    for (const line of inner.split("\n")) {
-        const trimmed = line.trim();
-        if (trimmed === "<skill>") {
-            current = [line];
-        } else if (trimmed === "</skill>") {
-            current.push(line);
-            chunks.push(current);
-            current = [];
-        } else if (current.length > 0) {
-            current.push(line);
-        }
-    }
-
-    const nameOf = (chunk: string[]) => {
-        const line = chunk.find((l) => l.trim().startsWith("<name>"));
-        if (!line) return "";
-        const t = line.trim();
-        return t.slice(6, t.indexOf("</name>"));
-    };
-
-    chunks.sort((a, b) => nameOf(a).localeCompare(nameOf(b)));
-
-    const sortedInner =
-        "\n" + chunks.map((chunk) => chunk.join("\n")).join("\n") + "\n";
-    return before + sortedInner + after;
-}
-
 /** Build the list of guideline strings to inject, in prompt order. */
 function buildGuidelines(): string[] {
     return [
@@ -197,166 +117,6 @@ function canRegisterMcpServer(
     return dep ? dep.state === "ok" : true;
 }
 
-// ─── Builtin pi-docs skill ─────────────────────────────────────────────────
-//
-// A small SKILL.md lives at ~/.pi/agent/skills/pi-docs/ so Pi's own skill
-// discovery picks it up (progressive disclosure: name + description always in
-// context, the full block is loaded on demand via read). The skill body is the
-// exact "Pi documentation" block Pi rendered for the CURRENT install —
-// extracted at agent start (before_agent_start) from the live system prompt,
-// so it can never drift from what Pi would have told the model.
-//
-// Ownership is tracked via a frontmatter marker: if the file exists but lacks
-// the marker it is user-authored and is left untouched.
-
-export const PI_DOCS_SKILL_NAME = "pi-docs";
-export const PI_DOCS_MARKER = "source: decorated-pi";
-export const PI_DOCS_DESCRIPTION =
-    "Use when the user asks about pi itself, its SDK, extensions, or themes.";
-
-/** Placeholder body used until the first agent turn replaces it with the
- *  real rendered block. It is never visible to the model: before_agent_start
- *  runs before any LLM inference. */
-const PI_DOCS_PLACEHOLDER_BODY =
-    "Placeholder — the full Pi documentation block is written on the first agent turn.\n";
-
-function piDocsSkillDir(agentDir: string): string {
-    return join(agentDir, "skills", PI_DOCS_SKILL_NAME);
-}
-
-function piDocsSkillFile(agentDir: string): string {
-    return join(piDocsSkillDir(agentDir), "SKILL.md");
-}
-
-/** The YAML frontmatter for the generated skill (no trailing newline). */
-export function buildPiDocsFrontmatter(): string {
-    return [
-        "---",
-        `name: ${PI_DOCS_SKILL_NAME}`,
-        `description: ${PI_DOCS_DESCRIPTION}`,
-        "metadata:",
-        `  ${PI_DOCS_MARKER}`,
-        "---",
-    ].join("\n");
-}
-
-/** Split a SKILL.md file into frontmatter block and body, or undefined when
- *  the file has no `---` frontmatter. */
-export function splitSkillFile(
-    content: string,
-): { frontmatter: string; body: string } | undefined {
-    const lines = content.split("\n");
-    if (lines[0]?.trim() !== "---") return undefined;
-    let end = -1;
-    for (let i = 1; i < lines.length; i++) {
-        if (lines[i].trim() === "---") {
-            end = i;
-            break;
-        }
-    }
-    if (end === -1) return undefined;
-    return {
-        frontmatter: lines.slice(0, end + 1).join("\n"),
-        body: lines.slice(end + 1).join("\n").replace(/^\n+/, "").replace(/\n+$/, ""),
-    };
-}
-
-function tryReadFile(file: string): string | undefined {
-    try {
-        return readFileSync(file, "utf-8");
-    } catch {
-        return undefined;
-    }
-}
-
-/** Discovery stage (resources_discover): make sure a pi-docs SKILL.md exists
- *  with our frontmatter so this session's skill scan picks up the entry.
- *  Only the entry layer is managed here (file existence + frontmatter); the
- *  body is managed on the first agent turn.
- *  Returns the skillPaths to re-scan when the file was created or its
- *  frontmatter changed; empty otherwise. User-authored files (no marker) are
- *  never touched. */
-export function ensureSkillFrontmatter(
-    agentDir: string,
-): { skillPaths?: string[] } {
-    const file = piDocsSkillFile(agentDir);
-    const existing = tryReadFile(file);
-
-    if (existing === undefined) {
-        mkdirSync(piDocsSkillDir(agentDir), { recursive: true });
-        writeFileSync(
-            file,
-            `${buildPiDocsFrontmatter()}\n\n${PI_DOCS_PLACEHOLDER_BODY}`,
-            "utf-8",
-        );
-        return { skillPaths: [join(agentDir, "skills")] };
-    }
-
-    if (!existing.includes(PI_DOCS_MARKER)) {
-        // User-authored skill — leave it alone.
-        return {};
-    }
-
-    const split = splitSkillFile(existing);
-    const expected = buildPiDocsFrontmatter();
-    if (split && split.frontmatter === expected) {
-        // Entry layer already up to date; the initial scan covers the file.
-        return {};
-    }
-    const body = split && split.body.length > 0 ? split.body : PI_DOCS_PLACEHOLDER_BODY;
-    writeFileSync(file, `${expected}\n\n${body}`, "utf-8");
-    return { skillPaths: [join(agentDir, "skills")] };
-}
-
-/** Content stage (before_agent_start): sync the skill body with the exact
- *  "Pi documentation" block Pi rendered for this install. Returns true when
- *  the file was written. User-authored files (no marker) are untouched. */
-export function updateSkillBody(agentDir: string, block: string): boolean {
-    const file = piDocsSkillFile(agentDir);
-    const existing = tryReadFile(file);
-
-    if (existing === undefined) {
-        mkdirSync(piDocsSkillDir(agentDir), { recursive: true });
-        writeFileSync(file, `${buildPiDocsFrontmatter()}\n\n${block}\n`, "utf-8");
-        return true;
-    }
-    if (!existing.includes(PI_DOCS_MARKER)) {
-        return false; // user-authored
-    }
-    const split = splitSkillFile(existing);
-    if (split && split.body.trim() === block.trim()) {
-        return false; // already in sync
-    }
-    writeFileSync(file, `${buildPiDocsFrontmatter()}\n\n${block}\n`, "utf-8");
-    return true;
-}
-
-/** Register the discovery stage: create/refresh the entry layer and trigger a
- *  re-scan when needed. */
-function installBuiltinSkillDiscovery(pi: ExtensionAPI): void {
-    pi.on("resources_discover", async () => {
-        const { skillPaths } = ensureSkillFrontmatter(getAgentDir());
-        return skillPaths ? { skillPaths } : undefined;
-    });
-}
-
-/** Install a single before_agent_start handler that appends every
- *  guideline in order. Idempotent — re-injection is a no-op via marker. */
-function installGuidelines(pi: ExtensionAPI): void {
-    const blocks = buildGuidelines();
-    const joined = blocks.join("\n\n");
-    const marker = "## Decorated Pi Guidance";
-
-    pi.on("before_agent_start", async (event: any) => {
-        if (!event.systemPrompt) return undefined;
-        const { prompt: stripped, block } = stripPiDocsBlock(event.systemPrompt);
-        if (block) updateSkillBody(getAgentDir(), block);
-        let prompt = sortSkillsInSystemPrompt(stripped);
-        if (prompt.includes(marker)) return undefined; // already injected this turn
-        return { systemPrompt: `${prompt}\n\n${joined}` };
-    });
-}
-
 export default async function (pi: ExtensionAPI) {
     const codeReviewRuntime = new CodeReviewRuntime();
 
@@ -367,6 +127,11 @@ export default async function (pi: ExtensionAPI) {
 
     // ── Skeleton (hooks) ───────────────────────────────────────────────────
     const sk = createSkeleton();
+
+    // First in the before_agent_start chain: the pi-docs module strips Pi's
+    // documentation block, syncs the builtin skill, sorts the skills block,
+    // and appends the system-prompt guidelines.
+    sk.register(createPiDocsModule(buildGuidelines().join("\n\n")));
 
     // Order matters for tool_result compose chain:
     //   1. normalize-codeblocks → externalize → track-mtime → inject-agents-md → image-vision → wakatime
@@ -395,7 +160,9 @@ export default async function (pi: ExtensionAPI) {
     if (isModuleEnabled("patchOverrideEdit")) registerPatchTool(pi);
     if (isModuleEnabled("lsp")) {
         const lspDeps = collectLspDependencyStatuses(process.cwd());
-        registerLspTools(pi, new LspServerManager());
+        // Tool surface + session lifecycle: setupLsp returns the manager that
+        // hooks/lsp.ts disposes on session_shutdown.
+        sk.register(createLspModule(setupLsp(pi)));
         for (const dep of lspDeps) {
             if (dep.state !== "ok") {
                 sk.declareMissing({
@@ -442,16 +209,13 @@ export default async function (pi: ExtensionAPI) {
         registerMcpStatusCommand(pi, mcpRuntime);
     }
 
-    // ── Builtin skills (travel with the plugin in every project) ─────────────
-    installBuiltinSkillDiscovery(pi);
-
-    // ── System-prompt guidelines (single handler, array order = prompt order) ──
-    installGuidelines(pi);
-
     // ── Commands ──────────────────────────────────────────────────────────
     registerDpModelCommand(pi);
     registerDpSettingsCommand(pi);
-    if (isModuleEnabled("retry")) registerRetryCommand(pi);
+    if (isModuleEnabled("retry")) {
+        // /retry creates its in-flight guard; hooks/retry.ts owns the reset.
+        sk.register(createRetryModule(registerRetryCommand(pi)));
+    }
     if (isModuleEnabled("usage")) registerUsageCommand(pi);
     registerCodeReviewCommand(pi, codeReviewRuntime);
 

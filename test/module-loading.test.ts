@@ -142,7 +142,9 @@ describe("index.ts — conditional loading structure (new architecture)", () => 
 
   it("gates LSP tool behind isModuleEnabled (LSP is a tool)", () => {
     expect(indexSrc).toContain('if (isModuleEnabled("lsp"))');
-    expect(indexSrc).toContain("registerLspTools");
+    // setupLsp registers the tools; hooks/lsp.ts owns session_shutdown.
+    expect(indexSrc).toContain("setupLsp(pi)");
+    expect(indexSrc).toContain("createLspModule");
   });
 
   it("gates MCP tool registration behind isModuleEnabled", () => {
@@ -167,6 +169,7 @@ describe("index.ts — conditional loading structure (new architecture)", () => 
   it("gates retry and usage commands behind isModuleEnabled", () => {
     expect(indexSrc).toContain('if (isModuleEnabled("retry"))');
     expect(indexSrc).toContain("registerRetryCommand");
+    expect(indexSrc).toContain("createRetryModule");
     expect(indexSrc).toContain('if (isModuleEnabled("usage"))');
     expect(indexSrc).toContain("registerUsageCommand");
   });

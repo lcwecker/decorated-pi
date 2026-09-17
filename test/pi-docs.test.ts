@@ -15,10 +15,11 @@ import {
   PI_DOCS_MARKER,
   PI_DOCS_SKILL_NAME,
   buildPiDocsFrontmatter,
+  createPiDocsModule,
   ensureSkillFrontmatter,
   splitSkillFile,
   updateSkillBody,
-} from "../index.js";
+} from "../hooks/pi-docs.js";
 
 function skillFile(agentDir: string): string {
   return path.join(agentDir, "skills", PI_DOCS_SKILL_NAME, "SKILL.md");
@@ -213,5 +214,65 @@ describe("pi-docs lifecycle (discovery → content)", () => {
     // re-running both stages is stable
     expect(ensureSkillFrontmatter(agentDir).skillPaths).toBeUndefined();
     expect(updateSkillBody(agentDir, REAL_BLOCK)).toBe(false);
+  });
+});
+
+describe("createPiDocsModule", () => {
+  let agentDir: string;
+
+  beforeEach(() => {
+    agentDir = fs.mkdtempSync(path.join(os.tmpdir(), "decorated-pi-agent-"));
+  });
+
+  afterEach(() => {
+    fs.rmSync(agentDir, { recursive: true, force: true });
+  });
+
+  function makeModule(guidelines = "## Decorated Pi Guidance\n\n- be brief") {
+    return createPiDocsModule(guidelines, agentDir);
+  }
+
+  it("creates the entry layer on resources_discover, then stays quiet", async () => {
+    const hooks = makeModule().hooks.resources_discover!;
+    expect(await hooks[0]({}, {} as any, {} as any)).toEqual({
+      skillPaths: [path.join(agentDir, "skills")],
+    });
+    // Entry layer is now current — no re-scan requested.
+    expect(await hooks[0]({}, {} as any, {} as any)).toBeUndefined();
+  });
+
+  it("before_agent_start writes the rendered block and appends the guidelines", async () => {
+    const handler = makeModule().hooks.before_agent_start![0];
+    const result: any = await handler(
+      { systemPrompt: `HEAD\n${REAL_BLOCK}\n\nTAIL` },
+      {} as any,
+      {} as any,
+    );
+
+    expect(result.systemPrompt).toContain("HEAD");
+    expect(result.systemPrompt).toContain("TAIL");
+    expect(result.systemPrompt).not.toContain("Pi documentation");
+    expect(result.systemPrompt).toContain("## Decorated Pi Guidance");
+
+    // The stripped block becomes the skill body.
+    const content = fs.readFileSync(skillFile(agentDir), "utf-8");
+    expect(splitSkillFile(content)!.body.trim()).toBe(REAL_BLOCK);
+  });
+
+  it("steps aside once the guidelines marker is already in the prompt", async () => {
+    const handler = makeModule().hooks.before_agent_start![0];
+    const result = await handler(
+      {
+        systemPrompt: `HEAD\n${REAL_BLOCK}\n\n## Decorated Pi Guidance\n- already here`,
+      },
+      {} as any,
+      {} as any,
+    );
+    expect(result).toBeUndefined();
+  });
+
+  it("has no prompt side effect when systemPrompt is absent", async () => {
+    const handler = makeModule().hooks.before_agent_start![0];
+    expect(await handler({}, {} as any, {} as any)).toBeUndefined();
   });
 });
