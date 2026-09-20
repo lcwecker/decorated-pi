@@ -31,10 +31,10 @@
         "typescript": "^7.0.2"
     },
     "peerDependencies": {
-        "@earendil-works/pi-agent-core": ">=0.84.4",
-        "@earendil-works/pi-ai": ">=0.84.4",
-        "@earendil-works/pi-coding-agent": ">=0.84.4",
-        "@earendil-works/pi-tui": ">=0.84.4",
+        "@earendil-works/pi-agent-core": ">=0.86.0",
+        "@earendil-works/pi-ai": ">=0.86.0",
+        "@earendil-works/pi-coding-agent": ">=0.86.0",
+        "@earendil-works/pi-tui": ">=0.86.0",
         "typebox": "*"
     },
     "pi": {
@@ -43,10 +43,10 @@
         ]
     },
     "devDependencies": {
-        "@earendil-works/pi-agent-core": "^0.84.4",
-        "@earendil-works/pi-ai": "^0.84.4",
-        "@earendil-works/pi-coding-agent": "^0.84.4",
-        "@earendil-works/pi-tui": "^0.84.4",
+        "@earendil-works/pi-agent-core": "^0.86.0",
+        "@earendil-works/pi-ai": "^0.86.0",
+        "@earendil-works/pi-coding-agent": "^0.86.0",
+        "@earendil-works/pi-tui": "^0.86.0",
         "@types/node": "^22.15.3",
         "@vitest/coverage-v8": "4.1.8",
         "depcheck": "^1.4.7",

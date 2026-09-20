@@ -4,7 +4,7 @@
 
 ## Requirements
 
-Requires **Pi ≥ 0.84.0**. Vision and custom-compaction requests dispatch through the model runtime (`ModelRegistry.complete`) and the code-review runner parses the 0.84 delta-only JSON protocol, so older Pi versions fail at runtime.
+Requires **Pi ≥ 0.86.0**. The system-prompt injection mutates `systemPromptOptions.sections`, which only Pi 0.86 renders — on older versions the Pi documentation block would stay in the prompt and the guidelines would be dropped. Vision and custom-compaction requests dispatch through the model runtime (`ModelRegistry.complete`) and the code-review runner parses the 0.84 delta-only JSON protocol, so older Pi versions fail at runtime.
 
 ## Install
 

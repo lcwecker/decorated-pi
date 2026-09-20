@@ -61,7 +61,7 @@ decorated-pi/
   - **compose** — the next handler receives the previous return value. Transformation chains: `before_agent_start` mutates `systemPrompt`, `tool_call` mutates `input.command`, `tool_result` mutates `content`, plus `context` and `message_end`.
   - **result** — every handler sees the original event, the last non-undefined return wins. `session_before_compact`.
   - **collect** — the array fields (`skillPaths`, `promptPaths`, `themePaths`) of every handler's result are concatenated. `resources_discover`, mirroring how pi core accumulates those paths across all extensions.
-- The system prompt is assembled by the `pi-docs` module (`hooks/pi-docs.ts`): it strips Pi's documentation block, writes the builtin skill body, sorts the skills block, and appends the guidelines. It registers first so it runs before every other `before_agent_start` handler.
+- The system prompt is assembled by the `pi-docs` module (`hooks/pi-docs.ts`): it moves Pi's documentation block into the builtin skill body, then writes a pointer and the guidelines as `systemPromptOptions.sections` entries so Pi diffs sections instead of re-sending a rewritten prompt. It registers first so it runs before every other `before_agent_start` handler. Requires Pi 0.86+, where option mutations are rendered.
 
 ### `dp-settings`
 
