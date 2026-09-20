@@ -73,6 +73,14 @@ describe("buildMcpTool", () => {
     expect(tool.parameters).toEqual(schema);
   });
 
+  it("defaults to an empty object schema when the entry has none", async () => {
+    // pi rejects a tool whose parameter schema is not an object, so a cached
+    // entry without one must still register.
+    const { buildMcpTool } = await import("../tools/mcp/tool-definition.js");
+    const tool = buildMcpTool(baseConfig, { name: "ping" }, () => undefined);
+    expect(tool.parameters).toEqual({ type: "object", properties: {} });
+  });
+
   it("execute returns 'not connected' error when findConnection returns undefined", async () => {
     const { buildMcpTool } = await import("../tools/mcp/tool-definition.js");
     const tool = buildMcpTool(baseConfig, { name: "x" }, () => undefined);

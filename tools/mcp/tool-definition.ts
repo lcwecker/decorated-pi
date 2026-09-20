@@ -88,7 +88,7 @@ export function buildMcpTool(
     description: desc,
     promptSnippet: desc || `MCP tool ${config.name}/${toolEntry.name}`,
     renderResult: renderMcpResult,
-    parameters: toolEntry.inputSchema,
+    parameters: toolEntry.inputSchema ?? { type: "object", properties: {} },
     execute: async (_id: string, params: any, signal: AbortSignal | undefined, _update: any, _ctx: any) => {
       const conn = findConnection(config.name);
       if (!conn) {

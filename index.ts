@@ -128,9 +128,9 @@ export default async function (pi: ExtensionAPI) {
     // ── Skeleton (hooks) ───────────────────────────────────────────────────
     const sk = createSkeleton();
 
-    // First in the before_agent_start chain: the pi-docs module strips Pi's
-    // documentation block, syncs the builtin skill, sorts the skills block,
-    // and appends the system-prompt guidelines.
+    // First in the before_agent_start chain: the pi-docs module replaces Pi's
+    // documentation block with a pointer into the builtin pi-docs skill and
+    // injects the system-prompt guidelines as structured sections.
     sk.register(createPiDocsModule(buildGuidelines().join("\n\n")));
 
     // Order matters for tool_result compose chain:

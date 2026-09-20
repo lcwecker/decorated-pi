@@ -4,10 +4,7 @@
 
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { sortSystemPromptOptions } from "../hooks/skeleton.js";
-import {
-  sortSkillsInSystemPrompt,
-  stripPiDocsBlock,
-} from "../hooks/pi-docs.js";
+import { stripPiDocsBlock } from "../hooks/pi-docs.js";
 
 describe("sortSystemPromptOptions", () => {
   it("sorts toolSnippets keys alphabetically", () => {
@@ -24,15 +21,6 @@ describe("sortSystemPromptOptions", () => {
     expect(opts.toolSnippets!["apple"]).toBe("apple snippet");
     expect(opts.toolSnippets!["mango"]).toBe("mango snippet");
     expect(opts.toolSnippets!["zebra"]).toBe("zebra snippet");
-  });
-
-  it("sorts selectedTools to match toolSnippets order", () => {
-    const opts = {
-      toolSnippets: { zebra: "z", apple: "a", mango: "m" },
-      selectedTools: ["zebra", "apple", "mango"],
-    };
-    sortSystemPromptOptions(opts as any);
-    expect(opts.selectedTools).toEqual(["apple", "mango", "zebra"]);
   });
 
   it("sorts promptGuidelines alphabetically", () => {
@@ -69,7 +57,6 @@ describe("sortSystemPromptOptions", () => {
     };
     sortSystemPromptOptions(opts as any);
     expect(Object.keys(opts.toolSnippets!)).toEqual(["apple", "zebra"]);
-    expect(opts.selectedTools).toEqual(["apple", "zebra"]);
     expect(opts.promptGuidelines).toEqual(["apple g", "zebra g"]);
     expect(opts.skills!.map(s => s.name)).toEqual(["apple-skill", "zebra-skill"]);
   });
@@ -77,13 +64,11 @@ describe("sortSystemPromptOptions", () => {
   it("handles empty arrays", () => {
     const opts = {
       toolSnippets: {},
-      selectedTools: [],
       promptGuidelines: [],
       skills: [],
     };
     sortSystemPromptOptions(opts as any);
     expect(Object.keys(opts.toolSnippets!)).toHaveLength(0);
-    expect(opts.selectedTools).toHaveLength(0);
   });
 
   it("does not throw when fields are undefined", () => {
@@ -91,9 +76,18 @@ describe("sortSystemPromptOptions", () => {
     sortSystemPromptOptions(opts);
     // toolSnippets gets initialized to {} when undefined
     expect(opts.toolSnippets).toEqual({});
-    expect(opts.selectedTools).toBeUndefined();
     expect(opts.promptGuidelines).toBeUndefined();
     expect(opts.skills).toBeUndefined();
+  });
+
+  it("never touches selectedTools", () => {
+    // pi 0.86+ treats a rewrite there as an explicit tool-loadout override.
+    const opts = {
+      toolSnippets: { zebra: "z" },
+      selectedTools: ["zebra", "ghost"],
+    } as any;
+    sortSystemPromptOptions(opts);
+    expect(opts.selectedTools).toEqual(["zebra", "ghost"]);
   });
 
   it("sorts keys in stable order regardless of case", () => {
@@ -214,57 +208,5 @@ describe("stripPiDocsBlock", () => {
     expect(result.prompt).not.toMatch(/line one/);
     expect(result.prompt).toMatch(/Base\./);
     expect(result.block).toContain("- line two");
-  });
-});
-
-describe("sortSkillsInSystemPrompt", () => {
-  it("sorts skills alphabetically by name", () => {
-    const input = [
-      "Intro text.",
-      "",
-      "<available_skills>",
-      "  <skill>",
-      "    <name>xlsx</name>",
-      "    <description>X</description>",
-      "    <location>/xlsx/SKILL.md</location>",
-      "  </skill>",
-      "  <skill>",
-      "    <name>pi-docs</name>",
-      "    <description>pi docs resources</description>",
-      "    <location>/pi-docs/SKILL.md</location>",
-      "  </skill>",
-      "  <skill>",
-      "    <name>zentao-bug</name>",
-      "    <description>Z</description>",
-      "    <location>/zentao-bug/SKILL.md</location>",
-      "  </skill>",
-      "</available_skills>",
-    ].join("\n");
-    const result = sortSkillsInSystemPrompt(input);
-    const names = Array.from(result.matchAll(/<name>([^<]+)<\/name>/g)).map((m) => m[1]);
-    expect(names).toEqual(["pi-docs", "xlsx", "zentao-bug"]);
-  });
-
-  it("leaves the prompt unchanged when there is no available_skills block", () => {
-    const input = "No skills here.";
-    expect(sortSkillsInSystemPrompt(input)).toBe(input);
-  });
-
-  it("preserves surrounding text and markers", () => {
-    const input = [
-      "Prefix.",
-      "<available_skills>",
-      "  <skill>",
-      "    <name>b</name>",
-      "  </skill>",
-      "  <skill>",
-      "    <name>a</name>",
-      "  </skill>",
-      "</available_skills>",
-      "Suffix.",
-    ].join("\n");
-    const result = sortSkillsInSystemPrompt(input);
-    expect(result.startsWith("Prefix.\n<available_skills>")).toBe(true);
-    expect(result.endsWith("</available_skills>\nSuffix.")).toBe(true);
   });
 });

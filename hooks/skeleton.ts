@@ -276,7 +276,18 @@ export function createSkeleton(): Skeleton {
       // Skeleton-owned: system-prompt options sort for cache stability.
       // Guideline injection is owned by `index.ts`.
       pi.on("before_agent_start", async (event: any) => {
-        if (event.systemPromptOptions) sortSystemPromptOptions(event.systemPromptOptions);
+        const options = event.systemPromptOptions;
+        if (!options) return undefined;
+        // Sort the live loadout rather than rewriting `options.selectedTools`:
+        // pi 0.86+ treats a rewrite as an explicit loadout override and stops
+        // consulting the live loadout, which would resurrect tools another
+        // handler turned off with `pi.setActiveTools()`.
+        const active = pi.getActiveTools();
+        const sorted = [...active].sort((a, b) => a.localeCompare(b));
+        if (sorted.some((name, index) => name !== active[index])) {
+          pi.setActiveTools(sorted);
+        }
+        sortSystemPromptOptions(options);
         return undefined;
       });
     },
@@ -297,10 +308,13 @@ export function createSkeleton(): Skeleton {
 
 // ─── System-prompt option sorting ─────────────────────────────────────────
 
-/** Sort all fields in systemPromptOptions alphabetically for stable system prompt. */
+/** Sort the presentation-only fields of systemPromptOptions for a stable system
+ *  prompt. `selectedTools` is deliberately left alone: pi 0.86+ reads a rewrite
+ *  there as an explicit tool-loadout override, which would undo a
+ *  `pi.setActiveTools()` restriction made by another handler. The skeleton
+ *  sorts the live loadout instead. */
 export function sortSystemPromptOptions(opts: {
   toolSnippets?: Record<string, string>;
-  selectedTools?: string[];
   promptGuidelines?: string[];
   skills?: Array<{ name: string; description: string; filePath: string }>;
 }) {
@@ -310,9 +324,6 @@ export function sortSystemPromptOptions(opts: {
     sortedToolSnippets[name] = opts.toolSnippets![name];
   }
   opts.toolSnippets = sortedToolSnippets;
-  if (opts.selectedTools) {
-    opts.selectedTools = sortedToolNames;
-  }
   if (opts.promptGuidelines) {
     opts.promptGuidelines = [...opts.promptGuidelines].sort((a, b) => a.localeCompare(b));
   }

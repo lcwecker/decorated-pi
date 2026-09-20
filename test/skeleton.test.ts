@@ -27,16 +27,26 @@ import { createSkeleton, type Module, type HookEvent } from "../hooks/skeleton.j
 interface FakePi {
   on: (event: string, handler: (...args: any[]) => any) => void;
   handlers: Map<string, Array<(...args: any[]) => any>>;
+  getActiveTools: () => string[];
+  setActiveTools: (names: string[]) => void;
+  setActiveToolsCalls: string[][];
 }
 
-function makePi(): FakePi {
+function makePi(activeTools: string[] = []): FakePi {
   const handlers = new Map<string, Array<(...args: any[]) => any>>();
+  const setActiveToolsCalls: string[][] = [];
   return {
     handlers,
+    setActiveToolsCalls,
     on(event, handler) {
       const list = handlers.get(event) ?? [];
       list.push(handler);
       handlers.set(event, list);
+    },
+    getActiveTools: () => [...activeTools],
+    setActiveTools(names) {
+      setActiveToolsCalls.push([...names]);
+      activeTools.splice(0, activeTools.length, ...names);
     },
   };
 }
@@ -537,15 +547,15 @@ describe("skeleton — inspect()", () => {
 // ─── systemPromptOptions sorting (cache stability) ────────────────────────
 
 describe("skeleton — before_agent_start system-prompt sort", () => {
-  it("sorts toolSnippets and selectedTools alphabetically", async () => {
-    const pi = makePi();
+  it("sorts toolSnippets and promptGuidelines alphabetically", async () => {
+    const pi = makePi(["read", "bash"]);
     const sk = createSkeleton();
     sk.install(pi as any);
 
     const event = {
       systemPromptOptions: {
         toolSnippets: { zeta: "z", alpha: "a", mu: "m" },
-        selectedTools: ["zeta", "alpha", "mu"],
+        selectedTools: ["read", "bash"],
         promptGuidelines: ["b", "a", "c"],
       },
     };
@@ -554,8 +564,46 @@ describe("skeleton — before_agent_start system-prompt sort", () => {
     expect(Object.keys(event.systemPromptOptions.toolSnippets)).toEqual([
       "alpha", "mu", "zeta",
     ]);
-    expect(event.systemPromptOptions.selectedTools).toEqual(["alpha", "mu", "zeta"]);
     expect(event.systemPromptOptions.promptGuidelines).toEqual(["a", "b", "c"]);
+  });
+
+  it("sorts the live tool loadout instead of rewriting selectedTools", async () => {
+    const pi = makePi(["read", "bash", "write"]);
+    const sk = createSkeleton();
+    sk.install(pi as any);
+
+    const event = {
+      systemPromptOptions: {
+        toolSnippets: { bash: "b", read: "r", write: "w" },
+        selectedTools: ["read", "bash", "write"],
+      },
+    };
+    await pi.handlers.get("before_agent_start")![0](event, makeCtx() as any);
+
+    expect(pi.getActiveTools()).toEqual(["bash", "read", "write"]);
+    expect(event.systemPromptOptions.selectedTools).toEqual(["read", "bash", "write"]);
+  });
+
+  it("leaves another handler's tool restriction alone", async () => {
+    // The other handler ran first and narrowed the loadout to just `read`.
+    const pi = makePi(["read"]);
+    const sk = createSkeleton();
+    sk.install(pi as any);
+
+    // `selectedTools` still holds the pre-turn base pi copied into the event.
+    const event = {
+      systemPromptOptions: {
+        toolSnippets: { bash: "b", read: "r", write: "w" },
+        selectedTools: ["read", "bash", "write"],
+      },
+    };
+    await pi.handlers.get("before_agent_start")![0](event, makeCtx() as any);
+
+    // pi only falls back to the live loadout while selectedTools is untouched,
+    // so a rewrite here would bring bash and write back for this run.
+    expect(event.systemPromptOptions.selectedTools).toEqual(["read", "bash", "write"]);
+    expect(pi.setActiveToolsCalls).toEqual([]);
+    expect(pi.getActiveTools()).toEqual(["read"]);
   });
 
   it("sorts skills by name", async () => {

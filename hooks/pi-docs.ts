@@ -5,8 +5,14 @@
  *  1. `resources_discover` (entry layer) — make sure a SKILL.md exists with
  *     our frontmatter, so this session's skill scan picks up the entry.
  *  2. `before_agent_start` (content layer) — write the body with the exact
- *     "Pi documentation" block Pi rendered for the CURRENT install, sort the
- *     skills block, and append the decorated-pi guidelines.
+ *     "Pi documentation" block Pi rendered for the CURRENT install, replace
+ *     Pi's docs section with a short pointer into that skill, and add the
+ *     decorated-pi guidelines as their own prompt section.
+ *
+ * Both prompt changes are structured sections (`systemPromptOptions.sections`)
+ * rather than a rewritten prompt string: Pi diffs the sections against what the
+ * model already has and patches only the changed ones, so the cached prefix of
+ * the rest of the prompt survives.
  *
  * The skill lives at ~/.pi/agent/skills/pi-docs/ so Pi's own skill discovery
  * picks it up (progressive disclosure: name + description always in context,
@@ -29,8 +35,20 @@ export const PI_DOCS_MARKER = "source: decorated-pi";
 export const PI_DOCS_DESCRIPTION =
   "Use when the user asks about pi itself, its SDK, extensions, or themes.";
 
-/** Tells us the guidelines are already part of this turn's prompt. */
+/** Section key Pi uses for its own documentation block. */
+export const PI_DOCS_SECTION = "docs";
+
+/** Section key carrying the decorated-pi guidelines. */
+export const GUIDANCE_SECTION = "decorated_pi_guidance";
+
+/** Heading of the guidelines block. Only needed on the forced-prompt path,
+ *  where the guidance is appended to a string instead of a section. */
 export const GUIDELINES_MARKER = "## Decorated Pi Guidance";
+
+/** Stand-in for Pi's documentation block; the full text is the pi-docs skill
+ *  body, loaded on demand. */
+export const PI_DOCS_POINTER =
+  "Full Pi documentation (README, docs/, examples/) is in the `pi-docs` skill — read it when the user asks about pi itself, its SDK, extensions, themes, skills, or TUI.";
 
 /** Placeholder body used until the first agent turn replaces it with the
  *  real rendered block. It is never visible to the model: before_agent_start
@@ -79,48 +97,24 @@ export function stripPiDocsBlock(prompt: string): {
   return { prompt: out.join("\n"), block };
 }
 
-/** Sort the <available_skills> block in the system prompt by skill name.
- *  Pi core appends extension-provided skills after user/project skills and does
- *  not sort the XML; this makes the final prompt stable and cache-friendly. */
-export function sortSkillsInSystemPrompt(prompt: string): string {
-  const startMarker = "\n<available_skills>";
-  const endMarker = "</available_skills>";
-  const startIdx = prompt.indexOf(startMarker);
-  if (startIdx === -1) return prompt;
-  const endIdx = prompt.indexOf(endMarker, startIdx);
-  if (endIdx === -1) return prompt;
-
-  const before = prompt.slice(0, startIdx + startMarker.length);
-  const after = prompt.slice(endIdx);
-  const inner = prompt.slice(startIdx + startMarker.length, endIdx);
-
-  const chunks: string[][] = [];
-  let current: string[] = [];
-  for (const line of inner.split("\n")) {
-    const trimmed = line.trim();
-    if (trimmed === "<skill>") {
-      current = [line];
-    } else if (trimmed === "</skill>") {
-      current.push(line);
-      chunks.push(current);
-      current = [];
-    } else if (current.length > 0) {
-      current.push(line);
-    }
+/** Replace Pi's docs block with the pointer and add the guidelines as their
+ *  own section. Mutating `systemPromptOptions` (instead of returning a rewritten
+ *  `systemPrompt`) is what keeps the transcript's structured sections intact:
+ *  Pi diffs them and patches only what changed, so the rest of the prompt keeps
+ *  its cached prefix. Requires Pi 0.86+, where option mutations are rendered. */
+export function applyStructuredPrompt(
+  options: {
+    customPrompt?: string;
+    sections: Record<string, string>;
+  },
+  guidelines: string,
+): void {
+  // A custom prompt replaces the default prefix, docs block included; adding a
+  // docs section there would document a surface the user opted out of.
+  if (!options.customPrompt) {
+    options.sections[PI_DOCS_SECTION] = PI_DOCS_POINTER;
   }
-
-  const nameOf = (chunk: string[]) => {
-    const line = chunk.find((l) => l.trim().startsWith("<name>"));
-    if (!line) return "";
-    const t = line.trim();
-    return t.slice(6, t.indexOf("</name>"));
-  };
-
-  chunks.sort((a, b) => nameOf(a).localeCompare(nameOf(b)));
-
-  const sortedInner =
-    "\n" + chunks.map((chunk) => chunk.join("\n")).join("\n") + "\n";
-  return before + sortedInner + after;
+  options.sections[GUIDANCE_SECTION] = guidelines;
 }
 
 /** The YAML frontmatter for the generated skill (no trailing newline). */
@@ -228,8 +222,9 @@ export function updateSkillBody(agentDir: string, block: string): boolean {
 
 /** Build the pi-docs hook module.
  *
- *  `guidelines` is the fully joined system-prompt guideline text appended on
- *  every turn; index.ts owns the prompt wording and hands it in here.
+ *  `guidelines` is the fully joined system-prompt guideline text injected as
+ *  the `decorated_pi_guidance` section on every turn; index.ts owns the prompt
+ *  wording and hands it in here.
  *  `agentDir` defaults to pi's agent directory and is injectable for tests. */
 export function createPiDocsModule(guidelines: string, agentDir = getAgentDir()): Module {
   return {
@@ -243,12 +238,24 @@ export function createPiDocsModule(guidelines: string, agentDir = getAgentDir())
       ],
       before_agent_start: [
         (event) => {
-          if (!event.systemPrompt) return undefined;
-          const { prompt: stripped, block } = stripPiDocsBlock(event.systemPrompt);
+          // The block is read off the prompt Pi rendered for this install, so
+          // the skill body can never drift from what Pi would have told the model.
+          const { prompt: stripped, block } = stripPiDocsBlock(event.systemPrompt ?? "");
           if (block) updateSkillBody(agentDir, block);
-          const prompt = sortSkillsInSystemPrompt(stripped);
-          if (prompt.includes(GUIDELINES_MARKER)) return undefined; // already injected
-          return { systemPrompt: `${prompt}\n\n${guidelines}` };
+
+          const options = event.systemPromptOptions;
+          if (!options) return undefined;
+
+          // An earlier handler forced a whole prompt. Pi sends that text as the
+          // request's head system message and drops every section patch, so the
+          // guidance has to ride along inside the forced string.
+          if (options.forceSystemPrompt !== undefined) {
+            if (stripped.includes(GUIDELINES_MARKER)) return undefined;
+            return { systemPrompt: `${stripped}\n\n${guidelines}` };
+          }
+
+          applyStructuredPrompt(options, guidelines);
+          return undefined;
         },
       ],
     },

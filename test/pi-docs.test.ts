@@ -2,8 +2,10 @@
  * Builtin pi-docs skill — two-stage lifecycle:
  *  1. ensureSkillFrontmatter (resources_discover): entry layer — file
  *     existence + frontmatter (name/description/metadata marker).
- *  2. updateSkillBody (before_agent_start): content layer — sync the body
- *     with the exact "Pi documentation" block Pi rendered for this install.
+ *  2. updateSkillBody + applyStructuredPrompt (before_agent_start): content
+ *     layer — sync the body with the exact "Pi documentation" block Pi
+ *     rendered for this install, then swap that block for a pointer and add
+ *     the guidelines as structured prompt sections.
  *  User-authored files (no marker) are never touched.
  */
 
@@ -12,7 +14,10 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import {
+  GUIDANCE_SECTION,
   PI_DOCS_MARKER,
+  PI_DOCS_POINTER,
+  PI_DOCS_SECTION,
   PI_DOCS_SKILL_NAME,
   buildPiDocsFrontmatter,
   createPiDocsModule,
@@ -63,6 +68,10 @@ describe("splitSkillFile", () => {
 
   it("returns undefined for a file without frontmatter", () => {
     expect(splitSkillFile("no frontmatter here")).toBeUndefined();
+  });
+
+  it("returns undefined when the frontmatter is never closed", () => {
+    expect(splitSkillFile("---\nname: pi-docs\nno closing fence")).toBeUndefined();
   });
 });
 
@@ -132,6 +141,20 @@ describe("ensureSkillFrontmatter", () => {
     const result = ensureSkillFrontmatter(agentDir);
     expect(result.skillPaths).toBeUndefined();
     expect(fs.readFileSync(file, "utf-8")).toBe(userSkill);
+  });
+
+  it("falls back to the placeholder body when an owned file has none", () => {
+    const file = skillFile(agentDir);
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(
+      file,
+      `---\nname: pi-docs\ndescription: stale\nmetadata:\n  ${PI_DOCS_MARKER}\n---\n`,
+      "utf-8",
+    );
+
+    const result = ensureSkillFrontmatter(agentDir);
+    expect(result.skillPaths).toEqual([path.join(agentDir, "skills")]);
+    expect(fs.readFileSync(file, "utf-8")).toContain("Placeholder");
   });
 });
 
@@ -241,37 +264,72 @@ describe("createPiDocsModule", () => {
     expect(await hooks[0]({}, {} as any, {} as any)).toBeUndefined();
   });
 
-  it("before_agent_start writes the rendered block and appends the guidelines", async () => {
+  it("before_agent_start syncs the skill body and injects structured sections", async () => {
     const handler = makeModule().hooks.before_agent_start![0];
-    const result: any = await handler(
-      { systemPrompt: `HEAD\n${REAL_BLOCK}\n\nTAIL` },
+    const options: any = { sections: {} };
+    const result = await handler(
+      { systemPrompt: `HEAD\n${REAL_BLOCK}\n\nTAIL`, systemPromptOptions: options },
       {} as any,
       {} as any,
     );
 
-    expect(result.systemPrompt).toContain("HEAD");
-    expect(result.systemPrompt).toContain("TAIL");
-    expect(result.systemPrompt).not.toContain("Pi documentation");
-    expect(result.systemPrompt).toContain("## Decorated Pi Guidance");
+    // Nothing is returned: the prompt changes through the options, so Pi can
+    // diff the sections instead of re-sending a rewritten prompt.
+    expect(result).toBeUndefined();
+    expect(options.sections[PI_DOCS_SECTION]).toBe(PI_DOCS_POINTER);
+    expect(options.sections[GUIDANCE_SECTION]).toContain("## Decorated Pi Guidance");
 
     // The stripped block becomes the skill body.
     const content = fs.readFileSync(skillFile(agentDir), "utf-8");
     expect(splitSkillFile(content)!.body.trim()).toBe(REAL_BLOCK);
   });
 
-  it("steps aside once the guidelines marker is already in the prompt", async () => {
+  it("skips the docs section when a custom prompt replaces the prefix", async () => {
     const handler = makeModule().hooks.before_agent_start![0];
-    const result = await handler(
-      {
-        systemPrompt: `HEAD\n${REAL_BLOCK}\n\n## Decorated Pi Guidance\n- already here`,
-      },
+    const options: any = { sections: {}, customPrompt: "my own prompt" };
+    await handler(
+      { systemPrompt: "my own prompt", systemPromptOptions: options },
       {} as any,
       {} as any,
     );
-    expect(result).toBeUndefined();
+    expect(options.sections[PI_DOCS_SECTION]).toBeUndefined();
+    expect(options.sections[GUIDANCE_SECTION]).toContain("## Decorated Pi Guidance");
   });
 
-  it("has no prompt side effect when systemPrompt is absent", async () => {
+  it("appends the guidelines when an earlier handler forced a prompt", async () => {
+    // Mirrors the 0.86 runner: a returned systemPrompt becomes
+    // forceSystemPrompt, and the request head keeps only that text — every
+    // section patch is dropped, so the guidance has to travel inside it.
+    const handler = makeModule().hooks.before_agent_start![0];
+    const forced = `HEAD\n${REAL_BLOCK}\n\nTAIL\n\nOther extension instructions`;
+    const options: any = { sections: {}, forceSystemPrompt: forced };
+    const result: any = await handler(
+      { systemPrompt: forced, systemPromptOptions: options },
+      {} as any,
+      {} as any,
+    );
+
+    expect(result.systemPrompt).toContain("## Decorated Pi Guidance");
+    expect(result.systemPrompt).toContain("Other extension instructions");
+    expect(result.systemPrompt).not.toContain("Pi documentation");
+    expect(options.sections[GUIDANCE_SECTION]).toBeUndefined();
+
+    // The block still has to reach the skill on this path: the forced head is
+    // the only copy of the prompt the model sees.
+    const content = fs.readFileSync(skillFile(agentDir), "utf-8");
+    expect(splitSkillFile(content)!.body.trim()).toBe(REAL_BLOCK);
+  });
+
+  it("does not append the guidelines twice to a forced prompt", async () => {
+    const handler = makeModule().hooks.before_agent_start![0];
+    const forced = `HEAD\n\n## Decorated Pi Guidance\n- already here`;
+    const options: any = { sections: {}, forceSystemPrompt: forced };
+    expect(
+      await handler({ systemPrompt: forced, systemPromptOptions: options }, {} as any, {} as any),
+    ).toBeUndefined();
+  });
+
+  it("leaves the prompt untouched when systemPromptOptions is absent", async () => {
     const handler = makeModule().hooks.before_agent_start![0];
     expect(await handler({}, {} as any, {} as any)).toBeUndefined();
   });
