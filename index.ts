@@ -43,6 +43,8 @@ import { registerPatchTool } from "./tools/patch/index.js";
 import { setupLsp } from "./tools/lsp/index.js";
 import { collectLspDependencyStatuses } from "./tools/lsp/servers.js";
 import { registerAskTool } from "./tools/ask/index.js";
+import { registerWebSearchTool } from "./tools/websearch/index.js";
+import { registerWebFetchTool } from "./tools/webfetch/index.js";
 import { CodeReviewRuntime, registerCodeReviewRenderer } from "./tools/code-review/index.js";
 import {
     resolveMcpConfigs,
@@ -177,6 +179,11 @@ export default async function (pi: ExtensionAPI) {
         }
     }
     if (isModuleEnabled("ask")) registerAskTool(pi);
+
+    // Web access. The three search backends and the fetch fallbacks are all
+    // keyless hosted services, so no key check gates registration.
+    if (isModuleEnabled("websearch")) registerWebSearchTool(pi);
+    if (isModuleEnabled("webFetch")) registerWebFetchTool(pi);
 
     // MCP: hook, tools, and /mcp command are gated together. Disabling the
     // module means no session_start handler runs, no tools register, no

@@ -293,7 +293,7 @@ function buildPatchCallComponent(
         return component;
     }
     const lines = body.split("\n");
-    const FOLD_THRESHOLD = 45;
+    const FOLD_THRESHOLD = 30;
     component.addChild(new Spacer(1));
     if (lines.length > FOLD_THRESHOLD && !expanded) {
         const shown = lines.slice(0, 10).join("\n");

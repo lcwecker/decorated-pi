@@ -8,7 +8,7 @@ import { LspServerManager, formatToolError } from "./manager.js";
 
 // ─── TUI rendering ─────────────────────────────────────────────────────────
 
-const LSP_RESULT_FOLD_LINES = 45;
+const LSP_RESULT_FOLD_LINES = 30;
 
 function trimTrailingEmptyLines(lines: string[]): string[] {
   let end = lines.length;

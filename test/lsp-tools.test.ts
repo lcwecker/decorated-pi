@@ -2,32 +2,35 @@ import { describe, it, expect, vi } from "vitest";
 import { __lspToolsTest, registerLspTools } from "../tools/lsp/tools.js";
 
 describe("lsp tool result folding", () => {
-  it("does not fold when output has 45 lines or fewer", () => {
-    const text = Array.from({ length: 45 }, (_, i) => `line ${i + 1}`).join("\n");
+  // Mirrors LSP_RESULT_FOLD_LINES in tools/lsp/tools.ts.
+  const FOLD = 30;
+
+  it("does not fold at the fold length", () => {
+    const text = Array.from({ length: FOLD }, (_, i) => `line ${i + 1}`).join("\n");
     const result = __lspToolsTest.collapse_lsp_text(text);
 
-    expect(result.totalLines).toBe(45);
-    expect(result.displayLines).toHaveLength(45);
+    expect(result.totalLines).toBe(FOLD);
+    expect(result.displayLines).toHaveLength(FOLD);
     expect(result.remainingLines).toBe(0);
   });
 
-  it("folds after 45 lines", () => {
-    const text = Array.from({ length: 48 }, (_, i) => `line ${i + 1}`).join("\n");
+  it("folds past the fold length", () => {
+    const text = Array.from({ length: FOLD + 3 }, (_, i) => `line ${i + 1}`).join("\n");
     const result = __lspToolsTest.collapse_lsp_text(text);
 
-    expect(result.totalLines).toBe(48);
-    expect(result.displayLines).toHaveLength(45);
+    expect(result.totalLines).toBe(FOLD + 3);
+    expect(result.displayLines).toHaveLength(FOLD);
     expect(result.displayLines[0]).toBe("line 1");
-    expect(result.displayLines[44]).toBe("line 45");
+    expect(result.displayLines[FOLD - 1]).toBe(`line ${FOLD}`);
     expect(result.remainingLines).toBe(3);
   });
 
   it("ignores trailing empty lines when counting fold length", () => {
-    const text = `${Array.from({ length: 46 }, (_, i) => `line ${i + 1}`).join("\n")}\n\n`;
+    const text = `${Array.from({ length: FOLD + 1 }, (_, i) => `line ${i + 1}`).join("\n")}\n\n`;
     const result = __lspToolsTest.collapse_lsp_text(text);
 
-    expect(result.totalLines).toBe(46);
-    expect(result.displayLines).toHaveLength(45);
+    expect(result.totalLines).toBe(FOLD + 1);
+    expect(result.displayLines).toHaveLength(FOLD);
     expect(result.remainingLines).toBe(1);
   });
 });

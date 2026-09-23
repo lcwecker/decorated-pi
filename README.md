@@ -67,14 +67,29 @@ Covers what codegraph can't: real-time compiler and lint errors.
 
 Supported languages: c/cpp, go, java, lua, json, python, ruby, rust, svelte, typescript. TypeScript and JSON support are bundled; other languages require their corresponding language-server binaries.
 
-### 3. MCP Ecosystem
+### 3. Web Access
+
+Two native tools, both keyless. Search runs through three hosted backends and falls over automatically; fetching reads the URL directly and only leaves the machine when a plain HTTP client cannot render the page.
+
+**`websearch`** — AnySearch → Exa → Parallel, first backend that returns results wins. A filter only one backend understands pins that backend, so `includeDomains` never lands somewhere it would be ignored.
+
+| Backend | Strength | Endpoint |
+| --- | --- | --- |
+| AnySearch | widest coverage: 17 vertical domains, batched queries, URL extraction | `https://api.anysearch.com/mcp` |
+| Exa | semantic search plus category, domain, date and summary filters | `https://mcp.exa.ai/mcp` |
+| Parallel | objective-shaped retrieval ranked against a stated goal | `https://search.parallel.ai/mcp` |
+
+**`webfetch`** — local HTTP GET first (`localhost` and intranet hosts work, the URL stays local), with `markdown` / `text` / `html` output and image URLs returned as attachments. When a bot challenge, an HTTP error or a client-rendered page defeats the local fetch, it retries through AnySearch extract and then Jina reader. Private and local hosts skip those backends, and `allowRemote: false` keeps every URL on the machine; non-HTTP URLs are refused before any request is made.
+
+> Behind an HTTP proxy, Node's `fetch` connects directly and times out even though `curl` works — set `NODE_USE_ENV_PROXY=1` on Node 24+ to make it honour `HTTPS_PROXY`. Failure messages say so when a proxy variable is set.
+
+### 4. MCP Ecosystem
 
 Zero-config MCP client with built-in servers:
 
 | Server | Tool Prefix | Source |
 | --- | --- | --- |
 | Context7 | `context7_*` | `https://mcp.context7.com/mcp` |
-| Exa | `exa_*` | `https://mcp.exa.ai/mcp` |
 | codegraph | `codegraph_*` | local `codegraph` CLI |
 
 **Custom servers** in `.pi/agent/mcp.json` (project) or `~/.pi/agent/mcp.json` (global). Project entries override global entries with the same name. Tool prompts and schemas are cached after a successful connection for fast startup on subsequent sessions.
@@ -101,7 +116,7 @@ Zero-config MCP client with built-in servers:
 
 Use `/mcp` to view connection status and toggle servers.
 
-### 4. Other
+### 5. Other
 
 - **`ask` tool** — collect text, single-choice, and multi-choice answers through an interactive wizard when the agent needs clarification.
 - `/code-review [prompt]` — offload review of current SCM changes, or of a scope described in the prompt (e.g. a file/directory path, also without a git/svn repository), to a separately configured model, avoiding a `/model` switch in the main session and preserving its prompt cache. Without a scope the reviewer inspects the working tree itself via read-only SCM commands, but requires at least one tracked change (A/M/D/R/…); a tree with only untracked files (or none at all) needs an explicit scope.

@@ -1,31 +1,40 @@
 import { describe, expect, it, vi } from "vitest";
 import { __mcpIndexTest } from "../tools/mcp/index.js";
 import type { McpServerConfig } from "../tools/mcp/config.js";
+import { TOOL_RESULT_FOLD_LINES } from "../utils/tool-output.js";
+
+const FOLD = TOOL_RESULT_FOLD_LINES;
 
 describe("mcp tool result folding", () => {
-  it("does not fold when output has 45 lines or fewer", () => {
-    const text = Array.from({ length: 45 }, (_, i) => `line ${i + 1}`).join("\n");
+  it("does not fold at the fold length", () => {
+    const text = Array.from({ length: FOLD }, (_, i) => `line ${i + 1}`).join("\n");
     const result = __mcpIndexTest.collapseMcpText(text);
-    expect(result.totalLines).toBe(45);
-    expect(result.displayLines).toHaveLength(45);
+    expect(result.totalLines).toBe(FOLD);
+    expect(result.displayLines).toHaveLength(FOLD);
     expect(result.remainingLines).toBe(0);
   });
 
-  it("folds after 45 lines", () => {
-    const text = Array.from({ length: 50 }, (_, i) => `line ${i + 1}`).join("\n");
+  it("folds past the fold length", () => {
+    const text = Array.from({ length: FOLD + 5 }, (_, i) => `line ${i + 1}`).join("\n");
     const result = __mcpIndexTest.collapseMcpText(text);
-    expect(result.totalLines).toBe(50);
-    expect(result.displayLines).toHaveLength(45);
-    expect(result.displayLines.at(-1)).toBe("line 45");
+    expect(result.totalLines).toBe(FOLD + 5);
+    expect(result.displayLines).toHaveLength(FOLD);
+    expect(result.displayLines.at(-1)).toBe(`line ${FOLD}`);
     expect(result.remainingLines).toBe(5);
   });
 
   it("ignores trailing empty lines when counting fold length", () => {
-    const text = `${Array.from({ length: 46 }, (_, i) => `line ${i + 1}`).join("\n")}\n\n\n`;
+    const text = `${Array.from({ length: FOLD + 1 }, (_, i) => `line ${i + 1}`).join("\n")}\n\n\n`;
     const result = __mcpIndexTest.collapseMcpText(text);
-    expect(result.totalLines).toBe(46);
-    expect(result.displayLines).toHaveLength(45);
+    expect(result.totalLines).toBe(FOLD + 1);
+    expect(result.displayLines).toHaveLength(FOLD);
     expect(result.remainingLines).toBe(1);
+  });
+
+  it("keeps the fold tighter than the old value", () => {
+    // The collapsed view exists for context economy: at 45 lines it was long
+    // enough to read past without ever expanding.
+    expect(FOLD).toBeLessThan(45);
   });
 });
 

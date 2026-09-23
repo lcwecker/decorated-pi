@@ -51,8 +51,12 @@ export interface ModuleSettings {
     ask?: boolean;
     /** Language server diagnostics, hover, definition, references, symbols, rename. */
     lsp?: boolean;
-    /** MCP client with builtin servers (context7, exa, codegraph). */
+    /** MCP client with builtin servers (context7, codegraph). */
     mcp?: boolean;
+    /** Keyless web search over AnySearch, Exa and Parallel, with automatic fallback. */
+    websearch?: boolean;
+    /** Read a URL as markdown/text/HTML — locally first, rendering backend on failure. */
+    webFetch?: boolean;
   };
   hooks?: {
     /** Send coding activity heartbeats to WakaTime. */
@@ -348,6 +352,8 @@ const DEFAULT_MODULES: Required<ModuleSettings> = {
     ask: true,
     lsp: true,
     mcp: true,
+    websearch: true,
+    webFetch: true,
   },
   hooks: {
     wakatime: true,
@@ -365,6 +371,8 @@ const MODULE_TO_CATEGORY: Record<string, keyof ModuleSettings> = {
   ask: "tools",
   lsp: "tools",
   mcp: "tools",
+  websearch: "tools",
+  webFetch: "tools",
   wakatime: "hooks",
   tps: "hooks",
   retry: "commands",

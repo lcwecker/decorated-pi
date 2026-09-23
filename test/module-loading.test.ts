@@ -105,6 +105,18 @@ describe("Tool/command name uniqueness — no conflicts", () => {
     expect(new Set(names).size).toBe(names.length); // no duplicates
   });
 
+  it("web tool names are plain words, not provider-prefixed", () => {
+    // The web tools hide the provider chain: the model asks for a search, not
+    // for "anysearch_" or "exa_". A provider prefix would leak the backend
+    // into the tool name and break the fallback story.
+    const sources = [
+      fs.readFileSync(path.join(__dirname, "../tools/websearch/index.ts"), "utf-8"),
+      fs.readFileSync(path.join(__dirname, "../tools/webfetch/index.ts"), "utf-8"),
+    ];
+    const names = sources.flatMap((src) => [...src.matchAll(/^\s*name:\s*["']([^"']+)["'],/gm)].map((m) => m[1]!));
+    expect(names).toEqual(["websearch", "webfetch"]);
+  });
+
   it("LSP tool names use lsp_ prefix (decorated-pi only, no Pi built-in)", () => {
     // Pi has NO built-in lsp_* tools. When our LSP module is disabled,
     // the lsp_* tools simply don't exist — there is no fallback.
@@ -150,6 +162,13 @@ describe("index.ts — conditional loading structure (new architecture)", () => 
 
   it("gates MCP tool registration behind isModuleEnabled", () => {
     expect(indexSrc).toContain('if (isModuleEnabled("mcp"))');
+  });
+
+  it("gates the web tools behind isModuleEnabled", () => {
+    expect(indexSrc).toContain('if (isModuleEnabled("websearch"))');
+    expect(indexSrc).toContain("registerWebSearchTool");
+    expect(indexSrc).toContain('if (isModuleEnabled("webFetch"))');
+    expect(indexSrc).toContain("registerWebFetchTool");
   });
 
   it("gates patch tool behind isModuleEnabled", () => {

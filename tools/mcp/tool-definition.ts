@@ -3,61 +3,17 @@
  *
  * No hook/module state lives here. Callers provide `findConnection`
  * so both hooks/mcp.ts and tools/mcp/index.ts can share the same tool
- * factory without importing each other.
+ * factory without importing each other. Result rendering is the shared
+ * folded-text renderer, so MCP tools and the native web tools look alike.
  */
 
-import { keyHint } from "@earendil-works/pi-coding-agent";
-import { Text } from "@earendil-works/pi-tui";
 import type { McpConnection } from "./client.js";
 import type { McpServerConfig } from "./config.js";
+import { collapseToolText, renderToolTextResult } from "../../utils/tool-output.js";
 
-const MCP_RESULT_FOLD_LINES = 45;
-
-function trimTrailingEmptyLines(lines: string[]): string[] {
-  let end = lines.length;
-  while (end > 0 && lines[end - 1] === "") end -= 1;
-  return lines.slice(0, end);
-}
-
-function collapseMcpText(text: string, maxLines = MCP_RESULT_FOLD_LINES) {
-  const lines = trimTrailingEmptyLines(text.split("\n"));
-  return {
-    totalLines: lines.length,
-    displayLines: lines.slice(0, maxLines),
-    remainingLines: Math.max(0, lines.length - maxLines),
-  };
-}
-
-function getTextContent(result: { content?: Array<{ type: string; text?: string }> }): string {
-  return (result.content ?? [])
-    .filter((c): c is { type: "text"; text?: string } => c.type === "text")
-    .map((c) => c.text ?? "")
-    .join("\n");
-}
-
-function formatMcpResultText(text: string, expanded: boolean, theme: any): string {
-  const { totalLines, displayLines, remainingLines } = collapseMcpText(text, expanded ? Number.MAX_SAFE_INTEGER : MCP_RESULT_FOLD_LINES);
-  const lastLine = displayLines[displayLines.length - 1] || "";
-  let outputLines = [...displayLines];
-  let truncationMsg = "";
-  if (lastLine.startsWith("[Truncated: ") && lastLine.endsWith("]")) {
-    truncationMsg = lastLine;
-    outputLines = outputLines.slice(0, -1);
-  }
-  const outputText = outputLines.join("\n");
-  let rendered = outputText ? theme.fg("toolOutput", outputText) : "";
-  if (truncationMsg) rendered += (rendered ? "\n" : "") + theme.fg("warning", truncationMsg);
-  if (!expanded && remainingLines > 0) {
-    rendered += `${theme.fg("muted", `\n... (${remainingLines} more lines, ${totalLines} total,`)} ${keyHint("app.tools.expand", "to expand")})`;
-  }
-  return rendered;
-}
-
-function renderMcpResult(result: any, options: { expanded: boolean }, theme: any, context: any) {
-  const component = context.lastComponent ?? new Text("", 0, 0);
-  component.setText(formatMcpResultText(getTextContent(result), options.expanded, theme));
-  return component;
-}
+/** Kept as a local name: the MCP specs reach it through __mcpToolDefinitionTest. */
+const collapseMcpText = collapseToolText;
+const renderMcpResult = renderToolTextResult;
 
 function makeToolName(serverName: string, toolName: string): string {
   return `${serverName}_${toolName}`;

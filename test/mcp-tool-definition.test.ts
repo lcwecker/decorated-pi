@@ -23,8 +23,8 @@ afterEach(() => {
 });
 
 const baseConfig = {
-  name: "exa",
-  url: "https://mcp.exa.ai/mcp",
+  name: "context7",
+  url: "https://mcp.context7.com/mcp",
   enabled: true,
   source: "builtin" as const,
 };
@@ -35,11 +35,11 @@ describe("buildMcpTool", () => {
   it("prefixes the tool name with the server name", async () => {
     const { buildMcpTool } = await import("../tools/mcp/tool-definition.js");
     const tool = buildMcpTool(
-      { ...baseConfig, name: "exa" },
+      { ...baseConfig, name: "context7" },
       { name: "web_search" },
       () => undefined,
     );
-    expect(tool.name).toBe("exa_web_search");
+    expect(tool.name).toBe("context7_web_search");
   });
 
   it("uses entry description when present", async () => {
@@ -51,7 +51,7 @@ describe("buildMcpTool", () => {
     );
     expect(tool.description).toBe("Fetch a URL");
     expect(tool.promptSnippet).toBe("Fetch a URL");
-    expect(tool.label).toContain("MCP exa");
+    expect(tool.label).toContain("MCP context7");
     expect(tool.label).toContain("fetch");
   });
 
@@ -188,8 +188,8 @@ describe("buildMcpTool.renderResult", () => {
     expect(component.setText).toHaveBeenCalled();
     const out = component.setText.mock.calls[0][0];
     expect(out).toContain("line 1");
-    expect(out).toContain("line 45"); // MCP_RESULT_FOLD_LINES = 45
-    expect(out).not.toContain("line 46"); // truncated
+    expect(out).toContain("line 30"); // TOOL_RESULT_FOLD_LINES = 30
+    expect(out).not.toContain("line 31"); // truncated
     expect(out).toContain("more lines");
     vi.doUnmock("@earendil-works/pi-coding-agent");
   });
@@ -262,7 +262,7 @@ describe("registerMcpToolsFromCache", () => {
     const cache = {
       version: 1,
       servers: {
-        exa: {
+        context7: {
           tools: [
             { name: "web_search", description: "Search", inputSchema: {} },
             { name: "fetch", description: "Fetch", inputSchema: {} },
@@ -272,13 +272,13 @@ describe("registerMcpToolsFromCache", () => {
       },
     };
     const configs = [
-      { name: "exa", url: "x", enabled: true, source: "builtin" as const },
+      { name: "context7", url: "x", enabled: true, source: "builtin" as const },
     ];
     const connections = { findConnection: () => undefined };
     registerMcpToolsFromCache(pi as any, cache, configs, connections as any);
     expect(pi.registerTool).toHaveBeenCalledTimes(2);
-    expect(pi.registerTool.mock.calls[0][0].name).toBe("exa_web_search");
-    expect(pi.registerTool.mock.calls[1][0].name).toBe("exa_fetch");
+    expect(pi.registerTool.mock.calls[0][0].name).toBe("context7_web_search");
+    expect(pi.registerTool.mock.calls[1][0].name).toBe("context7_fetch");
   });
 
   it("skips disabled servers", async () => {
@@ -287,11 +287,11 @@ describe("registerMcpToolsFromCache", () => {
     const cache = {
       version: 1,
       servers: {
-        exa: { tools: [{ name: "search", description: "", inputSchema: {} }], cachedAt: 0 },
+        context7: { tools: [{ name: "search", description: "", inputSchema: {} }], cachedAt: 0 },
       },
     };
     const configs = [
-      { name: "exa", url: "x", enabled: false, source: "builtin" as const },
+      { name: "context7", url: "x", enabled: false, source: "builtin" as const },
     ];
     const connections = { findConnection: () => undefined };
     registerMcpToolsFromCache(pi as any, cache, configs, connections as any);
@@ -315,10 +315,10 @@ describe("registerMcpToolsFromCache", () => {
     const pi = { registerTool: vi.fn() };
     const cache = {
       version: 1,
-      servers: { exa: { tools: [], cachedAt: 0 } },
+      servers: { context7: { tools: [], cachedAt: 0 } },
     };
     const configs = [
-      { name: "exa", url: "x", enabled: true, source: "builtin" as const },
+      { name: "context7", url: "x", enabled: true, source: "builtin" as const },
     ];
     const connections = { findConnection: () => undefined };
     registerMcpToolsFromCache(pi as any, cache, configs, connections as any);
@@ -334,10 +334,10 @@ describe("registerMcpToolsFromCache", () => {
     };
     const cache = {
       version: 1,
-      servers: { exa: { tools: [{ name: "x", description: "", inputSchema: {} }], cachedAt: 0 } },
+      servers: { context7: { tools: [{ name: "x", description: "", inputSchema: {} }], cachedAt: 0 } },
     };
     const configs = [
-      { name: "exa", url: "x", enabled: true, source: "builtin" as const },
+      { name: "context7", url: "x", enabled: true, source: "builtin" as const },
     ];
     // Should not throw
     const connections = { findConnection: () => undefined };
@@ -354,13 +354,13 @@ describe("registerMcpTools", () => {
       loadMcpCache: vi.fn(() => ({
         version: 1,
         servers: {
-          exa: { tools: [{ name: "web_search", description: "Search", inputSchema: {} }], cachedAt: 0 },
+          context7: { tools: [{ name: "web_search", description: "Search", inputSchema: {} }], cachedAt: 0 },
         },
       })),
     }));
     vi.doMock("../tools/mcp/config.js", () => ({
       resolveMcpConfigs: vi.fn(() => [
-        { name: "exa", url: "x", enabled: true, source: "builtin" as const },
+        { name: "context7", url: "x", enabled: true, source: "builtin" as const },
       ]),
       isSseUrl: vi.fn(),
     }));
@@ -371,7 +371,7 @@ describe("registerMcpTools", () => {
     registerMcpTools(pi as any, tmpRoot, connections as any);
 
     expect(pi.registerTool).toHaveBeenCalledTimes(1);
-    expect(pi.registerTool.mock.calls[0][0].name).toBe("exa_web_search");
+    expect(pi.registerTool.mock.calls[0][0].name).toBe("context7_web_search");
 
     vi.doUnmock("../tools/mcp/cache.js");
     vi.doUnmock("../tools/mcp/config.js");
@@ -384,7 +384,7 @@ describe("registerMcpTools", () => {
     }));
     vi.doMock("../tools/mcp/config.js", () => ({
       resolveMcpConfigs: vi.fn(() => [
-        { name: "exa", url: "x", enabled: true, source: "builtin" as const },
+        { name: "context7", url: "x", enabled: true, source: "builtin" as const },
       ]),
       isSseUrl: vi.fn(),
     }));
@@ -405,12 +405,12 @@ describe("registerMcpTools", () => {
     vi.doMock("../tools/mcp/cache.js", () => ({
       loadMcpCache: vi.fn(() => ({
         version: 1,
-        servers: { exa: { tools: [], cachedAt: 0 } },
+        servers: { context7: { tools: [], cachedAt: 0 } },
       })),
     }));
     vi.doMock("../tools/mcp/config.js", () => ({
       resolveMcpConfigs: vi.fn(() => [
-        { name: "exa", url: "x", enabled: true, source: "builtin" as const },
+        { name: "context7", url: "x", enabled: true, source: "builtin" as const },
       ]),
       isSseUrl: vi.fn(),
     }));

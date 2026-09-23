@@ -16,6 +16,8 @@ type ModuleName =
   | "patchOverrideEdit"
   | "lsp"
   | "mcp"
+  | "websearch"
+  | "webFetch"
   | "wakatime"
   | "tps"
   | "ask"
@@ -26,6 +28,8 @@ const MODULE_LABELS: Record<ModuleName, string> = {
   patchOverrideEdit: "patchOverrideEdit",
   lsp: "LSP",
   mcp: "MCP",
+  websearch: "Web search",
+  webFetch: "Web fetch",
   wakatime: "WakaTime",
   tps: "TPS",
   ask: "Ask",
@@ -36,7 +40,9 @@ const MODULE_LABELS: Record<ModuleName, string> = {
 const MODULE_DESCS: Record<ModuleName, string> = {
   patchOverrideEdit: "Replace Pi native edit/write with patch tool (targeted string replacement)",
   lsp: "Language server diagnostics, hover, definition, references, symbols, rename",
-  mcp: "MCP client with builtin servers (context7, exa, codegraph)",
+  mcp: "MCP client with builtin servers (context7, codegraph)",
+  websearch: "Keyless web search over AnySearch, Exa and Parallel, with automatic fallback",
+  webFetch: "Read a URL as markdown/text/HTML — locally first, rendering backend on failure",
   wakatime: "Send coding activity heartbeats to WakaTime",
   tps: "Show live output tokens-per-second in the footer status bar",
   ask: "Interactive ask tool for user clarification (blocks loop until answered)",
@@ -66,7 +72,7 @@ const CATEGORIES: Record<CategoryId, CategoryDef> = {
   tools: {
     label: "Tools",
     description: "LLM-callable tools",
-    modules: ["ask", "lsp", "mcp", "patchOverrideEdit"],
+    modules: ["ask", "lsp", "mcp", "patchOverrideEdit", "webFetch", "websearch"],
   },
 };
 
@@ -96,6 +102,8 @@ const MODULE_TO_CATEGORY: Record<ModuleName, CategoryId> = {
   ask: "tools",
   lsp: "tools",
   mcp: "tools",
+  websearch: "tools",
+  webFetch: "tools",
   wakatime: "hooks",
   tps: "hooks",
   retry: "commands",

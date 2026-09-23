@@ -80,16 +80,12 @@ describe("index.ts dep gate", () => {
     fs.writeFileSync(CONFIG_FILE, JSON.stringify(clean, null, 2) + "\n", "utf-8");
 
     // Keep the MCP loop offline. The isolated agent dir has a cold MCP cache,
-    // so the two builtin URL servers would otherwise attempt a real network
+    // so the builtin URL server would otherwise attempt a real network
     // connection on every import. This spec only cares about the codegraph
-    // binary gate, so disabling them changes nothing it asserts.
+    // binary gate, so disabling it changes nothing it asserts.
     fs.writeFileSync(
       MCP_FILE,
-      JSON.stringify(
-        { mcpServers: { context7: { enabled: false }, exa: { enabled: false } } },
-        null,
-        2,
-      ) + "\n",
+      JSON.stringify({ mcpServers: { context7: { enabled: false } } }, null, 2) + "\n",
       "utf-8",
     );
   });
@@ -109,8 +105,8 @@ describe("index.ts dep gate", () => {
 
     // codegraph uses a command (binary) and its tool names start with
     // `codegraph_`. With the binary missing, those tools must NOT be
-    // registered. context7/exa are disabled in this spec's mcp.json so the
-    // import stays offline.
+    // registered. context7 is disabled in this spec's mcp.json so the import
+    // stays offline.
     const codegraphTools = mockPi.log.tools.filter((t: string) => t.startsWith("codegraph_"));
     expect(codegraphTools).toEqual([]);
   });

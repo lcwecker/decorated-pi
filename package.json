@@ -27,7 +27,9 @@
         "@biomejs/biome": "^2.5.5",
         "@modelcontextprotocol/sdk": "^1.29.0",
         "chardet": "^2.2.0",
+        "htmlparser2": "^8.0.2",
         "iconv-lite": "^0.7.2",
+        "turndown": "^7.2.4",
         "typescript": "^7.0.2"
     },
     "peerDependencies": {
@@ -48,6 +50,7 @@
         "@earendil-works/pi-coding-agent": "^0.86.0",
         "@earendil-works/pi-tui": "^0.86.0",
         "@types/node": "^22.15.3",
+        "@types/turndown": "^5.0.6",
         "@vitest/coverage-v8": "4.1.8",
         "depcheck": "^1.4.7",
         "publint": "^0.3.21",

@@ -74,7 +74,7 @@ The only shared state is `settings.ts`. Commands write; `index.ts` reads on `/re
 2. In `index.ts`: `if (isModuleEnabled("<name>")) register<Name>Tool(pi);`
 3. *(Optional)* In `commands/dp-settings.ts`: add the module label so users can toggle it via `/dp-settings`. Without this the tool is always on; users would have to edit `settings.json` directly to disable.
 
-If the tool has its own state, protocol client, or dynamic sub-tools, organize it as a directory instead of a single file: `tools/<name>/{client,manager,...}.ts` plus `tools/<name>/index.ts` exporting `register<Name>Tools(pi)`. See `tools/mcp/` and `tools/lsp/` for examples.
+If the tool has its own state, protocol client, or dynamic sub-tools, organize it as a directory instead of a single file: `tools/<name>/{client,manager,...}.ts` plus `tools/<name>/index.ts` exporting `register<Name>Tools(pi)`. See `tools/mcp/` and `tools/lsp/` for stateful examples, and `tools/websearch/` (`client` + one file per provider) and `tools/webfetch/` (one file per fetch path) for the stateless split-by-job shape.
 
 When a single tool file grows past ~1000 lines because one algorithm is doing several jobs, split it by concern with `core.ts` as the public API plus re-exports, and keep the siblings acyclic. See `tools/patch/` (`core` = apply + preview + re-exports, siblings = `types` / `lines` / `locate` / `diagnostics` / `diff`); `test/patch-modules.test.ts` pins that layering.
 

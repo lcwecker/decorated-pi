@@ -356,7 +356,19 @@ describe("resolveMcpConfigs priority", () => {
     const configs = resolveMcpConfigs(tmpDir);
     const names = configs.map((c) => c.name);
     expect(names).toContain("context7");
-    expect(names).toContain("exa");
+    expect(names).toContain("codegraph");
+  });
+
+  it("no longer ships exa as a builtin server", () => {
+    // Web search moved to the native `websearch` tool (tools/websearch/).
+    expect(BUILTIN_MCP_SERVERS.map((s) => s.name)).not.toContain("exa");
+  });
+
+  it("still accepts an exa server configured by the user", () => {
+    writeJson(CONFIG_FILE, { mcpServers: { exa: { url: "https://mcp.exa.ai/mcp" } } });
+    const exa = resolveMcpConfigs(tmpDir).find((c) => c.name === "exa");
+    expect(exa?.url).toBe("https://mcp.exa.ai/mcp");
+    expect(exa?.source).toBe("global");
   });
 
   it("builtin servers have source=builtin", () => {
@@ -399,13 +411,13 @@ describe("resolveMcpConfigs priority", () => {
   it("marks builtin server as disabled when enabled: false in project", () => {
     writeJson(path.join(tmpDir, ".pi/agent/mcp.json"), {
       mcpServers: {
-        "exa": { enabled: false },
+        "context7": { enabled: false },
       },
     });
     const configs = resolveMcpConfigs(tmpDir);
-    const exa = configs.find((c) => c.name === "exa");
-    expect(exa).toBeDefined();
-    expect(exa!.enabled).toBe(false);
+    const context7 = configs.find((c) => c.name === "context7");
+    expect(context7).toBeDefined();
+    expect(context7!.enabled).toBe(false);
   });
 
   it("filters out servers with neither url nor command", () => {
@@ -466,12 +478,13 @@ describe("resolveMcpConfigs priority", () => {
   it("preserves builtin url when project config only sets enabled", () => {
     writeJson(path.join(tmpDir, ".pi/agent/mcp.json"), {
       mcpServers: {
-        "exa": { enabled: true },
+        "context7": { enabled: true },
       },
     });
     const configs = resolveMcpConfigs(tmpDir);
-    const exa = configs.find((c) => c.name === "exa");
-    expect(exa?.url).toBe("https://mcp.exa.ai/mcp");
+    const context7 = configs.find((c) => c.name === "context7");
+    expect(context7?.url).toBe("https://mcp.context7.com/mcp");
+    expect(context7?.source).toBe("project");
   });
 
   it("preserves builtin description when global config only sets url", () => {

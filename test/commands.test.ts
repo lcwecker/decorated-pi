@@ -292,8 +292,8 @@ describe("/mcp — non-interactive", () => {
     const service = {
       getStatus: () => [
         {
-          name: "exa",
-          url: "https://mcp.exa.ai/mcp",
+          name: "context7",
+          url: "https://mcp.context7.com/mcp",
           source: "builtin",
           state: "connected",
           toolCount: 2,
@@ -326,7 +326,7 @@ describe("/mcp — non-interactive", () => {
     expect(msg.display).toBe(true);
     expect(opts).toEqual({ triggerTurn: false });
     expect(msg.content).toContain("MCP servers (2):");
-    expect(msg.content).toContain("exa");
+    expect(msg.content).toContain("context7");
     expect(msg.content).toContain("web_search");
     expect(msg.content).toContain("broken");
     expect(msg.content).toContain("failed");
