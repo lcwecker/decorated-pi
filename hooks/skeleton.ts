@@ -27,7 +27,11 @@ export type HookEvent =
   | "input"
   | "tool_call"
   | "tool_result"
-  | "message_end";
+  | "message_start"
+  | "message_update"
+  | "message_end"
+  | "model_select"
+  | "thinking_level_select";
 
 // ─── Handler modes ─────────────────────────────────────────────────────────
 
@@ -88,7 +92,15 @@ export interface Module {
     input?: ParallelHandler<"input">[];
     tool_call?: ComposeHandler<"tool_call">[];
     tool_result?: ComposeHandler<"tool_result">[];
+    // message_start / message_update are notify-only in pi's extension
+    // runner (only message_end can replace a message), so they dispatch
+    // in parallel mode: return values are ignored. Same for the selection
+    // events below — pi's runner plain-emits them.
+    message_start?: ParallelHandler<"message_start">[];
+    message_update?: ParallelHandler<"message_update">[];
     message_end?: ComposeHandler<"message_end">[];
+    model_select?: ParallelHandler<"model_select">[];
+    thinking_level_select?: ParallelHandler<"thinking_level_select">[];
   };
 }
 

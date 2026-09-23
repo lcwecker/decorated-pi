@@ -38,6 +38,7 @@ describe("Conditional loading — isModuleEnabled gates", () => {
     expect(isModuleEnabled("lsp")).toBe(true);
     expect(isModuleEnabled("retry")).toBe(true);
     expect(isModuleEnabled("usage")).toBe(true);
+    expect(isModuleEnabled("tps")).toBe(true);
   });
 
   it("disabling wakatime does not affect other modules", () => {
@@ -159,6 +160,11 @@ describe("index.ts — conditional loading structure (new architecture)", () => 
   it("gates wakatime hook behind isModuleEnabled", () => {
     expect(indexSrc).toContain('if (isModuleEnabled("wakatime"))');
     expect(indexSrc).toContain("setupWakatime");
+  });
+
+  it("gates tps hook behind isModuleEnabled", () => {
+    expect(indexSrc).toContain('if (isModuleEnabled("tps"))');
+    expect(indexSrc).toContain("createTpsModule");
   });
 
   it("always loads core commands (no gating)", () => {

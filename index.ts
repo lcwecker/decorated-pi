@@ -34,6 +34,7 @@ import { piToolFilterModule } from "./hooks/pi-tool-filter.js";
 import { setupCompaction } from "./hooks/compaction.js";
 import { McpRuntime, createMcpModule } from "./hooks/mcp.js";
 import { setupWakatime } from "./hooks/wakatime.js";
+import { createTpsModule } from "./hooks/tps.js";
 import { createCodeReviewModule } from "./hooks/code-review.js";
 import { createLspModule } from "./hooks/lsp.js";
 import { createRetryModule } from "./hooks/retry.js";
@@ -152,6 +153,8 @@ export default async function (pi: ExtensionAPI) {
     // Compaction + optional integrations.
     setupCompaction(sk);
     if (isModuleEnabled("wakatime")) setupWakatime(sk);
+    // Live tokens-per-second in the footer status bar (hooks/tps.ts).
+    if (isModuleEnabled("tps")) sk.register(createTpsModule());
 
     // Code review is command-driven and never registered as an LLM-callable tool.
     registerCodeReviewRenderer(pi, codeReviewRuntime);

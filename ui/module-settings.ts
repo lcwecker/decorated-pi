@@ -17,6 +17,7 @@ type ModuleName =
   | "lsp"
   | "mcp"
   | "wakatime"
+  | "tps"
   | "ask"
   | "retry"
   | "usage";
@@ -26,6 +27,7 @@ const MODULE_LABELS: Record<ModuleName, string> = {
   lsp: "LSP",
   mcp: "MCP",
   wakatime: "WakaTime",
+  tps: "TPS",
   ask: "Ask",
   retry: "Retry",
   usage: "Usage",
@@ -36,6 +38,7 @@ const MODULE_DESCS: Record<ModuleName, string> = {
   lsp: "Language server diagnostics, hover, definition, references, symbols, rename",
   mcp: "MCP client with builtin servers (context7, exa, codegraph)",
   wakatime: "Send coding activity heartbeats to WakaTime",
+  tps: "Show live output tokens-per-second in the footer status bar",
   ask: "Interactive ask tool for user clarification (blocks loop until answered)",
   retry: "/retry command to continue after interruption",
   usage: "/usage command for token stats",
@@ -58,7 +61,7 @@ const CATEGORIES: Record<CategoryId, CategoryDef> = {
   hooks: {
     label: "Hooks",
     description: "Agent-loop event handlers",
-    modules: ["wakatime"],
+    modules: ["wakatime", "tps"],
   },
   tools: {
     label: "Tools",
@@ -94,6 +97,7 @@ const MODULE_TO_CATEGORY: Record<ModuleName, CategoryId> = {
   lsp: "tools",
   mcp: "tools",
   wakatime: "hooks",
+  tps: "hooks",
   retry: "commands",
   usage: "commands",
 };

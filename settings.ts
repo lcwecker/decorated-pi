@@ -57,6 +57,8 @@ export interface ModuleSettings {
   hooks?: {
     /** Send coding activity heartbeats to WakaTime. */
     wakatime?: boolean;
+    /** Show live output tokens-per-second in the footer status bar. */
+    tps?: boolean;
   };
   commands?: {
     /** /retry command to continue after interruption. */
@@ -349,6 +351,7 @@ const DEFAULT_MODULES: Required<ModuleSettings> = {
   },
   hooks: {
     wakatime: true,
+    tps: true,
   },
   commands: {
     retry: true,
@@ -363,6 +366,7 @@ const MODULE_TO_CATEGORY: Record<string, keyof ModuleSettings> = {
   lsp: "tools",
   mcp: "tools",
   wakatime: "hooks",
+  tps: "hooks",
   retry: "commands",
   usage: "commands",
 };

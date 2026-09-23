@@ -121,6 +121,7 @@ describe("Module Settings", () => {
     expect(settings.tools.lsp).toBe(true);
     expect(settings.commands.retry).toBe(true);
     expect(settings.commands.usage).toBe(true);
+    expect(settings.hooks.tps).toBe(true);
   });
 
   it("does not expose codegraph as a module switch", () => {
