@@ -37,9 +37,10 @@ export function textResultContent(result: { content?: Array<{ type: string; text
 }
 
 /**
- * Render folded text. A trailing `[Truncated: ...]` line that the producer
- * added is pulled out of the fold and shown in the warning color, so it stays
- * visible even when the body is collapsed.
+ * Render folded text. A `[Truncated: ...]` line that the producer appended and
+ * that survives the fold is pulled out of the body and shown in the warning
+ * color; when the fold cuts before it, the `... (N more lines)` hint takes its
+ * place.
  */
 export function formatToolResultText(
   text: string,
