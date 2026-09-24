@@ -19,7 +19,7 @@ import { Type } from "typebox";
 import { AskComponent, type AskAnswer, type AskQuestion } from "../../ui/ask.js";
 import { getTypesafeApiKey, isJevAnswering } from "../../settings.js";
 import { evaluateSystemOne } from "../../utils/typesafe.js";
-import { formatJevResult, prepareQuestions, resolveQuestions, withQuestionText } from "./jev.js";
+import { formatJevResult, prepareQuestions, resolveQuestions } from "./jev.js";
 
 const askQuestionSchema = Type.Object({
   id: Type.String({ description: "Unique identifier for this question in the result." }),
@@ -64,14 +64,14 @@ async function answerWithJev(
   const prepared = prepareQuestions(params.questions);
   if (!apiKey || Object.keys(prepared.asked).length === 0) {
     const unanswered = resolveQuestions(prepared, {});
-    const needsUser = withQuestionText(unanswered.needsUser, params.questions);
+    const jevError = apiKey ? undefined : "no TypeSafe API key configured (dp-settings → Tools → Ask)";
     return {
-      content: [{ type: "text", text: formatJevResult(unanswered.resolved, needsUser) }],
+      content: [{ type: "text", text: formatJevResult(unanswered.resolved, unanswered.needsUser, jevError) }],
       isError: false,
       details: {
         answeredBy: "jev",
-        ...(apiKey ? {} : { jevError: "no TypeSafe API key configured (dp-settings → Tools → Ask)" }),
-        needsUser,
+        ...(jevError ? { jevError } : {}),
+        needsUser: unanswered.needsUser,
       },
     };
   }
@@ -82,11 +82,10 @@ async function answerWithJev(
       signal,
     });
     const resolved = resolveQuestions(prepared, answers);
-    const needsUser = withQuestionText(resolved.needsUser, params.questions);
     return {
-      content: [{ type: "text", text: formatJevResult(resolved.resolved, needsUser) }],
+      content: [{ type: "text", text: formatJevResult(resolved.resolved, resolved.needsUser) }],
       isError: false,
-      details: { answeredBy: "jev", answers: resolved.resolved, needsUser },
+      details: { answeredBy: "jev", answers: resolved.resolved, needsUser: resolved.needsUser },
     };
   } catch (err) {
     if (signal?.aborted) throw err;
@@ -95,7 +94,7 @@ async function answerWithJev(
     // transport failure recorded rather than swallowed.
     const all = params.questions.map((q) => ({ id: q.id, question: q.question, reason: "answering service unavailable" }));
     return {
-      content: [{ type: "text", text: formatJevResult([], all) }],
+      content: [{ type: "text", text: formatJevResult([], all, reason) }],
       isError: false,
       details: { answeredBy: "jev", jevError: reason, needsUser: all },
     };

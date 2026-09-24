@@ -61,6 +61,8 @@ export interface DeferredQuestion {
 }
 
 export interface PreparedQuestions {
+  /** Question ids in the caller's order, so the result reads in that order. */
+  order: string[];
   /** Questions to send, keyed by the answer id they come back under. */
   asked: Record<string, SystemOneQuestion>;
   /** Questions answered by the user without asking: already decided. */
@@ -70,7 +72,7 @@ export interface PreparedQuestions {
 }
 
 export type AnswerPlan =
-  | { kind: "choice"; questionId: string }
+  | { kind: "choice"; questionId: string; question: string }
   | { kind: "multi"; questionId: string; question: string; optionKeys: Array<{ key: string; option: string }>; escalateKey: string };
 
 export function isConsequential(text: string): boolean {
@@ -79,7 +81,7 @@ export function isConsequential(text: string): boolean {
 
 /** Build the request questions and the plan for reading the answers back. */
 export function prepareQuestions(questions: AskQuestionLike[]): PreparedQuestions {
-  const prepared: PreparedQuestions = { asked: {}, deferred: [], plan: [] };
+  const prepared: PreparedQuestions = { order: questions.map((q) => q.id), asked: {}, deferred: [], plan: [] };
 
   for (const question of questions) {
     if (isConsequential(question.question)) {
@@ -101,7 +103,7 @@ export function prepareQuestions(questions: AskQuestionLike[]): PreparedQuestion
       for (const option of options) criteria[option] = null;
       criteria[ASK_USER_OPTION] = "The context does not determine which option the user wants.";
       prepared.asked[question.id] = { type: "choice", instructions: question.question, criteria };
-      prepared.plan.push({ kind: "choice", questionId: question.id });
+      prepared.plan.push({ kind: "choice", questionId: question.id, question: question.question });
       continue;
     }
 
@@ -145,6 +147,8 @@ export function prepareQuestions(questions: AskQuestionLike[]): PreparedQuestion
 
 export interface ResolvedAnswer {
   id: string;
+  /** The question as asked, so the result reads `question: answer`. */
+  question: string;
   value: string;
   /** How likely the accepted answer is: winner probability, or the weakest
    *  selected option for a multi question. */
@@ -170,24 +174,24 @@ export function resolveQuestions(
       const answer = answers[plan.questionId];
       const pick = answer?.choice;
       if (!pick) {
-        needsUser.push({ id: plan.questionId, question: "", reason: "no answer returned" });
+        needsUser.push({ id: plan.questionId, question: plan.question, reason: "no answer returned" });
         continue;
       }
       const askUser = answer.probabilities?.[ASK_USER_OPTION] ?? 0;
       const probability = answer.probabilities?.[pick] ?? 0;
       if (pick === ASK_USER_OPTION) {
-        needsUser.push({ id: plan.questionId, question: "", reason: "the context does not determine it" });
+        needsUser.push({ id: plan.questionId, question: plan.question, reason: "the context does not determine it" });
         continue;
       }
       if (askUser > CHOICE_ASK_USER_MAX || probability < CHOICE_ACCEPT) {
         needsUser.push({
           id: plan.questionId,
-          question: "",
+          question: plan.question,
           reason: `not confident enough (${(probability * 100).toFixed(0)}%)`,
         });
         continue;
       }
-      resolved.push({ id: plan.questionId, value: pick, probability });
+      resolved.push({ id: plan.questionId, question: plan.question, value: pick, probability });
       continue;
     }
 
@@ -205,44 +209,41 @@ export function resolveQuestions(
     }
     resolved.push({
       id: plan.questionId,
+      question: plan.question,
       value: selected.map((s) => s.option).join(", "),
       probability: Math.min(...selected.map((s) => s.probability)),
     });
   }
 
+  // Deferred entries are collected in two passes (before and during
+  // resolution), so restore the order the caller asked them in.
+  const position = (id: string) => {
+    const index = prepared.order.indexOf(id);
+    return index === -1 ? prepared.order.length : index;
+  };
+  needsUser.sort((a, b) => position(a.id) - position(b.id));
+
   return { resolved, needsUser };
 }
 
-/** Re-attach the question text to the deferred entries. Entries created while
- *  resolving a choice carry no text, and the model needs the wording to put the
- *  question to the user. */
-export function withQuestionText(
+/** Model-facing result.
+ *
+ *  Answered questions read `question: answer` — the same shape the wizard path
+ *  produces, so a person reading the transcript does not have to learn two
+ *  layouts. Questions that came back are listed after a single marker; the
+ *  probabilities stay in `details` for anyone checking calibration. */
+export function formatJevResult(
+  resolved: ResolvedAnswer[],
   needsUser: DeferredQuestion[],
-  questions: AskQuestionLike[],
-): DeferredQuestion[] {
-  return needsUser.map((entry) => ({
-    ...entry,
-    question: entry.question || questions.find((q) => q.id === entry.id)?.question || entry.id,
-  }));
-}
-
-/** Model-facing result. The two blocks are separated so an unanswered question
- *  cannot be read as an answer. */
-export function formatJevResult(resolved: ResolvedAnswer[], needsUser: DeferredQuestion[]): string {
+  jevError?: string,
+): string {
   const lines: string[] = [];
-  const total = resolved.length + needsUser.length;
-  if (resolved.length > 0) {
-    lines.push(`Answered from context (Jev), ${resolved.length}/${total}:`);
-    for (const answer of resolved) {
-      lines.push(`${answer.id}: ${answer.value} (${(answer.probability * 100).toFixed(0)}%)`);
-    }
-  }
+  for (const answer of resolved) lines.push(`${answer.question}: ${answer.value}`);
+  if (jevError) lines.push(`Jev unavailable: ${jevError}`);
   if (needsUser.length > 0) {
     if (lines.length > 0) lines.push("");
-    lines.push(`Needs the user to decide (${needsUser.length}/${total}) — put these to the user in your reply:`);
-    for (const entry of needsUser) {
-      lines.push(`- ${entry.id}: ${entry.question} (${entry.reason})`);
-    }
+    lines.push("needs the user (put these in your reply):");
+    for (const entry of needsUser) lines.push(`- ${entry.question}`);
   }
   return lines.join("\n");
 }

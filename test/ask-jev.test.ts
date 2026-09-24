@@ -13,7 +13,6 @@ import {
   isConsequential,
   prepareQuestions,
   resolveQuestions,
-  withQuestionText,
   type AskQuestionLike,
 } from "../tools/ask/jev.js";
 import { TypesafeError, evaluateSystemOne } from "../utils/typesafe.js";
@@ -158,7 +157,7 @@ describe("resolveQuestions — single choice", () => {
       q1: { type: "choice", choice: "staging", probabilities: { staging: 0.9, prod: 0.05, [ASK_USER_OPTION]: 0.05 } },
     });
     expect(needsUser).toEqual([]);
-    expect(resolved).toEqual([{ id: "q1", value: "staging", probability: 0.9 }]);
+    expect(resolved).toEqual([{ id: "q1", question: single.question, value: "staging", probability: 0.9 }]);
   });
 
   it("escalates when Jev picks the escape hatch", () => {
@@ -198,7 +197,7 @@ describe("resolveQuestions — multi choice", () => {
       "q2#2": { type: "noul", noul: 0.2 },
       "q2#ask_user": { type: "noul", noul: 0.1 },
     } as any);
-    expect(resolved).toEqual([{ id: "q2", value: "lint, tests", probability: 0.61 }]);
+    expect(resolved).toEqual([{ id: "q2", question: multi.question, value: "lint, tests", probability: 0.61 }]);
   });
 
   it("escalates when nothing clears the threshold", () => {
@@ -222,23 +221,45 @@ describe("resolveQuestions — multi choice", () => {
 });
 
 describe("result shaping", () => {
-  it("separates answered questions from ones needing the user", () => {
+  it("reads question: answer, the same shape the wizard path produces", () => {
     const prepared = prepareQuestions([single, text]);
     const resolved = resolveQuestions(prepared, {
       q1: { type: "choice", choice: "staging", probabilities: { staging: 0.9, [ASK_USER_OPTION]: 0.02 } },
     } as any);
-    const out = formatJevResult(resolved.resolved, withQuestionText(resolved.needsUser, [single, text]));
+    const out = formatJevResult(resolved.resolved, resolved.needsUser);
 
-    expect(out).toContain("Answered from context (Jev), 1/2");
-    expect(out).toContain("q1: staging (90%)");
-    expect(out).toContain("Needs the user to decide (1/2)");
-    expect(out).toContain(text.question);
+    expect(out.split("\n")[0]).toBe(`${single.question}: staging`);
+    // The probability stays out of the text; it belongs to details.
+    expect(out).not.toContain("90%");
+    expect(out).toContain("needs the user (put these in your reply):");
+    expect(out).toContain(`- ${text.question}`);
   });
 
-  it("reports only the needs-user block when nothing was answered", () => {
-    const out = formatJevResult([], withQuestionText(resolveQuestions(prepareQuestions([text]), {}).needsUser, [text]));
-    expect(out).not.toContain("Answered from context");
-    expect(out).toContain("put these to the user in your reply");
+  it("lists only the unanswered questions when nothing was answered", () => {
+    const out = formatJevResult([], prepareQuestions([text]).deferred);
+    expect(out.split("\n")[0]).toBe("needs the user (put these in your reply):");
+    expect(out.split("\n")[1]).toBe(`- ${text.question}`);
+  });
+
+  it("keeps the caller's question order in both blocks", () => {
+    // The fourth question is a free-text one that is deferred before Jev is
+    // asked, and the third is only escalated while resolving. The result must
+    // still read in the order the caller asked.
+    const order: AskQuestionLike[] = [
+      single,
+      { id: "q4", type: "single", question: "Which region?", options: ["eu", "us"] },
+      text,
+    ];
+    const resolved = resolveQuestions(prepareQuestions(order), {
+      q1: { type: "choice", choice: "staging", probabilities: { staging: 0.9, [ASK_USER_OPTION]: 0 } },
+      q4: { type: "choice", choice: ASK_USER_OPTION, probabilities: { [ASK_USER_OPTION]: 0.9 } },
+    } as any);
+    expect(resolved.needsUser.map((entry) => entry.id)).toEqual(["q4", "q3"]);
+  });
+
+  it("says why nothing was answered", () => {
+    const out = formatJevResult([], prepareQuestions([text]).deferred, "HTTP 529: overloaded");
+    expect(out.split("\n")[0]).toBe("Jev unavailable: HTTP 529: overloaded");
   });
 });
 
@@ -328,7 +349,7 @@ describe("ask tool — jev mode", () => {
     expect(calls).toHaveLength(1);
     expect(calls[0].body.state).toEqual({ cwd: "/tmp/project", context: "The task targets staging." });
     expect(result.isError).toBe(false);
-    expect(result.content[0].text).toContain("q1: staging (92%)");
+    expect(result.content[0].text).toBe(`${single.question}: staging`);
     expect(result.details).toMatchObject({ answeredBy: "jev", answers: [{ id: "q1", value: "staging", probability: 0.92 }] });
   });
 
@@ -337,7 +358,7 @@ describe("ask tool — jev mode", () => {
     const result = await captureTool().execute("1", { questions: [single], context: "" }, undefined, undefined, headlessCtx());
 
     expect(result.isError).toBe(false);
-    expect(result.content[0].text).toContain("Needs the user to decide");
+    expect(result.content[0].text).toContain("needs the user (put these in your reply):");
     expect(result.content[0].text).toContain(single.question);
     expect(result.details.needsUser[0]).toMatchObject({ id: "q1" });
   });
@@ -347,8 +368,8 @@ describe("ask tool — jev mode", () => {
     const result = await captureTool().execute("1", { questions: [text], context: "anything" }, undefined, undefined, headlessCtx());
 
     expect(calls).toHaveLength(0);
-    expect(result.content[0].text).toContain("Needs the user to decide");
-    expect(result.content[0].text).toContain(text.question);
+    expect(result.content[0].text).toContain("needs the user (put these in your reply):");
+    expect(result.content[0].text).toContain(`- ${text.question}`);
   });
 
   it("routes everything to the user when the service fails", async () => {
@@ -356,8 +377,9 @@ describe("ask tool — jev mode", () => {
     const result = await captureTool().execute("1", { questions: [single, text], context: "x" }, undefined, undefined, headlessCtx());
 
     expect(result.isError).toBe(false);
-    expect(result.content[0].text).toContain("q1");
-    expect(result.content[0].text).toContain(text.question);
+    expect(result.content[0].text).toContain("Jev unavailable: HTTP 529");
+    expect(result.content[0].text).toContain(`- ${single.question}`);
+    expect(result.content[0].text).toContain(`- ${text.question}`);
     expect(result.details.jevError).toContain("529");
     expect(result.details.needsUser).toHaveLength(2);
   });
@@ -369,7 +391,8 @@ describe("ask tool — jev mode", () => {
 
     expect(calls).toHaveLength(0);
     expect(result.isError).toBe(false);
-    expect(result.content[0].text).toContain("Needs the user to decide");
+    expect(result.content[0].text).toContain("Jev unavailable: no TypeSafe API key");
+    expect(result.content[0].text).toContain(`- ${single.question}`);
     expect(result.details.jevError).toContain("no TypeSafe API key");
   });
 });
