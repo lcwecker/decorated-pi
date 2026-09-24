@@ -61,7 +61,7 @@ LLM-callable tools and workflow upgrades with better UX and fewer wasted turns.
 
 #### LSP support
 
-Covers what codegraph can't: the compiler's own answer to "where is this defined", "who references it", and "what does renaming it touch".
+A language server answers from the compiler's binding graph: imports, re-exports and overloads resolve exactly, every reference to a symbol is enumerated, and a rename's complete edit set comes back across every file that references it. A model reading the files works from the subset it opened.
 
 - **`lsp_definition`** — where a symbol is defined
 - **`lsp_references`** — every reference to a symbol
