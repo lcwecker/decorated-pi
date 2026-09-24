@@ -66,6 +66,14 @@ A language server answers from the compiler's binding graph: imports, re-exports
 
 Supported languages: c/cpp, go, java, lua, python, ruby, rust, svelte, typescript. TypeScript support is bundled; the other languages require their corresponding language-server binaries.
 
+#### Ask tool
+
+Collect text, single-choice and multi-choice answers when the agent needs clarification. The agent passes a `context` with the facts needed to answer, and the answering path decides who responds:
+
+- **Who answers** — `me` (default) opens the wizard in the terminal. `jev` has a [TypeSafe](https://typesafe.ai) System One model judge each question against the supplied `context`, answering closed questions without a round trip; only single- and multi-choice questions have an answer space to judge, and free text always goes to the user.
+- **Escalation** — anything Jev is not sure of comes back marked as needing the user: low confidence, a "the context does not determine it" verdict, a missing key, or a transport failure. The agent then puts those questions in its reply, so this path needs no terminal and works in rpc/json/print sessions.
+- **Configuration** — `/dp-settings` → Tools → Ask (Enabled / Who answers / key), or `askWho` and `typesafeApiKey` in `decorated-pi.json`. `TYPESAFE_API_KEY` takes precedence so the key can stay out of the file; the UI masks it.
+
 ### 3. Web Access
 
 Two native tools, both keyless. Search runs through three hosted backends and falls over automatically; fetching reads the URL directly and only leaves the machine when a plain HTTP client cannot render the page.
@@ -117,7 +125,6 @@ Use `/mcp` to view connection status and toggle servers.
 
 ### 5. Other
 
-- **`ask` tool** — collect text, single-choice, and multi-choice answers through an interactive wizard when the agent needs clarification.
 - `/code-review [prompt]` — offload review of current SCM changes, or of a scope described in the prompt (e.g. a file/directory path, also without a git/svn repository), to a separately configured model, avoiding a `/model` switch in the main session and preserving its prompt cache. Without a scope the reviewer inspects the working tree itself via read-only SCM commands, but requires at least one tracked change (A/M/D/R/…); a tree with only untracked files (or none at all) needs an explicit scope.
 - `/usage` — token stats with cache‑hit rate, per‑model breakdown (Session / Today / This Week / This Month / All Time)
 - `/retry` — continue after interruption
