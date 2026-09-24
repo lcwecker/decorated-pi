@@ -33,6 +33,12 @@
  * the TPS text into the stats line's padding after rendering. RPC/print
  * sessions have no such hook (setFooter is a silent no-op), so there — or
  * whenever footer setup fails — we fall back to setStatus (line 3).
+ *
+ * Narrow terminals: the reading is shortened (`54.2 tok/s · TTFT 3.0s` →
+ * `54.2 tok/s`) to fit the stats line's padding, and hidden when even that
+ * does not fit. Pi's rows never wrap — an overflowing part is truncated or
+ * dropped — because a second row costs transcript height and text appended
+ * outside Pi's dim wrapper renders in the terminal's default color.
  */
 
 import { FooterComponent } from "@earendil-works/pi-coding-agent";
@@ -45,7 +51,7 @@ import type {
   ModelSelectEvent,
   ThinkingLevelSelectEvent,
 } from "@earendil-works/pi-coding-agent";
-import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
+import { visibleWidth } from "@earendil-works/pi-tui";
 import type { Module } from "./skeleton.js";
 
 /** Footer status-bar slot owned by this module. */
@@ -154,6 +160,54 @@ export function insertIntoStatsLine(line: string, text: string): string | undefi
   return line.slice(0, match.index) + merged + line.slice(match.index + run.length);
 }
 
+/** The same reading at the widths worth showing.
+ *
+ *  Pi's footer rows never wrap: an overflowing part is truncated with an
+ *  ellipsis (`41.3%/1...`) or dropped to nothing, because a second row costs
+ *  transcript height and text appended outside Pi's dim wrapper renders in the
+ *  terminal's default color. So the reading is shortened to fit, and hidden
+ *  when even the rate alone does not fit — a bare `54.2` among the token and
+ *  cost figures would not be recognizable on its own. */
+export function tpsDisplayVariants(text: string): string[] {
+  const variants: string[] = [];
+  const push = (candidate: string) => {
+    if (candidate && !variants.includes(candidate)) variants.push(candidate);
+  };
+  // Full reading → drop the TTFT suffix; the rate is what the feature is for.
+  const rate = text.split(" · TTFT ")[0];
+  push(text);
+  push(rate);
+  return variants;
+}
+
+/** Shortest variant of `display` that fits the stats line's padding, or
+ *  undefined when none does — the caller then shows nothing, matching how Pi
+ *  hides an overflowing part instead of wrapping it. */
+export function insertBestFit(statsLine: string, display: string): string | undefined {
+  for (const variant of tpsDisplayVariants(display)) {
+    const merged = insertIntoStatsLine(statsLine, variant);
+    if (merged) return merged;
+  }
+  return undefined;
+}
+
+/** Re-assert the line's own style around Pi's truncation ellipsis.
+ *
+ *  Pi builds the stats line with a plain `"..."` and dims the result only
+ *  afterwards (footer.js: `truncateToWidth(statsLeft, width, "...")` then
+ *  `theme.fg("dim", statsLeft)`), while its path line passes an already-themed
+ *  ellipsis. `truncateToWidth` emits a reset before the dots and re-opens
+ *  whatever style was active — for a plain input there is none, so the reset
+ *  also cuts off the outer dim and the dots render in the terminal's default
+ *  color, bright next to the surrounding stats. The line's own leading SGR is
+ *  restored in front of them. Safe to delete once pi passes a themed
+ *  ellipsis here too. */
+export function restoreEllipsisStyle(line: string): string {
+  const opening = /^\x1b\[[0-9;]*m/.exec(line);
+  if (!opening) return line;
+  return line.replace("\x1b[0m...", `\x1b[0m${opening[0]}...`);
+}
+
 // ─── Footer merge (interactive TUI) ─────────────────────────────────────────
 
 type SessionLike = ConstructorParameters<typeof FooterComponent>[0];
@@ -210,17 +264,14 @@ class TpsFooter extends FooterComponent {
   render(width: number): string[] {
     try {
       const lines = super.render(width);
+      if (lines.length >= 2) lines[1] = restoreEllipsisStyle(lines[1]);
       const tps = this.runtime.display;
       if (tps && lines.length >= 2) {
-        const merged = insertIntoStatsLine(lines[1], tps);
-        if (merged) {
-          lines[1] = merged;
-        } else if (lines.length >= 3) {
-          // Cramped terminal: no room in the padding — reuse the status line.
-          lines[2] = truncateToWidth(`${lines[2]} ${tps}`, width, "...");
-        } else {
-          lines.push(tps);
-        }
+        // Shorten to fit the padding; hidden when it cannot. Pi draws the
+        // rows this module writes into, so every visible line keeps its dim
+        // styling and the footer never grows a row.
+        const merged = insertBestFit(lines[1], tps);
+        if (merged) lines[1] = merged;
       }
       this.lastGood = lines;
       return lines;

@@ -27,7 +27,10 @@ import {
   formatTps,
   formatTtft,
   insertIntoStatsLine,
+  insertBestFit,
+  restoreEllipsisStyle,
   splitChars,
+  tpsDisplayVariants,
   TPS_STATUS_KEY,
 } from "../hooks/tps.js";
 import { createSkeleton } from "../hooks/skeleton.js";
@@ -394,6 +397,53 @@ describe("tps — footer merge", () => {
     expect(insertIntoStatsLine(`a${" ".repeat(5)}b`, "~0.6 tok/s")).toBeUndefined();
   });
 
+  it("tpsDisplayVariants stops at the rate, never a bare number", () => {
+    // The TTFT suffix goes first; the unit stays, because `54.2` dropped into
+    // a row of token and cost figures would not be readable on its own.
+    expect(tpsDisplayVariants("54.2 tok/s · TTFT 3.0s")).toEqual(["54.2 tok/s · TTFT 3.0s", "54.2 tok/s"]);
+    // A live estimate has no TTFT suffix and never repeats a variant.
+    expect(tpsDisplayVariants("~3.3 tok/s")).toEqual(["~3.3 tok/s"]);
+    expect(tpsDisplayVariants("—")).toEqual(["—"]);
+  });
+
+  it("insertBestFit shortens the reading to the room available", () => {
+    // The reported case: a 14-column gap fits the rate, not the full reading.
+    const line = `26.5%/828k (auto)${" ".repeat(14)}(openai-codex) gpt-6-sol • high`;
+    const merged = insertBestFit(line, "54.2 tok/s · TTFT 3.0s");
+    expect(merged).toContain("54.2 tok/s");
+    expect(merged).not.toContain("TTFT");
+    expect(merged!.length).toBe(line.length);
+    expect(visibleWidth(merged!)).toBe(visibleWidth(line));
+  });
+
+  it("insertBestFit hides the reading when even the rate has no room", () => {
+    expect(insertBestFit("a b c", "54.2 tok/s · TTFT 3.0s")).toBeUndefined();
+    // 12 columns: enough for the bare number a naive ladder would fall to,
+    // still not enough for the rate plus its two-space separators.
+    expect(insertBestFit(`a${" ".repeat(12)}b`, "54.2 tok/s · TTFT 3.0s")).toBeUndefined();
+    // 14 columns fits it exactly (10 for the rate + 4 for the separators).
+    expect(insertBestFit(`a${" ".repeat(14)}b`, "54.2 tok/s · TTFT 3.0s")).toContain("54.2 tok/s");
+  });
+
+  it("restoreEllipsisStyle re-asserts the line's dim around Pi's dots", () => {
+    // Captured verbatim from Pi's FooterComponent at width 33: the plain
+    // ellipsis lands after the reset truncateToWidth emitted, outside the dim
+    // span that footer.js opened around statsLeft.
+    const broken = "\x1b[38;5;241m↑780k ↓233k R72M 41.8%/1.0M (a\x1b[0m...\x1b[0m\x1b[39m\x1b[38;5;241m\x1b[39m";
+    const fixed = restoreEllipsisStyle(broken);
+    expect(fixed).toContain("\x1b[0m\x1b[38;5;241m...");
+    expect(fixed).not.toContain("\x1b[0m...");
+    expect(visibleWidth(fixed)).toBe(visibleWidth(broken));
+  });
+
+  it("restoreEllipsisStyle leaves themed or dot-less lines alone", () => {
+    // Pi's path line already themes its ellipsis; nothing to repair.
+    const themed = "\x1b[38;5;241m/home/u/reolink_t\x1b[0m\x1b[38;5;241m...\x1b[39m\x1b[0m";
+    expect(restoreEllipsisStyle(themed)).toBe(themed);
+    expect(restoreEllipsisStyle("plain text")).toBe("plain text");
+    expect(restoreEllipsisStyle("\x1b[2mstats only\x1b[0m")).toBe("\x1b[2mstats only\x1b[0m");
+  });
+
   it("insertIntoStatsLine preserves visible width for wide chars", () => {
     const line = `a${" ".repeat(20)}b`;
     const merged = insertIntoStatsLine(line, "—"); // em dash: 1 unit, 2 columns
@@ -451,10 +501,11 @@ describe("tps — footer merge", () => {
     expect(lines[1]).toContain("~3.3 tok/s");
     expect(visibleWidth(lines[1])).toBe(100);
 
-    // Cramped width: no room in the padding → falls back to a pushed line.
+    // Cramped width: the gap fits no variant of the reading, so the footer
+    // keeps Pi's two dim lines instead of growing a bright third one.
     const narrow = comp.render(20);
-    expect(narrow).toHaveLength(3);
-    expect(narrow[2]).toContain("~3.3 tok/s");
+    expect(narrow).toHaveLength(2);
+    expect(narrow[1]).not.toContain("tok/s");
 
     // Stale ctx (getContextUsage throws) → holds the last good frame.
     ctx.getContextUsage = () => {
