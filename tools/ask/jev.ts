@@ -27,8 +27,11 @@ export const ASK_USER_OPTION = "ask user";
 export const CHOICE_ACCEPT = 0.8;
 /** Probability mass on `ask user` that always routes to the user. */
 export const CHOICE_ASK_USER_MAX = 0.1;
-/** Per-option probability needed to select an option in a multi question. */
-export const NOUL_ACCEPT = 0.5;
+/** Per-option probability needed to select an option in a multi question.
+ *  Same bar as a single choice: an option Jev is not sure about is left out
+ *  rather than asserted, and the asking model's own question to the user costs
+ *  less than a wrong auto-answer. */
+export const NOUL_ACCEPT = 0.8;
 /** Probability that the context cannot decide, which routes a multi to the user. */
 export const NOUL_ESCALATE = 0.3;
 
@@ -161,11 +164,20 @@ export interface ResolvedQuestions {
   needsUser: DeferredQuestion[];
 }
 
+export interface ResolveOptions {
+  /** Reason recorded for a question that was sent but came back without an
+   *  answer. Defaults to "no answer returned"; the caller overrides it when
+   *  the request never went out, so the reported reason matches the cause. */
+  noAnswerReason?: string;
+}
+
 /** Apply the accept/escalate thresholds to Jev's answers. */
 export function resolveQuestions(
   prepared: PreparedQuestions,
   answers: Record<string, SystemOneAnswer>,
+  options: ResolveOptions = {},
 ): ResolvedQuestions {
+  const noAnswer = options.noAnswerReason ?? "no answer returned";
   const resolved: ResolvedAnswer[] = [];
   const needsUser: DeferredQuestion[] = [...prepared.deferred];
 
@@ -174,7 +186,7 @@ export function resolveQuestions(
       const answer = answers[plan.questionId];
       const pick = answer?.choice;
       if (!pick) {
-        needsUser.push({ id: plan.questionId, question: plan.question, reason: "no answer returned" });
+        needsUser.push({ id: plan.questionId, question: plan.question, reason: noAnswer });
         continue;
       }
       const askUser = answer.probabilities?.[ASK_USER_OPTION] ?? 0;
@@ -195,7 +207,12 @@ export function resolveQuestions(
       continue;
     }
 
-    const escalate = answers[plan.escalateKey]?.noul ?? 1;
+    const escalateAnswer = answers[plan.escalateKey];
+    if (!escalateAnswer) {
+      needsUser.push({ id: plan.questionId, question: plan.question, reason: noAnswer });
+      continue;
+    }
+    const escalate = escalateAnswer.noul ?? 1;
     const selected = plan.optionKeys
       .map(({ key, option }) => ({ option, probability: answers[key]?.noul ?? 0 }))
       .filter(({ probability }) => probability >= NOUL_ACCEPT);
@@ -215,13 +232,16 @@ export function resolveQuestions(
     });
   }
 
-  // Deferred entries are collected in two passes (before and during
-  // resolution), so restore the order the caller asked them in.
+  // Both blocks are collected across passes (deferred before the request,
+  // escalated while resolving), so restore the order the caller asked in
+  // rather than relying on plan order.
   const position = (id: string) => {
     const index = prepared.order.indexOf(id);
     return index === -1 ? prepared.order.length : index;
   };
-  needsUser.sort((a, b) => position(a.id) - position(b.id));
+  const byCallerOrder = (a: { id: string }, b: { id: string }) => position(a.id) - position(b.id);
+  resolved.sort(byCallerOrder);
+  needsUser.sort(byCallerOrder);
 
   return { resolved, needsUser };
 }

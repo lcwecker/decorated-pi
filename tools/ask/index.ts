@@ -63,8 +63,10 @@ async function answerWithJev(
   const apiKey = getTypesafeApiKey();
   const prepared = prepareQuestions(params.questions);
   if (!apiKey || Object.keys(prepared.asked).length === 0) {
-    const unanswered = resolveQuestions(prepared, {});
     const jevError = apiKey ? undefined : "no TypeSafe API key configured (dp-settings → Tools → Ask)";
+    // Nothing was sent, so a sent question's reason names the real cause
+    // instead of the generic "no answer returned".
+    const unanswered = resolveQuestions(prepared, {}, jevError ? { noAnswerReason: jevError } : {});
     return {
       content: [{ type: "text", text: formatJevResult(unanswered.resolved, unanswered.needsUser, jevError) }],
       isError: false,

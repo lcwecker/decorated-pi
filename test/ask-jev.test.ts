@@ -14,6 +14,7 @@ import {
   prepareQuestions,
   resolveQuestions,
   type AskQuestionLike,
+  type PreparedQuestions,
 } from "../tools/ask/jev.js";
 import { TypesafeError, evaluateSystemOne } from "../utils/typesafe.js";
 import { registerAskTool } from "../tools/ask/index.js";
@@ -187,17 +188,36 @@ describe("resolveQuestions — single choice", () => {
     const { needsUser } = resolveSingle({});
     expect(needsUser[0].reason).toContain("no answer");
   });
+
+  it("records the caller's reason when the request never went out", () => {
+    const { needsUser } = resolveQuestions(
+      prepareQuestions([single]),
+      {},
+      { noAnswerReason: "no TypeSafe API key configured" },
+    );
+    expect(needsUser[0].reason).toBe("no TypeSafe API key configured");
+  });
 });
 
 describe("resolveQuestions — multi choice", () => {
   it("keeps every option above the threshold and reports the weakest", () => {
     const { resolved } = resolveQuestions(prepareQuestions([multi]), {
       "q2#0": { type: "noul", noul: 0.9 },
-      "q2#1": { type: "noul", noul: 0.61 },
+      "q2#1": { type: "noul", noul: 0.85 },
       "q2#2": { type: "noul", noul: 0.2 },
       "q2#ask_user": { type: "noul", noul: 0.1 },
     } as any);
-    expect(resolved).toEqual([{ id: "q2", question: multi.question, value: "lint, tests", probability: 0.61 }]);
+    expect(resolved).toEqual([{ id: "q2", question: multi.question, value: "lint, tests", probability: 0.85 }]);
+  });
+
+  it("leaves out an option that sits just under the bar", () => {
+    const { resolved, needsUser } = resolveQuestions(prepareQuestions([multi]), {
+      "q2#0": { type: "noul", noul: 0.9 },
+      "q2#1": { type: "noul", noul: 0.79 },
+      "q2#ask_user": { type: "noul", noul: 0.1 },
+    } as any);
+    expect(needsUser).toEqual([]);
+    expect(resolved).toEqual([{ id: "q2", question: multi.question, value: "lint", probability: 0.9 }]);
   });
 
   it("escalates when nothing clears the threshold", () => {
@@ -260,6 +280,26 @@ describe("result shaping", () => {
   it("says why nothing was answered", () => {
     const out = formatJevResult([], prepareQuestions([text]).deferred, "HTTP 529: overloaded");
     expect(out.split("\n")[0]).toBe("Jev unavailable: HTTP 529: overloaded");
+  });
+
+  it("restores the caller's order even when the plan is collected out of order", () => {
+    const prepared: PreparedQuestions = {
+      order: ["a", "b"],
+      asked: {
+        a: { type: "choice", instructions: "A?", criteria: { x: null } },
+        b: { type: "choice", instructions: "B?", criteria: { y: null } },
+      },
+      deferred: [],
+      plan: [
+        { kind: "choice", questionId: "b", question: "B?" },
+        { kind: "choice", questionId: "a", question: "A?" },
+      ],
+    };
+    const { resolved } = resolveQuestions(prepared, {
+      a: { type: "choice", choice: "x", probabilities: { x: 0.9 } },
+      b: { type: "choice", choice: "y", probabilities: { y: 0.9 } },
+    } as any);
+    expect(resolved.map((entry) => entry.id)).toEqual(["a", "b"]);
   });
 });
 
@@ -394,5 +434,9 @@ describe("ask tool — jev mode", () => {
     expect(result.content[0].text).toContain("Jev unavailable: no TypeSafe API key");
     expect(result.content[0].text).toContain(`- ${single.question}`);
     expect(result.details.jevError).toContain("no TypeSafe API key");
+    expect(result.details.needsUser[0]).toMatchObject({
+      id: "q1",
+      reason: expect.stringContaining("no TypeSafe API key"),
+    });
   });
 });
