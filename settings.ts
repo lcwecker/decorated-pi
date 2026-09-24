@@ -104,6 +104,12 @@ export interface DecoratedPiConfig {
   codeReviewModelKey?: string | null;
   imageModelKey?: string | null;
   compactModelKey?: string | null;
+  /** Who answers the `ask` tool: the user (default), or Jev — a TypeSafe
+   *  System One model that answers closed questions and can hand a question
+   *  back when the supplied context does not determine it. */
+  askWho?: AskWho;
+  /** TypeSafe API key. `TYPESAFE_API_KEY` takes precedence when set. */
+  typesafeApiKey?: string | null;
   dependencies?: Record<string, DependencySettings>;
   providers?: Record<string, ProviderCache>;
   modules?: ModuleSettings;
@@ -115,8 +121,11 @@ export interface DecoratedPiConfig {
  *  the same top-level shape as config, but may enrich selected leaves with
  *  runtime-only data. It is never persisted and /dp-settings writes only the
  *  real config through setter functions. */
-export interface DecoratedPiConfigView extends Omit<DecoratedPiConfig, "dependencies"> {
+export interface DecoratedPiConfigView extends Omit<DecoratedPiConfig, "dependencies" | "typesafeApiKey"> {
   dependencies?: Record<string, DependencyView>;
+  /** Carried by the config type, never by the view: read it with
+   *  `getTypesafeApiKey()` so a rendered or logged view cannot leak it. */
+  typesafeApiKey?: never;
 }
 
 export function loadConfig(): DecoratedPiConfig {
@@ -206,6 +215,11 @@ function saveProjectConfig(cwd: string, partial: Partial<DecoratedPiConfig>) {
 
 // ─── Getter ─────────────────────────────────────────────────────────────────
 
+/** Who answers `ask`. Only "me" (the user, through the wizard) and "jev"
+ *  exist: Jev handing a question back IS the user path, so there is no third
+ *  state to name. */
+export type AskWho = "me" | "jev";
+
 export function getCodeReviewModelKey(): string | null {
   return loadConfig().codeReviewModelKey ?? null;
 }
@@ -216,6 +230,24 @@ export function getImageModelKey(): string | null {
 
 export function getCompactModelKey(): string | null {
   return loadConfig().compactModelKey ?? null;
+}
+
+export function getAskWho(): AskWho {
+  return loadConfig().askWho === "jev" ? "jev" : "me";
+}
+
+/** TypeSafe key: the environment wins, so a key can stay out of the file. */
+export function getTypesafeApiKey(): string | null {
+  const fromEnv = process.env.TYPESAFE_API_KEY?.trim();
+  if (fromEnv) return fromEnv;
+  return loadConfig().typesafeApiKey?.trim() || null;
+}
+
+/** True when `ask` should be answered by Jev. A missing key is reported by the
+ *  caller rather than quietly switching back to the wizard: the user chose
+ *  this mode, so the configuration gap belongs in the result. */
+export function isJevAnswering(): boolean {
+  return getAskWho() === "jev";
 }
 
 /** Look up a binary's configured path override. Returns null when not set. */
@@ -241,9 +273,10 @@ export function getConfigView(): DecoratedPiConfigView {
       ...(configShadow.dependencies?.[name] ?? {}),
     };
   }
+  // The view is for display; the key is read through getTypesafeApiKey().
+  const { typesafeApiKey: _secret, ...rest } = { ...real, ...configShadow };
   return {
-    ...real,
-    ...configShadow,
+    ...rest,
     dependencies: Object.keys(dependencies).length ? dependencies : undefined,
   };
 }
@@ -301,6 +334,16 @@ export function setImageModelKey(key: string | null) {
 
 export function setCompactModelKey(key: string | null) {
   saveConfig({ compactModelKey: key });
+}
+
+export function setAskWho(who: AskWho) {
+  saveConfig({ askWho: who });
+}
+
+/** Set or clear the TypeSafe key. Pass null to remove it. */
+export function setTypesafeApiKey(key: string | null) {
+  const trimmed = key?.trim();
+  saveConfig({ typesafeApiKey: trimmed ? trimmed : null });
 }
 
 /** Set or clear a binary's path override. Pass null to remove the path.

@@ -8,7 +8,7 @@
 
 import type { Theme as PiTheme, ExtensionUIContext } from "@earendil-works/pi-coding-agent";
 import { Container, SettingsList, type TUI, type SettingsListTheme, type SettingItem, type Component } from "@earendil-works/pi-tui";
-import { getAllModuleSettings, setModuleEnabled, type ModuleSettings, getDependencyPath, setDependencyPath, isDontBother, setDontBother, getDependencyView, listDependencyViewNames } from "../settings.js";
+import { getAllModuleSettings, setModuleEnabled, isModuleEnabled, type ModuleSettings, getDependencyPath, setDependencyPath, isDontBother, setDontBother, getDependencyView, listDependencyViewNames, getAskWho, setAskWho, getTypesafeApiKey, setTypesafeApiKey } from "../settings.js";
 import { listLspBinaryNames } from "../tools/lsp/servers.js";
 import { listMcpBinaryNames } from "../tools/mcp/config.js";
 
@@ -118,27 +118,150 @@ function summaryFor(modules: Required<ModuleSettings>, ids: ModuleName[]): strin
   return `${onCount}/${ids.length} on`;
 }
 
-class CategorySubmenu extends Container {
+/** Row text for a module that has its own submenu — the on/off state alone
+ *  would hide what it is currently set to. Reads settings live: the row is
+ *  redrawn from the summary the submenu hands back. */
+function moduleSummary(id: ModuleName): string {
+  const modules = getAllModuleSettings();
+  const enabled = (modules[MODULE_TO_CATEGORY[id]] as Record<string, boolean>)[id] ? "on" : "off";
+  if (id !== "ask") return enabled;
+  const key = getTypesafeApiKey() ? "" : " · no key";
+  return `${enabled} · ${getAskWho()}${key}`;
+}
+
+/** Never print the key itself: it is a secret and this row is a screenshot risk. */
+function maskedKey(): string {
+  const key = getTypesafeApiKey();
+  if (!key) return "(not set)";
+  if (process.env.TYPESAFE_API_KEY?.trim()) return "(from TYPESAFE_API_KEY)";
+  return key.length <= 12 ? "••••••" : `${key.slice(0, 6)}…${key.slice(-4)}`;
+}
+
+/** Options for the `ask` tool. It gets its own submenu because the answering
+ *  mode and the API key are not on/off values, and switching the mode needs no
+ *  /reload: `ask` reads the setting on every call. */
+class AskSubmenu extends Container {
   private list: SettingsList;
+  private ui: ExtensionUIContext;
 
-  constructor(categoryId: CategoryId, theme: PiTheme, done: (summary?: string) => void) {
+  constructor(theme: PiTheme, ui: ExtensionUIContext, done: (summary?: string) => void) {
     super();
-    const modules = getAllModuleSettings();
-    const category = CATEGORIES[categoryId];
+    this.ui = ui;
 
-    const items: SettingItem[] = category.modules.map((id) => ({
-      id,
-      label: MODULE_LABELS[id],
-      description: MODULE_DESCS[id],
-      currentValue: (modules[MODULE_TO_CATEGORY[id]] as Record<string, boolean>)[id] ? "on" : "off",
-      values: ["on", "off"],
-    }));
+    const items: SettingItem[] = [
+      {
+        id: "enabled",
+        label: "Enabled",
+        description: "Register the ask tool",
+        currentValue: isModuleEnabled("ask") ? "on" : "off",
+        values: ["on", "off"],
+      },
+      {
+        id: "who",
+        label: "Who answers",
+        description: "me = the wizard in this terminal; jev = answered from the context passed to ask. Applies to the next call.",
+        currentValue: getAskWho(),
+        values: ["me", "jev"],
+      },
+      {
+        id: "key",
+        label: "TypeSafe API key",
+        description: "Enter to set, empty to clear. Stored in decorated-pi.json in plain text; TYPESAFE_API_KEY overrides it.",
+        currentValue: maskedKey(),
+        values: ["edit"],
+      },
+    ];
 
     this.list = new SettingsList(
       items,
       10,
       getSettingsListTheme(theme),
       (id: string, newValue: string) => {
+        if (id === "enabled") {
+          setModuleEnabled("ask", newValue === "on");
+          this.list.updateValue("enabled", newValue);
+          return;
+        }
+        if (id === "who") {
+          setAskWho(newValue === "jev" ? "jev" : "me");
+          this.list.updateValue("who", newValue);
+          this.list.updateValue("key", maskedKey());
+          return;
+        }
+        void this.promptForKey();
+      },
+      () => done(moduleSummary("ask")),
+    );
+    this.addChild(this.list);
+  }
+
+  private async promptForKey(): Promise<void> {
+    const input = await this.ui.input("TypeSafe API key (empty to clear)", "as_sk_…");
+    if (input === undefined) return;
+    setTypesafeApiKey(input);
+    this.list.updateValue("key", maskedKey());
+  }
+
+  handleInput(data: string) {
+    this.list.handleInput(data);
+  }
+
+  render(width: number): string[] {
+    return this.list.render(width);
+  }
+}
+
+/** Modules whose settings do not fit an on/off row. */
+const MODULE_SUBMENUS: Partial<
+  Record<ModuleName, (theme: PiTheme, ui: ExtensionUIContext, done: (summary?: string) => void) => Component>
+> = {
+  ask: (theme, ui, done) => new AskSubmenu(theme, ui, done),
+};
+
+class CategorySubmenu extends Container {
+  private list: SettingsList;
+
+  constructor(categoryId: CategoryId, theme: PiTheme, ui: ExtensionUIContext, done: (summary?: string) => void) {
+    super();
+    const modules = getAllModuleSettings();
+    const category = CATEGORIES[categoryId];
+
+    // A module with its own options opens a submenu instead of toggling: the
+    // row for `ask` carries the answering mode and its key, neither of which
+    // fits an on/off value.
+    const items: SettingItem[] = category.modules.map((id) => {
+      const submenu = MODULE_SUBMENUS[id];
+      if (submenu) {
+        return {
+          id,
+          label: MODULE_LABELS[id],
+          description: MODULE_DESCS[id],
+          currentValue: moduleSummary(id),
+          submenu: (_currentValue, submenuDone) => submenu(theme, ui, submenuDone),
+        };
+      }
+      return {
+        id,
+        label: MODULE_LABELS[id],
+        description: MODULE_DESCS[id],
+        currentValue: (modules[MODULE_TO_CATEGORY[id]] as Record<string, boolean>)[id] ? "on" : "off",
+        values: ["on", "off"],
+      };
+    });
+
+    this.list = new SettingsList(
+      items,
+      10,
+      getSettingsListTheme(theme),
+      (id: string, newValue: string) => {
+        // A submenu row reports its summary through this callback when the
+        // submenu closes, and a summary is not an on/off value: writing the
+        // module state from it switched the module off on every visit. State
+        // for those rows belongs to the submenu that owns them.
+        if (MODULE_SUBMENUS[id as ModuleName]) {
+          this.list.updateValue(id, newValue);
+          return;
+        }
         setModuleEnabled(id, newValue === "on");
         this.list.updateValue(id, newValue);
       },
@@ -285,7 +408,7 @@ export class ModuleSettingsComponent extends Container {
       label: CATEGORIES[id].label,
       description: CATEGORIES[id].description,
       currentValue: summaryFor(modules, CATEGORIES[id].modules),
-      submenu: (_currentValue, done) => new CategorySubmenu(id, theme, done),
+      submenu: (_currentValue, done) => new CategorySubmenu(id, theme, ui, done),
     }));
 
     // Dependencies is a separate top-level category — it doesn't fit
