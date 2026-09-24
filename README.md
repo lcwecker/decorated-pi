@@ -142,16 +142,20 @@ Runtime settings live in `~/.pi/agent/decorated-pi.json`. Run `/dp-settings` to 
       "patchOverrideEdit": true,
       "ask": true,
       "lsp": true,
-      "mcp": true
+      "mcp": true,
+      "websearch": true,
+      "webFetch": true
     },
     "hooks": {
-      "wakatime": true
+      "wakatime": true,
+      "tps": true
     },
     "commands": {
       "retry": true,
       "usage": true
     }
   },
+  "askWho": "me",
   "dependencies": {
     "wakatime-cli": {
       "dontBother": true
@@ -161,6 +165,7 @@ Runtime settings live in `~/.pi/agent/decorated-pi.json`. Run `/dp-settings` to 
 ```
 
 - `modules` can be toggled on/off to enable/disable features. All are enabled by default.
+- `askWho` picks who answers the `ask` tool: `"me"` opens the terminal wizard, `"jev"` has a TypeSafe System One model answer closed questions from the context the agent supplied. `"jev"` needs `typesafeApiKey` here or the `TYPESAFE_API_KEY` environment variable, which takes precedence.
 - `dependencies[binaryName].path` overrides the lookup location for a binary (file or directory). `dependencies[binaryName].dontBother` silences missing-dependency notifications for that binary. Both are optional.
 
 ## License
