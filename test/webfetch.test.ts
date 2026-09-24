@@ -10,6 +10,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { htmlToMarkdown, htmlToText, isHtmlContentType } from "../tools/webfetch/convert.js";
 import { fetchLocal } from "../tools/webfetch/local.js";
 import { registerWebFetchTool } from "../tools/webfetch/index.js";
+import { isPrivateHost, parseTarget, redactUrl } from "../tools/webfetch/target.js";
 import { ANYSEARCH_URL } from "../tools/websearch/anysearch.js";
 import { JINA_READER_PREFIX } from "../tools/webfetch/remote.js";
 
@@ -103,6 +104,45 @@ describe("HTML conversion", () => {
     expect(isHtmlContentType("text/html; charset=utf-8")).toBe(true);
     expect(isHtmlContentType("application/xhtml+xml")).toBe(true);
     expect(isHtmlContentType("application/json")).toBe(false);
+  });
+});
+
+// ═════════════════════════════════════════════════════════════════════════════
+// Target classification
+// ═════════════════════════════════════════════════════════════════════════════
+
+describe("target classification", () => {
+  it("treats every non-routable address form as private", () => {
+    const privateHosts = [
+      // IPv4 ranges
+      "127.0.0.1", "10.0.0.5", "192.168.1.1", "172.16.0.1", "169.254.169.254", "100.64.0.1", "198.18.0.1",
+      // IPv6 specials
+      "[::1]", "[fd00::1]", "[fe80::1]",
+      // IPv4 embedded in IPv6: mapped, compatible and NAT64
+      "[::ffff:7f00:1]", "[::ffff:c0a8:101]", "[::ffff:a00:1]", "[::ffff:a9fe:a9fe]",
+      "[::7f00:1]", "[64:ff9b::a00:1]",
+      // Names that never resolve publicly
+      "localhost", "api.local", "host.internal", "printer",
+    ];
+    for (const host of privateHosts) expect(isPrivateHost(host), host).toBe(true);
+  });
+
+  it("leaves public addresses public", () => {
+    for (const host of ["example.com", "8.8.8.8", "[2606:4700::1111]", "[::ffff:8.8.8.8]"]) {
+      expect(isPrivateHost(host), host).toBe(false);
+    }
+  });
+
+  it("accepts only an absolute http(s) URL", () => {
+    expect(parseTarget("file:///etc/passwd")).toHaveProperty("reason");
+    expect(parseTarget("not a url")).toHaveProperty("reason");
+    expect(parseTarget("https://user:pass@example.com/")).toHaveProperty("reason");
+    expect(parseTarget("https://example.com/a")).toHaveProperty("url");
+  });
+
+  it("redacts credentials before a URL reaches a message", () => {
+    expect(redactUrl("https://user:pass@a.test/x?y=1#z")).toBe("https://a.test/x?y=1#z");
+    expect(redactUrl("https://a.test/x")).toBe("https://a.test/x");
   });
 });
 
@@ -383,6 +423,19 @@ describe("webfetch tool — fallback chain", () => {
       { source: "remote fallbacks", error: "skipped: private or local host" },
     ]);
     expect(result.content[0].text).toContain("private or local host");
+  });
+
+  it("refuses a URL carrying credentials without echoing the password", async () => {
+    // Node's fetch refuses a Request built from a credentialed URL anyway, and
+    // a password in the tool output (or in details) is a leaked password.
+    const requests = stubRoutes({});
+    const result = await run({ url: "https://user:pass@a.test/" });
+
+    expect(requests).toHaveLength(0);
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toContain("credentials");
+    expect(result.content[0].text).not.toContain("pass");
+    expect(JSON.stringify(result.details)).not.toContain("pass");
   });
 
   it("reports every attempt when the whole chain fails", async () => {

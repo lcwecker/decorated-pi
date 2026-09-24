@@ -16,7 +16,7 @@ import { Type } from "typebox";
 import { renderToolTextResult } from "../../utils/tool-output.js";
 import { MAX_TIMEOUT_MS, fetchLocal, type FetchFormat } from "./local.js";
 import { fetchViaAnySearch, fetchViaJina } from "./remote.js";
-import { isPrivateHost, parseTarget } from "./target.js";
+import { isPrivateHost, parseTarget, redactUrl } from "./target.js";
 
 /** Model-facing cap: a fetched page is a reference, not the whole context window. */
 const MAX_OUTPUT_CHARS = 30_000;
@@ -81,7 +81,7 @@ export function registerWebFetchTool(pi: ExtensionAPI): void {
       const target = parseTarget(params.url);
       if ("reason" in target) {
         return {
-          content: [{ type: "text", text: `webfetch refused ${params.url} — ${target.reason}` }],
+          content: [{ type: "text", text: `webfetch refused ${redactUrl(params.url)} — ${target.reason}` }],
           isError: true,
           details: { attempted },
         };
@@ -148,7 +148,7 @@ export function registerWebFetchTool(pi: ExtensionAPI): void {
 
       const reasons = attempted.map((a) => `${a.source}: ${a.error}`).join("; ");
       return {
-        content: [{ type: "text", text: `webfetch failed for ${params.url} — ${reasons}` }],
+        content: [{ type: "text", text: `webfetch failed for ${redactUrl(params.url)} — ${reasons}` }],
         isError: true,
         details: { attempted },
       };
