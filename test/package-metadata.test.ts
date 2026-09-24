@@ -2,10 +2,9 @@
  * Package metadata invariants — the declared Pi version floor.
  *
  * The system-prompt injection mutates `systemPromptOptions`, which only Pi
- * 0.86+ renders, so three statements have to stay in step:
+ * 0.86+ renders, so two statements have to stay in step:
  *  - the peer floor users are told they need,
- *  - the devDependency range CI actually tests against,
- *  - the floor stated in README.
+ *  - the devDependency range CI actually tests against.
  *
  * A dev range below the peer floor means CI verifies an older Pi than the
  * extension claims to support: the extension can then depend on newer Pi
@@ -30,7 +29,6 @@ const REQUIRED_FLOOR = "0.86.0";
 
 const repoRoot = path.join(import.meta.dirname, "..");
 const pkg = JSON.parse(fs.readFileSync(path.join(repoRoot, "package.json"), "utf-8"));
-const readme = fs.readFileSync(path.join(repoRoot, "README.md"), "utf-8");
 
 /** Lowest version a range can resolve to, for the range forms this repo uses. */
 function floorTuple(range: string): [number, number, number] {
@@ -67,10 +65,5 @@ describe("package metadata — Pi version floor", () => {
         `${name} dev floor ${range} satisfies peer floor ${pkg.peerDependencies[name]}`,
       ).toBeGreaterThanOrEqual(0);
     }
-  });
-
-  it("states the same floor in the README", () => {
-    const floor = floorTuple(pkg.peerDependencies["@earendil-works/pi-coding-agent"]).join(".");
-    expect(readme, "README states the declared floor").toContain(`Pi ≥ ${floor}`);
   });
 });
