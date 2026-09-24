@@ -283,6 +283,27 @@ describe("local fetch", () => {
 // ═════════════════════════════════════════════════════════════════════════════
 
 describe("webfetch tool — local path", () => {
+  it("names an empty JSON body instead of returning [] or {}", async () => {
+    // `[]` in a transcript reads like a rendering artefact, not a payload.
+    stubRoutes({ "https://a.test/tags": () => page("[]", "application/json; charset=utf-8") });
+    const tags = await run({ url: "https://a.test/tags" });
+    expect(tags.content[0].text).toBe("(empty JSON array)");
+
+    stubRoutes({ "https://a.test/obj": () => page("{ }\n", "application/json") });
+    const obj = await run({ url: "https://a.test/obj" });
+    expect(obj.content[0].text).toBe("(empty JSON object)");
+  });
+
+  it("names an empty body and leaves non-empty JSON alone", async () => {
+    stubRoutes({ "https://a.test/blank": () => page("", "text/plain") });
+    const blank = await run({ url: "https://a.test/blank" });
+    expect(blank.content[0].text).toBe("(empty body)");
+
+    stubRoutes({ "https://a.test/data": () => page('{"a":1}', "application/json") });
+    const data = await run({ url: "https://a.test/data" });
+    expect(data.content[0].text).toBe('{"a":1}');
+  });
+
   it("returns markdown by default and never touches a backend", async () => {
     const requests = stubRoutes({ "https://a.test/": () => page(LONG_HTML) });
     const result = await run({ url: "https://a.test/" });

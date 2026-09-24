@@ -56,6 +56,23 @@ function attemptNote(attempted: Array<{ source: string; error?: string }>, winne
   return `(local fetch unusable — ${skipped}; content via ${winner})\n\n`;
 }
 
+/**
+ * Name a body that carries nothing.
+ *
+ * An empty JSON document is a valid `[]` or `{}`, and a bare empty body is a
+ * valid 200. Both read as a rendering artifact in the transcript — `[]` in
+ * particular is easy to mistake for a formatting glitch — so say what they are
+ * instead of returning two punctuation characters.
+ */
+export function describeEmptyBody(text: string, mime: string): string {
+  const trimmed = text.trim();
+  if (trimmed === "") return "(empty body)";
+  if (!mime.includes("json")) return text;
+  if (/^\[\s*\]$/.test(trimmed)) return "(empty JSON array)";
+  if (/^\{\s*\}$/.test(trimmed)) return "(empty JSON object)";
+  return text;
+}
+
 export function registerWebFetchTool(pi: ExtensionAPI): void {
   pi.registerTool({
     name: "webfetch",
@@ -109,7 +126,7 @@ export function registerWebFetchTool(pi: ExtensionAPI): void {
           return { content, isError: false, details };
         }
         return {
-          content: [{ type: "text", text: capOutput(local.text ?? "") }],
+          content: [{ type: "text", text: capOutput(describeEmptyBody(local.text ?? "", local.mime ?? "")) }],
           isError: false,
           details,
         };
