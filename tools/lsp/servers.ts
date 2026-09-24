@@ -29,18 +29,6 @@ function resolveBundledTypeScriptCli(): string {
   }
 }
 
-function resolveBundledBiomeCli(): string {
-  try {
-    return resolveBundledCli(
-      require.resolve("@biomejs/biome/package.json"),
-      join("bin", "biome"),
-      "Biome",
-    );
-  } catch {
-    throw new Error("Bundled Biome LSP is missing; reinstall decorated-pi");
-  }
-}
-
 const EXTENSION_LANGUAGES: Record<string, string> = {
   ".ts": "typescript", ".tsx": "typescript", ".mts": "typescript", ".cts": "typescript",
   ".js": "typescript", ".jsx": "typescript", ".mjs": "typescript", ".cjs": "typescript",
@@ -48,7 +36,6 @@ const EXTENSION_LANGUAGES: Record<string, string> = {
   ".cxx": "cpp", ".hh": "cpp", ".hpp": "cpp", ".hxx": "cpp",
   ".py": "python", ".rs": "rust", ".go": "go", ".rb": "ruby",
   ".java": "java", ".lua": "lua", ".svelte": "svelte",
-  ".json": "json",
 };
 
 export interface LanguageConfig {
@@ -101,10 +88,6 @@ const LANGUAGE_SERVERS: Record<string, Omit<LanguageConfig, "is_project_local">>
     language: "svelte", command: "svelteserver", args: ["--stdio"],
     install_hint: "Install Svelte LSP with: pnpm add -D svelte-language-server",
   },
-  json: {
-    language: "json", command: "biome", args: ["lsp-proxy"],
-    install_hint: "The Biome LSP is bundled with decorated-pi; reinstall decorated-pi if it is missing",
-  },
 };
 
 const WORKSPACE_MARKERS = [
@@ -135,7 +118,7 @@ export function listSupportedLanguages(): string[] {
 export function listLspBinaryNames(): string[] {
   const seen = new Set<string>();
   for (const lang of Object.keys(LANGUAGE_SERVERS)) {
-    if (lang === "typescript" || lang === "json") continue;
+    if (lang === "typescript") continue;
     seen.add(LANGUAGE_SERVERS[lang].command);
   }
   return [...seen].sort();
@@ -148,14 +131,11 @@ export function getServerConfig(
   const base = LANGUAGE_SERVERS[language];
   if (!base) return undefined;
 
-  if (language === "typescript" || language === "json") {
-    const bundledCli = language === "typescript"
-      ? resolveBundledTypeScriptCli()
-      : resolveBundledBiomeCli();
+  if (language === "typescript") {
     return {
       ...base,
       command: process.execPath,
-      args: [bundledCli, ...base.args],
+      args: [resolveBundledTypeScriptCli(), ...base.args],
       is_project_local: false,
     };
   }
@@ -209,7 +189,7 @@ export function collectLspDependencyStatuses(cwd: string): DependencyStatus[] {
   const statuses: DependencyStatus[] = [];
   const seen = new Set<string>();
   for (const language of listSupportedLanguages()) {
-    if (language === "typescript" || language === "json") continue;
+    if (language === "typescript") continue;
     const base = LANGUAGE_SERVERS[language];
     if (!base || seen.has(base.command)) continue;
     seen.add(base.command);

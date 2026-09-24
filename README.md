@@ -68,7 +68,7 @@ Covers what codegraph can't: the compiler's own answer to "where is this defined
 - **`lsp_document_symbols`** — a file's symbol outline, to find a position
 - **`lsp_rename`** — the exact workspace edits for a rename, applied to disk (or previewed)
 
-Supported languages: c/cpp, go, java, lua, json, python, ruby, rust, svelte, typescript. TypeScript and JSON support are bundled; other languages require their corresponding language-server binaries.
+Supported languages: c/cpp, go, java, lua, python, ruby, rust, svelte, typescript. TypeScript support is bundled; the other languages require their corresponding language-server binaries.
 
 ### 3. Web Access
 
