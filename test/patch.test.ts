@@ -2130,4 +2130,9 @@ describe("patch tool description", () => {
     const description: string = getPatchDefinition().description;
     expect(description).toMatch(/ALWAYS an array/);
   });
+
+  it("tells the model to read the file before patching it", () => {
+    const guidelines: string[] = getPatchDefinition().promptGuidelines;
+    expect(guidelines.some((g) => /read the file with the read tool before patching/i.test(g))).toBe(true);
+  });
 });

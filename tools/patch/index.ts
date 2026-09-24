@@ -339,6 +339,7 @@ export function registerPatchTool(pi: ExtensionAPI): void {
             promptSnippet:
                 "Edits a file using exact string replacement, with anchor support.",
             promptGuidelines: [
+                "Read the file with the read tool before patching it — patch blocks an edit to a file it has not read, or one that changed since the last read.",
                 "The patch tool is the preferred way to modify files — use it over the bash tool (sed/heredoc/python etc.).",
                 "When editing an existing file, prefer patch over overwrite to avoid overwriting prior changes.",
                 "To prevent hallucinations: 1. Keep each edit batch ≤ 5 changes; 2. Process remaining revisions in sequential steps.",
