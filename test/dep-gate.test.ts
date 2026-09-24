@@ -90,12 +90,14 @@ describe("index.ts dep gate", () => {
     );
   });
 
-  it("LSP module: bundled TypeScript 7 makes diagnostics available", async () => {
+  it("LSP module: bundled TypeScript 7 makes the navigation tools available", async () => {
     const mod = await import("../index.js");
     const mockPi = makeMockPi();
     await mod.default(mockPi);
 
-    expect(mockPi.log.tools).toContain("lsp_diagnostics");
+    for (const tool of ["lsp_definition", "lsp_references", "lsp_document_symbols", "lsp_rename"]) {
+      expect(mockPi.log.tools).toContain(tool);
+    }
   });
 
   it("MCP module: codegraph tools not registered when codegraph binary is missing", async () => {

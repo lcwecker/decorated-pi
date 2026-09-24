@@ -1,8 +1,7 @@
 /**
- * tools/lsp/env.ts + tools/lsp/prompt.ts + tools/lsp/index.ts — smoke tests.
+ * tools/lsp/env.ts + tools/lsp/index.ts — smoke tests.
  *
  * - env.ts: whitelist-only env-var filter for spawning LSP servers
- * - prompt.ts: empty module (just a doc comment), nothing to test
  * - index.ts: thin wrapper that wires up the LSP manager + tools + shutdown
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
@@ -120,7 +119,12 @@ describe("setupLsp (tools/lsp/index.ts) + createLspModule (hooks/lsp.ts)", () =>
 
     try {
       const manager = setupLsp(pi as any);
-      expect(tools).toContain("lsp_diagnostics");
+      expect([...tools].sort()).toEqual([
+        "lsp_definition",
+        "lsp_document_symbols",
+        "lsp_references",
+        "lsp_rename",
+      ]);
 
       // Session lifecycle is the hook module's job.
       const module = createLspModule(manager);

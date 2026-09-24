@@ -95,27 +95,6 @@ describe("LspProtocol", () => {
     expect(exitBody).not.toHaveProperty("params");
   });
 
-  it("emits diagnostics notifications", async () => {
-    const protocol = new LspProtocol();
-    const spawned = protocol.spawn("tsserver", ["--stdio"], {});
-    proc.emit("spawn");
-    await spawned;
-
-    const diagnostics = vi.fn();
-    protocol.on("diagnostics", diagnostics);
-
-    emitMessage(proc, {
-      jsonrpc: "2.0",
-      method: "textDocument/publishDiagnostics",
-      params: { uri: "file:///a.ts", diagnostics: [{ message: "boom" }] },
-    });
-
-    expect(diagnostics).toHaveBeenCalledWith({
-      uri: "file:///a.ts",
-      diagnostics: [{ message: "boom" }],
-    });
-  });
-
   it("times out pending requests", async () => {
     vi.useFakeTimers();
     const protocol = new LspProtocol();

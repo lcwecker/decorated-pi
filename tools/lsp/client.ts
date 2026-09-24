@@ -1,17 +1,19 @@
 /**
  * LSP Client — high-level LSP operations over JSON-RPC stdio.
+ *
+ * Navigation and multi-file edits: definition, references, document symbols
+ * and rename. Nothing here watches diagnostics — the tool surface reads what
+ * the compiler knows and hands the edits back, it does not grade the code.
  */
-import { pathToFileURL } from "node:url";
-import {
-  LspProtocol,
-  LspProtocolError,
-} from "./protocol.js";
+import { uriToFilePath } from "./uri.js";
+import { LspProtocol } from "./protocol.js";
 import type {
-  LspDiagnostic,
-  LspHover,
+  LspDocumentSymbol,
   LspLocation,
   LspPosition,
-  LspRange,
+  LspSymbolInformation,
+  LspTextEdit,
+  LspWorkspaceEdit,
 } from "./types.js";
 
 export class LspClientStartError extends Error {
@@ -43,27 +45,17 @@ interface OpenDoc {
 /**
  * High-level LSP client.
  *
- * Wraps LspProtocol with LSP-specific operations:
- * document open/didChange, hover, definition, references,
- * document symbols, rename, diagnostics.
+ * Wraps LspProtocol with LSP-specific operations: document open/didChange,
+ * definition, references, document symbols and rename.
  */
 export class LspClient {
   #protocol = new LspProtocol();
   #options: LspClientOptions;
   #initialized = false;
-  #supportsPullDiagnostics = false;
   #openDocs = new Map<string, OpenDoc>();
-  #diagnosticsByUri = new Map<string, LspDiagnostic[]>();
 
   constructor(options: LspClientOptions) {
     this.#options = options;
-    this.#protocol.on("diagnostics", (params: { uri: string; diagnostics: LspDiagnostic[] }) => {
-      this.#diagnosticsByUri.set(params.uri, params.diagnostics);
-    });
-  }
-
-  get protocol(): LspProtocol {
-    return this.#protocol;
   }
 
   #request(method: string, params: unknown, timeoutMs?: number, signal?: AbortSignal): Promise<unknown> {
@@ -92,24 +84,20 @@ export class LspClient {
     }
 
     try {
-      const initializeResult = await this.#request("initialize", {
+      await this.#request("initialize", {
         processId: process.pid,
         rootUri: this.#options.root_uri,
         capabilities: {
           textDocument: {
-            publishDiagnostics: { relatedInformation: true },
-            diagnostic: { dynamicRegistration: false, relatedDocumentSupport: false },
-            hover: { contentFormat: ["markdown", "plaintext"] },
             definition: { linkSupport: false },
             references: {},
             documentSymbol: { hierarchicalDocumentSymbolSupport: true },
             rename: { prepareSupport: true },
           },
-          workspace: { workspaceFolders: true, symbol: {} },
+          workspace: { workspaceFolders: true },
         },
         workspaceFolders: [{ uri: this.#options.root_uri, name: "workspace" }],
-      }, timeoutMs, signal) as { capabilities?: { diagnosticProvider?: unknown } } | null;
-      this.#supportsPullDiagnostics = Boolean(initializeResult?.capabilities?.diagnosticProvider);
+      }, timeoutMs, signal);
       this.#protocol.notify("initialized", {});
       this.#initialized = true;
     } catch (err) {
@@ -118,16 +106,11 @@ export class LspClient {
     }
   }
 
-  isReady(): boolean {
-    return this.#initialized;
-  }
-
   /** Open or update a document in the LSP server. */
   async ensureDocumentOpen(uri: string, text: string): Promise<void> {
     const existing = this.#openDocs.get(uri);
     const nextVersion = existing ? existing.version + 1 : 1;
     this.#openDocs.set(uri, { version: nextVersion });
-    this.#diagnosticsByUri.delete(uri);
 
     if (existing) {
       this.#protocol.notify("textDocument/didChange", {
@@ -140,69 +123,6 @@ export class LspClient {
         textDocument: { uri, languageId, version: 1, text },
       });
     }
-  }
-
-  getDiagnostics(uri: string): LspDiagnostic[] {
-    return this.#diagnosticsByUri.get(uri) ?? [];
-  }
-
-  /** Wait for diagnostics, with optional timeout. Aborting rejects. */
-  async waitForDiagnostics(uri: string, timeoutMs = 1500, signal?: AbortSignal): Promise<LspDiagnostic[]> {
-    if (signal?.aborted) {
-      throw signal.reason instanceof Error ? signal.reason : new DOMException("This operation was aborted", "AbortError");
-    }
-    if (this.#supportsPullDiagnostics) {
-      const report = await this.#request(
-        "textDocument/diagnostic",
-        { textDocument: { uri } },
-        timeoutMs,
-        signal,
-      ) as { kind?: string; items?: LspDiagnostic[] } | null;
-      const diagnostics = report?.kind === "full" && Array.isArray(report.items)
-        ? report.items
-        : [];
-      this.#diagnosticsByUri.set(uri, diagnostics);
-      return diagnostics;
-    }
-
-    if (this.#diagnosticsByUri.has(uri)) {
-      return this.getDiagnostics(uri);
-    }
-    return new Promise((resolve, reject) => {
-      let active = true;
-      const cleanup = () => {
-        if (!active) return;
-        active = false;
-        this.#protocol.off("diagnostics", handler);
-        clearTimeout(timer);
-        signal?.removeEventListener("abort", onAbort);
-      };
-      const handler = (event: { uri: string; diagnostics: LspDiagnostic[] }) => {
-        if (event.uri !== uri || !active) return;
-        const result = this.getDiagnostics(uri);
-        cleanup();
-        resolve(result);
-      };
-      const onAbort = () => {
-        cleanup();
-        reject(signal?.reason instanceof Error ? signal.reason : new DOMException("This operation was aborted", "AbortError"));
-      };
-      const timer = setTimeout(() => {
-        if (!active) return;
-        const result = this.getDiagnostics(uri);
-        cleanup();
-        resolve(result);
-      }, timeoutMs);
-      signal?.addEventListener("abort", onAbort, { once: true });
-      this.#protocol.on("diagnostics", handler);
-    });
-  }
-
-  async hover(uri: string, position: LspPosition, timeoutMs?: number, signal?: AbortSignal): Promise<LspHover | null> {
-    return (await this.#request("textDocument/hover", {
-      textDocument: { uri },
-      position,
-    }, timeoutMs, signal)) as LspHover | null;
   }
 
   async definition(uri: string, position: LspPosition, timeoutMs?: number, signal?: AbortSignal): Promise<LspLocation[]> {
@@ -230,33 +150,51 @@ export class LspClient {
     );
   }
 
+  /** Document symbols, as a tree. A flat `SymbolInformation[]` reply is folded
+   *  into the same shape so callers only deal with one. */
+  async documentSymbols(uri: string, timeoutMs?: number, signal?: AbortSignal): Promise<LspDocumentSymbol[]> {
+    const result = await this.#request("textDocument/documentSymbol", {
+      textDocument: { uri },
+    }, timeoutMs, signal);
+    if (!Array.isArray(result)) return [];
+    return result.map(toDocumentSymbol).filter((symbol): symbol is LspDocumentSymbol => symbol !== undefined);
+  }
+
+  /**
+   * Rename a symbol, returning the edits grouped by absolute file path.
+   *
+   * The server decides the whole workspace edit; applying it is the caller's
+   * job. An empty record means the position holds nothing renamable.
+   */
   async rename(
     uri: string,
     position: LspPosition,
     newName: string,
     timeoutMs?: number,
     signal?: AbortSignal,
-  ): Promise<Record<string, { oldText: string; newText: string }>> {
+  ): Promise<Record<string, LspTextEdit[]>> {
     const result = (await this.#request("textDocument/rename", {
       textDocument: { uri },
       position,
       newName,
-    }, timeoutMs, signal)) as { changes?: Record<string, Array<{ range: LspRange; newText: string }>> } | null;
+    }, timeoutMs, signal)) as LspWorkspaceEdit | null;
 
-    const edits: Record<string, { oldText: string; newText: string }> = {};
-    if (!result?.changes) return edits;
+    const edits: Record<string, LspTextEdit[]> = {};
+    if (!result) return edits;
 
-    for (const [fileUri, changes] of Object.entries(result.changes)) {
-      const path = uriToPath(fileUri);
-      for (const change of changes) {
-        if (!edits[path]) {
-          edits[path] = { oldText: "", newText: "" };
-        }
-        edits[path].oldText += change.range
-          ? `[${change.range.start.line}:${change.range.start.character}-${change.range.end.line}:${change.range.end.character}]`
-          : "";
-        edits[path].newText += change.newText ?? "";
-      }
+    const buckets: Array<[string, LspTextEdit[]]> = [];
+    for (const [fileUri, list] of Object.entries(result.changes ?? {})) {
+      if (Array.isArray(list) && list.length > 0) buckets.push([fileUri, list]);
+    }
+    for (const change of result.documentChanges ?? []) {
+      const fileUri = change?.textDocument?.uri;
+      const list = change?.edits;
+      if (fileUri && Array.isArray(list) && list.length > 0) buckets.push([fileUri, list]);
+    }
+
+    for (const [fileUri, list] of buckets) {
+      const path = uriToFilePath(fileUri);
+      edits[path] = [...(edits[path] ?? []), ...list];
     }
     return edits;
   }
@@ -272,26 +210,40 @@ export class LspClient {
 
 // ─── Result normalization ────────────────────────────────────────────────
 
+function toDocumentSymbol(entry: unknown): LspDocumentSymbol | undefined {
+  if (!entry || typeof entry !== "object") return undefined;
+  const flat = entry as LspSymbolInformation & { location?: { uri?: string; range?: LspDocumentSymbol["range"] } };
+  if (flat.location?.uri) {
+    const range = flat.location.range;
+    if (!range) return undefined;
+    return { name: flat.name, kind: flat.kind, range, selectionRange: range };
+  }
+  const nested = entry as LspDocumentSymbol;
+  if (nested.range && typeof nested.name === "string") {
+    return {
+      name: nested.name,
+      kind: nested.kind,
+      range: nested.range,
+      selectionRange: nested.selectionRange ?? nested.range,
+      children: Array.isArray(nested.children)
+        ? nested.children.map(toDocumentSymbol).filter((child): child is LspDocumentSymbol => child !== undefined)
+        : undefined,
+    };
+  }
+  return undefined;
+}
+
 function normalizeLocations(result: unknown): LspLocation[] {
   if (!result) return [];
   const entries = Array.isArray(result) ? result : [result];
-  return entries.map((entry: any) => {
-    if ("uri" in entry && "range" in entry) return entry as LspLocation;
-    return {
-      uri: entry.targetUri,
-      range: entry.targetSelectionRange ?? entry.targetRange,
-    } as LspLocation;
-  });
-}
-
-function uriToPath(uri: string): string {
-  try {
-    return uri.startsWith("file:") ? new URL(uri).pathname : uri;
-  } catch {
-    return uri;
-  }
-}
-
-export function filePathToUri(filePath: string): string {
-  return pathToFileURL(filePath).href;
+  return entries
+    .map((entry: any) => {
+      if (!entry) return undefined;
+      if ("uri" in entry && "range" in entry) return entry as LspLocation;
+      return {
+        uri: entry.targetUri,
+        range: entry.targetSelectionRange ?? entry.targetRange,
+      } as LspLocation;
+    })
+    .filter((location): location is LspLocation => Boolean(location?.uri && location.range));
 }

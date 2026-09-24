@@ -3,7 +3,8 @@
  */
 import { readFile } from "node:fs/promises";
 import { resolve as resolvePath } from "node:path";
-import { LspClient, LspClientStartError, filePathToUri } from "./client.js";
+import { LspClient, LspClientStartError } from "./client.js";
+import { filePathToUri } from "./uri.js";
 import { createChildProcessEnv } from "./env.js";
 import {
   detectLanguage,
@@ -325,7 +326,9 @@ export function toLspToolError(
 }
 
 export function formatToolError(details: LspToolErrorDetail): string {
-  if (details.kind === "unsupported_language" || details.kind === "tool_timeout") return details.message;
+  if (details.kind === "unsupported_language" || details.kind === "tool_timeout" || details.kind === "invalid_position") {
+    return details.message;
+  }
   const lines = [
     details.language ? `${details.language} LSP unavailable for ${details.file}` : `LSP request failed for ${details.file}`,
     `Reason: ${details.message}`,

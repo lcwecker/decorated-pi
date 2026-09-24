@@ -1,7 +1,7 @@
 /**
  * LSP Extension — language server integration for Pi.
  *
- * Provides: lsp_diagnostics.
+ * Provides: lsp_definition, lsp_references, lsp_document_symbols, lsp_rename.
  *
  * Returns the manager so `index.ts` can hand it to `hooks/lsp.ts`, which owns
  * the session_shutdown cleanup. No hook is registered here.

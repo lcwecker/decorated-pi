@@ -5,7 +5,6 @@
  * correlation with timeouts, and server-to-client notifications.
  */
 import { spawn, ChildProcess } from "node:child_process";
-import { EventEmitter } from "node:events";
 
 export interface JsonRpcRequest {
   jsonrpc: "2.0";
@@ -40,7 +39,7 @@ interface PendingRequest {
   timer: NodeJS.Timeout;
 }
 
-export class LspProtocol extends EventEmitter {
+export class LspProtocol {
   #proc: ChildProcess | null = null;
   #buffer = Buffer.alloc(0);
   #nextId = 1;
@@ -216,6 +215,8 @@ export class LspProtocol extends EventEmitter {
     }
   }
 
+  /** Route a server message: settle a pending request, answer a server-to-client
+   *  request with null, and ignore notifications (nothing consumes one). */
   #handle(msg: Record<string, unknown>): void {
     // Response to our request
     if (msg.id != null) {
@@ -244,12 +245,6 @@ export class LspProtocol extends EventEmitter {
         const resp: JsonRpcResponse = { jsonrpc: "2.0", id: msg.id as number | string, result: null };
         this.#send(resp);
       }
-      return;
-    }
-
-    // Notification from server
-    if (msg.method === "textDocument/publishDiagnostics" && msg.params) {
-      this.emit("diagnostics", msg.params);
     }
   }
 }

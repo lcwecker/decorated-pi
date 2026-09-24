@@ -1,296 +1,132 @@
 /**
- * LSP Format Module — Unit Tests
+ * tools/lsp/format.ts — the formatters the tools actually run.
  *
- * Tests pure formatting functions from lsp/format.ts:
- * - format_diagnostics / filter_diagnostics
- * - format_hover
- * - format_locations
- * - to_lsp_tool_error / format_tool_error
- * - format_status_lines (basic)
+ * These are the single implementation: tools.ts imports the same functions, so
+ * a change here cannot drift away from production the way the old test-only
+ * `format.ts` copy did.
  */
-
-import { describe, it, expect } from "vitest";
+import { describe, expect, it } from "vitest";
 import {
-  format_diagnostics,
-  filter_diagnostics,
-  format_hover,
-  format_locations,
-  to_lsp_tool_error,
-  format_tool_error,
-  LspToolError,
-  type SeverityFilter,
-  type LspDiagnostic,
-  type LspHover,
-  type LspLocation,
+  applyTextEdits,
+  formatDocumentSymbols,
+  formatEditList,
+  formatLocations,
 } from "../tools/lsp/format.js";
+import type { LspDocumentSymbol, LspTextEdit } from "../tools/lsp/types.js";
 
-// ═══════════════════════════════════════════════════════════════════════════
-// Helper factories
-// ═══════════════════════════════════════════════════════════════════════════
-
-function makeDiagnostic(overrides: Partial<LspDiagnostic> = {}): LspDiagnostic {
-  return {
-    range: {
-      start: { line: 0, character: 0 },
-      end: { line: 0, character: 1 },
-    },
-    severity: 1,
-    message: "test error",
-    ...overrides,
-  };
+function range(sl: number, sc: number, el: number, ec: number) {
+  return { start: { line: sl, character: sc }, end: { line: el, character: ec } };
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// filter_diagnostics
-// ═══════════════════════════════════════════════════════════════════════════
-
-describe("filter_diagnostics", () => {
-  const diags: LspDiagnostic[] = [
-    makeDiagnostic({ severity: 1, message: "error" }),
-    makeDiagnostic({ severity: 2, message: "warning" }),
-    makeDiagnostic({ severity: 3, message: "info" }),
-    makeDiagnostic({ severity: 4, message: "hint" }),
-  ];
-
-  it("returns all when no filter", () => {
-    expect(filter_diagnostics(diags)).toHaveLength(4);
+describe("formatLocations", () => {
+  it("returns the empty message when there is nothing", () => {
+    expect(formatLocations([], "none")).toBe("none");
   });
 
-  it("returns all when empty filter", () => {
-    expect(filter_diagnostics(diags, [])).toHaveLength(4);
+  it("prints one-based path:line:character per location", () => {
+    const out = formatLocations(
+      [
+        { uri: "file:///ws/a.ts", range: range(2, 4, 2, 8) },
+        { uri: "file:///ws/b.ts", range: range(0, 0, 0, 1) },
+      ],
+      "none",
+    );
+    expect(out).toBe("/ws/a.ts:3:5\n/ws/b.ts:1:1");
   });
 
-  it("error filter shows only errors", () => {
-    const filtered = filter_diagnostics(diags, ["error" as SeverityFilter]);
-    expect(filtered).toHaveLength(1);
-    expect(filtered[0]!.message).toBe("error");
-  });
-
-  it("warning filter shows errors + warnings", () => {
-    const filtered = filter_diagnostics(diags, ["warning" as SeverityFilter]);
-    expect(filtered).toHaveLength(2);
-  });
-
-  it("info filter shows errors + warnings + info", () => {
-    const filtered = filter_diagnostics(diags, ["info" as SeverityFilter]);
-    expect(filtered).toHaveLength(3);
-  });
-
-  it("hint filter shows all", () => {
-    const filtered = filter_diagnostics(diags, ["hint" as SeverityFilter]);
-    expect(filtered).toHaveLength(4);
-  });
-
-  it("multiple severity filters use minimum", () => {
-    // ["error", "warning"] → min = 1 (error) → only errors
-    const filtered = filter_diagnostics(diags, ["error" as SeverityFilter, "warning" as SeverityFilter]);
-    expect(filtered).toHaveLength(1);
+  it("shows a non-file URI verbatim", () => {
+    // `untitled:` and `jdt://` have no path; they must not be mangled or dropped.
+    const out = formatLocations([{ uri: "untitled:Untitled-1", range: range(0, 0, 0, 1) }], "none");
+    expect(out).toBe("untitled:Untitled-1:1:1");
   });
 });
 
-// ═══════════════════════════════════════════════════════════════════════════
-// format_diagnostics
-// ═══════════════════════════════════════════════════════════════════════════
-
-describe("format_diagnostics", () => {
-  it("formats no diagnostics", () => {
-    expect(format_diagnostics("test.ts", [])).toBe("test.ts: no diagnostics");
+describe("formatDocumentSymbols", () => {
+  it("says so when the file is empty", () => {
+    expect(formatDocumentSymbols("a.ts", [])).toBe("a.ts: no symbols");
   });
 
-  it("formats single diagnostic", () => {
-    const diag = makeDiagnostic({
-      range: { start: { line: 4, character: 10 }, end: { line: 4, character: 15 } },
-      severity: 1,
-      message: "Unexpected token",
-    });
-    const result = format_diagnostics("test.ts", [diag]);
-    expect(result).toContain("test.ts: 1 diagnostic(s)");
-    expect(result).toContain("5:11"); // line+1, char+1
-    expect(result).toContain("error");
-    expect(result).toContain("Unexpected token");
-  });
-
-  it("formats diagnostic with source and code", () => {
-    const diag = makeDiagnostic({
-      source: "typescript",
-      code: 2307,
-      message: "Cannot find module",
-    });
-    const result = format_diagnostics("test.ts", [diag]);
-    expect(result).toContain("[typescript]");
-    expect(result).toContain("(2307)");
-  });
-
-  it("formats multiple diagnostics", () => {
-    const diags = [
-      makeDiagnostic({ severity: 1, message: "err1" }),
-      makeDiagnostic({ severity: 2, message: "warn1" }),
+  it("indents children and labels the kind", () => {
+    const symbols: LspDocumentSymbol[] = [
+      {
+        name: "Greeter",
+        kind: 5,
+        range: range(0, 0, 9, 1),
+        selectionRange: range(0, 6, 0, 13),
+        children: [{ name: "greet", kind: 6, range: range(2, 2, 4, 3), selectionRange: range(2, 8, 2, 13) }],
+      },
     ];
-    const result = format_diagnostics("test.ts", diags);
-    expect(result).toContain("2 diagnostic(s)");
-    expect(result).toContain("err1");
-    expect(result).toContain("warn1");
+    expect(formatDocumentSymbols("a.ts", symbols)).toBe("Greeter (class) 1:7\n  greet (method) 3:9");
   });
 
-  it("applies severity filter", () => {
-    const diags = [
-      makeDiagnostic({ severity: 1, message: "err" }),
-      makeDiagnostic({ severity: 3, message: "info" }),
+  it("falls back for an unknown kind", () => {
+    const symbols: LspDocumentSymbol[] = [
+      { name: "odd", kind: 99, range: range(0, 0, 0, 3), selectionRange: range(0, 0, 0, 3) },
     ];
-    const result = format_diagnostics("test.ts", diags, ["error" as SeverityFilter]);
-    expect(result).toContain("1 diagnostic(s)");
-    expect(result).toContain("err");
-    expect(result).not.toContain("info");
+    expect(formatDocumentSymbols("a.ts", symbols)).toBe("odd (kind 99) 1:1");
   });
 });
 
-// ═══════════════════════════════════════════════════════════════════════════
-// format_hover
-// ═══════════════════════════════════════════════════════════════════════════
-
-describe("format_hover", () => {
-  it("returns no hover info for null", () => {
-    expect(format_hover(null)).toBe("No hover info.");
+describe("applyTextEdits", () => {
+  it("replaces within a line", () => {
+    expect(applyTextEdits("hello world", [{ range: range(0, 6, 0, 11), newText: "there" }])).toBe("hello there");
   });
 
-  it("extracts string contents", () => {
-    const hover: LspHover = { contents: "type Foo = string" };
-    expect(format_hover(hover)).toBe("type Foo = string");
-  });
-
-  it("extracts value from MarkedString object", () => {
-    const hover: LspHover = { contents: { language: "typescript", value: "const x: number" } };
-    expect(format_hover(hover)).toBe("const x: number");
-  });
-
-  it("joins array contents", () => {
-    const hover: LspHover = { contents: ["line1", { language: "ts", value: "line2" }] };
-    const result = format_hover(hover);
-    expect(result).toContain("line1");
-    expect(result).toContain("line2");
-  });
-
-  it("returns no hover info for empty contents", () => {
-    const hover: LspHover = { contents: "" };
-    expect(format_hover(hover)).toBe("No hover info.");
-  });
-
-  it("returns no hover info for empty array", () => {
-    const hover: LspHover = { contents: ["", ""] };
-    expect(format_hover(hover)).toBe("No hover info.");
-  });
-});
-
-// ═══════════════════════════════════════════════════════════════════════════
-// format_locations
-// ═══════════════════════════════════════════════════════════════════════════
-
-describe("format_locations", () => {
-  it("returns empty message for no locations", () => {
-    expect(format_locations([], "No results")).toBe("No results");
-  });
-
-  it("formats single location", () => {
-    const loc: LspLocation = {
-      uri: "file:///home/user/project/src/index.ts",
-      range: { start: { line: 9, character: 4 }, end: { line: 9, character: 10 } },
-    };
-    const result = format_locations([loc], "");
-    expect(result).toContain("index.ts");
-    expect(result).toContain("10:5"); // line+1, char+1
-  });
-
-  it("formats multiple locations", () => {
-    const locs: LspLocation[] = [
-      { uri: "file:///a.ts", range: { start: { line: 0, character: 0 }, end: { line: 0, character: 1 } } },
-      { uri: "file:///b.ts", range: { start: { line: 5, character: 2 }, end: { line: 5, character: 3 } } },
+  it("applies several edits to one line from the last backwards", () => {
+    // Applied front-to-back, the second edit's offsets would already have moved.
+    const edits: LspTextEdit[] = [
+      { range: range(0, 0, 0, 3), newText: "baz" },
+      { range: range(0, 4, 0, 7), newText: "qux" },
     ];
-    const result = format_locations(locs, "");
-    expect(result).toContain("a.ts");
-    expect(result).toContain("b.ts");
-    expect(result.split("\n").length).toBe(2);
+    expect(applyTextEdits("foo(bar)", edits)).toBe("baz(qux)");
   });
 
-  it("handles non-file URIs", () => {
-    const loc: LspLocation = {
-      uri: "custom-scheme://something",
-      range: { start: { line: 0, character: 0 }, end: { line: 0, character: 1 } },
-    };
-    const result = format_locations([loc], "");
-    expect(result).toContain("custom-scheme://something");
-  });
-});
-
-// ═══════════════════════════════════════════════════════════════════════════
-// ═══════════════════════════════════════════════════════════════════════════
-// to_lsp_tool_error / format_tool_error
-// ═══════════════════════════════════════════════════════════════════════════
-
-describe("to_lsp_tool_error", () => {
-  it("passes through LspToolError", () => {
-    const err = new LspToolError({
-      kind: "unsupported_language",
-      message: "Language foo is not supported",
-    });
-    const details = to_lsp_tool_error("test.ts", "foo", undefined, "fools", undefined, err);
-    expect(details.kind).toBe("unsupported_language");
+  it("splits a multi-line replacement over new lines", () => {
+    expect(applyTextEdits("a\nb\nc", [{ range: range(1, 0, 1, 1), newText: "B1\nB2" }])).toBe("a\nB1\nB2\nc");
   });
 
-  it("handles generic ENOENT error", () => {
-    const err: any = new Error("spawn ENOENT");
-    err.code = "ENOENT";
-    const details = to_lsp_tool_error("test.ts", "typescript", "/workspace", "tsserver", "npm i -g typescript", err);
-    // Generic errors get tool_execution_failed, not server_start_failed
-    expect(details.kind).toBe("tool_execution_failed");
-    expect(details.message).toBe("spawn ENOENT");
-    expect(details.code).toBe("ENOENT");
-    expect(details.install_hint).toBe("npm i -g typescript");
+  it("joins across a range that spans lines", () => {
+    expect(applyTextEdits("abc\ndef", [{ range: range(0, 1, 1, 2), newText: "X" }])).toBe("aXf");
   });
 
-  it("handles generic errors", () => {
-    const details = to_lsp_tool_error("test.ts", "python", undefined, "pyright-langserver", undefined, new Error("crashed"));
-    expect(details.kind).toBe("tool_execution_failed");
-    expect(details.message).toBe("crashed");
+  it("inserts when the range is empty", () => {
+    expect(applyTextEdits("ab", [{ range: range(0, 1, 0, 1), newText: "-" }])).toBe("a-b");
   });
 
-  it("handles non-Error throws", () => {
-    const details = to_lsp_tool_error("test.ts", "go", undefined, "gopls", undefined, "string error");
-    expect(details.message).toBe("string error");
+  it("throws on an edit past the end of the file rather than dropping it", () => {
+    // A dropped edit would mean a silently half-applied rename on disk.
+    expect(() => applyTextEdits("ab", [{ range: range(9, 0, 9, 1), newText: "x" }])).toThrow(/outside/);
+  });
+
+  it("throws on a character past the end of its line", () => {
+    expect(() => applyTextEdits("ab\ncd", [{ range: range(0, 0, 0, 9), newText: "x" }])).toThrow(/outside/);
+  });
+
+  it("keeps CRLF documents on CRLF when the replacement spans lines", () => {
+    const out = applyTextEdits("ab\r\ncd\r\n", [{ range: range(1, 0, 1, 2), newText: "X\nY" }]);
+    expect(out).toBe("ab\r\nX\r\nY\r\n");
+  });
+
+  it("leaves CRLF untouched for a single-line replacement", () => {
+    expect(applyTextEdits("ab\r\ncd\r\n", [{ range: range(1, 0, 1, 2), newText: "Z" }])).toBe("ab\r\nZ\r\n");
   });
 });
 
-describe("format_tool_error", () => {
-  it("formats unsupported_language", () => {
-    const result = format_tool_error({
-      kind: "unsupported_language",
-      message: "Language xyz is not supported",
+describe("formatEditList", () => {
+  it("groups edits by file with their target positions", () => {
+    const out = formatEditList({
+      "/ws/a.ts": [{ range: range(0, 6, 0, 11), newText: "renamed" }],
+      "/ws/b.ts": [
+        { range: range(2, 0, 2, 5), newText: "renamed" },
+        { range: range(4, 0, 4, 5), newText: "renamed" },
+      ],
     });
-    expect(result).toBe("Language xyz is not supported");
-  });
-
-  it("formats server_start_failed with all fields", () => {
-    const result = format_tool_error({
-      kind: "server_start_failed",
-      file: "test.ts",
-      language: "typescript",
-      workspace_root: "/project",
-      command: "tsserver",
-      install_hint: "npm i -g typescript",
-      message: "command not found",
-    });
-    expect(result).toContain("typescript LSP unavailable for test.ts");
-    expect(result).toContain("command not found");
-    expect(result).toContain("tsserver");
-    expect(result).toContain("/project");
-    expect(result).toContain("npm i -g typescript");
-  });
-
-  it("formats error without language", () => {
-    const result = format_tool_error({
-      kind: "tool_execution_failed",
-      file: "test.ts",
-      message: "something broke",
-    });
-    expect(result).toContain("LSP request failed for test.ts");
+    expect(out).toBe([
+      "/ws/a.ts: 1 edit(s)",
+      '  1:7 → "renamed"',
+      "/ws/b.ts: 2 edit(s)",
+      '  3:1 → "renamed"',
+      '  5:1 → "renamed"',
+    ].join("\n"));
   });
 });

@@ -49,7 +49,7 @@ export interface ModuleSettings {
     patchOverrideEdit?: boolean;
     /** Interactive ask tool for user clarification (blocks loop until answered). */
     ask?: boolean;
-    /** Language server diagnostics, hover, definition, references, symbols, rename. */
+    /** Language server navigation: definition, references, document symbols, rename. */
     lsp?: boolean;
     /** MCP client with builtin servers (context7, codegraph). */
     mcp?: boolean;

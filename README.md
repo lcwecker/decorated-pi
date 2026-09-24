@@ -61,9 +61,12 @@ LLM-callable tools and workflow upgrades with better UX and fewer wasted turns.
 
 #### LSP support
 
-Covers what codegraph can't: real-time compiler and lint errors.
+Covers what codegraph can't: the compiler's own answer to "where is this defined", "who references it", and "what does renaming it touch".
 
-- **`lsp_diagnostics`** — file diagnostics with severity filtering
+- **`lsp_definition`** — where a symbol is defined
+- **`lsp_references`** — every reference to a symbol
+- **`lsp_document_symbols`** — a file's symbol outline, to find a position
+- **`lsp_rename`** — the exact workspace edits for a rename, applied to disk (or previewed)
 
 Supported languages: c/cpp, go, java, lua, json, python, ruby, rust, svelte, typescript. TypeScript and JSON support are bundled; other languages require their corresponding language-server binaries.
 

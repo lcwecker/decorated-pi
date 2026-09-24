@@ -1,123 +1,105 @@
 /**
- * LSP Output Formatting — test-compatible standalone module.
+ * LSP result formatting — the one implementation, imported by tools.ts.
  *
- * Core formatting logic duplicated here so tests can import directly.
- * Runtime tools.ts has its own inline copies.
+ * Pure functions over LSP payloads: no client, no manager, no I/O, so the
+ * tests exercise exactly the code the tools run.
  */
-import { fileURLToPath } from "node:url";
-import type { LspDiagnostic, LspHover, LspLocation } from "./types.js";
-import { LspClientStartError } from "./client.js";
+import type { LspDocumentSymbol, LspLocation, LspTextEdit } from "./types.js";
+import { uriToFilePath } from "./uri.js";
 
-export type { LspDiagnostic, LspHover, LspLocation } from "./types.js";
-export { LspClientStartError } from "./client.js";
+const SYMBOL_KINDS: Record<number, string> = {
+  1: "file", 2: "module", 3: "namespace", 4: "package", 5: "class",
+  6: "method", 7: "property", 8: "field", 9: "constructor", 10: "enum",
+  11: "interface", 12: "function", 13: "variable", 14: "constant", 15: "string",
+  16: "number", 17: "boolean", 18: "array", 19: "object", 20: "key",
+  21: "null", 22: "enum member", 23: "struct", 24: "event", 25: "operator",
+  26: "type parameter",
+};
 
-// ─── Error formatting ────────────────────────────────────────────────────
-
-export class LspToolError extends Error {
-  constructor(public readonly details: LspToolErrorDetail) {
-    super(details.message);
-    this.name = "LspToolError";
-  }
-}
-
-export interface LspToolErrorDetail {
-  kind: string;
-  file?: string;
-  language?: string;
-  workspace_root?: string;
-  command?: string;
-  install_hint?: string;
-  message: string;
-  code?: string;
-}
-
-export function to_lsp_tool_error(
-  file: string, language: string, workspaceRoot: string | undefined,
-  command: string, installHint: string | undefined, error: unknown,
-): LspToolErrorDetail {
-  if (error instanceof LspToolError) return error.details;
-  if (error instanceof LspClientStartError) {
-    return {
-      kind: "server_start_failed", file, language, workspace_root: workspaceRoot,
-      command, install_hint: installHint, code: error.code,
-      message: error.code === "ENOENT" ? `command "${command}" not found` : error.message,
-    };
-  }
-  const err = error as Record<string, unknown> | undefined;
-  return {
-    kind: "tool_execution_failed", file, language, workspace_root: workspaceRoot,
-    command, install_hint: installHint,
-    message: error instanceof Error ? error.message : String(error),
-    code: err?.code as string | undefined,
-  };
-}
-
-export function format_tool_error(details: LspToolErrorDetail): string {
-  if (details.kind === "unsupported_language") return details.message;
-  const lines = [
-    details.language ? `${details.language} LSP unavailable for ${details.file}` : `LSP request failed for ${details.file}`,
-    `Reason: ${details.message}`,
-  ];
-  if (details.command) lines.push(`Command: ${details.command}`);
-  if (details.workspace_root) lines.push(`Workspace: ${details.workspace_root}`);
-  if (details.install_hint) lines.push(`Hint: ${details.install_hint}`);
-  return lines.join("\n");
-}
-
-// ─── Severity ─────────────────────────────────────────────────────────────
-
-export type SeverityFilter = "error" | "warning" | "info" | "hint";
-const SEVERITY_MAP: Record<SeverityFilter, number> = { error: 1, warning: 2, info: 3, hint: 4 };
-
-function severityLabel(s: number): string {
-  return s === 1 ? "error" : s === 2 ? "warning" : s === 3 ? "info" : "hint";
-}
-
-export function filter_diagnostics(diagnostics: LspDiagnostic[], severities?: SeverityFilter[]): LspDiagnostic[] {
-  if (!severities?.length) return diagnostics;
-  const min = Math.min(...severities.map((s) => SEVERITY_MAP[s]));
-  return diagnostics.filter((d) => (d.severity ?? 1) <= min);
-}
-
-export function format_diagnostics(file: string, diagnostics: LspDiagnostic[], severities?: SeverityFilter[]): string {
-  const filtered = filter_diagnostics(diagnostics, severities);
-  if (filtered.length === 0) return `${file}: no diagnostics`;
-  const lines = [`${file}: ${filtered.length} diagnostic(s)`];
-  for (const d of filtered) {
-    const pos = `${d.range.start.line + 1}:${d.range.start.character + 1}`;
-    const source = d.source ? ` [${d.source}]` : "";
-    const code = d.code != null ? ` (${d.code})` : "";
-    lines.push(`  ${pos} ${severityLabel(d.severity ?? 1)}${source}${code}: ${d.message}`);
-  }
-  return lines.join("\n");
-}
-
-// ─── Hover ────────────────────────────────────────────────────────────────
-
-export function format_hover(hover: LspHover | null): string {
-  if (!hover) return "No hover info.";
-  const extract = (item: unknown): string => typeof item === "string" ? item : ((item as any)?.value ?? "");
-  if (Array.isArray(hover.contents)) return hover.contents.map(extract).join("\n\n").trim() || "No hover info.";
-  return extract(hover.contents).trim() || "No hover info.";
-}
-
-// ─── Locations ────────────────────────────────────────────────────────────
-
-export function format_locations(locations: LspLocation[], emptyMessage: string): string {
+/** One `path:line:character` per location, one-based like a reader sees it. */
+export function formatLocations(locations: LspLocation[], emptyMessage: string): string {
   if (locations.length === 0) return emptyMessage;
-  return locations.map((loc) => `${fileUrlToPath(loc.uri)}:${loc.range.start.line + 1}:${loc.range.start.character + 1}`).join("\n");
+  return locations
+    .map((loc) => `${uriToFilePath(loc.uri)}:${loc.range.start.line + 1}:${loc.range.start.character + 1}`)
+    .join("\n");
 }
 
-function fileUrlToPath(uri: string): string {
-  try { return uri.startsWith("file:") ? fileURLToPath(uri) : uri; } catch { return uri; }
+/** Indented outline. `children` from a hierarchical reply become nesting; a
+ *  flat reply is a single level. */
+export function formatDocumentSymbols(file: string, symbols: LspDocumentSymbol[]): string {
+  if (symbols.length === 0) return `${file}: no symbols`;
+  const lines: string[] = [];
+  const walk = (list: LspDocumentSymbol[], depth: number) => {
+    for (const symbol of list) {
+      const kind = SYMBOL_KINDS[symbol.kind] ?? `kind ${symbol.kind}`;
+      const pos = `${symbol.selectionRange.start.line + 1}:${symbol.selectionRange.start.character + 1}`;
+      lines.push(`${"  ".repeat(depth)}${symbol.name} (${kind}) ${pos}`);
+      if (symbol.children?.length) walk(symbol.children, depth + 1);
+    }
+  };
+  walk(symbols, 0);
+  return lines.join("\n");
 }
 
-// ─── Collapse (for tools test) ────────────────────────────────────────────
-
-export function collapse_lsp_text(text: string, maxLines = 20) {
-  const lines = text.split("\n").reverse().reduce((acc, l) => l === "" && acc.length === 0 ? acc : [l, ...acc], [] as string[]);
-  const totalLines = lines.length;
-  return { totalLines, displayLines: lines.slice(0, maxLines), remainingLines: Math.max(0, totalLines - maxLines) };
+/**
+ * Apply LSP text edits to one file's contents.
+ *
+ * Edits are applied from the last position backwards: every offset before an
+ * edit stays valid, so several edits in one file land where the server meant
+ * them to. `character` is a UTF-16 offset, which is exactly a JS string index.
+ *
+ * A range outside the file throws instead of being dropped: a rename is written
+ * to disk, so a range the server derived from a different snapshot must stop the
+ * write rather than leave one edit silently unapplied. CRLF documents are
+ * normalized for the edit and converted back, so a multi-line replacement does
+ * not introduce mixed terminators.
+ */
+export function applyTextEdits(text: string, edits: LspTextEdit[]): string {
+  const crlf = text.includes("\r\n");
+  const source = crlf ? text.replace(/\r\n/g, "\n") : text;
+  let lines = source.split("\n");
+  const ordered = [...edits].sort(
+    (a, b) =>
+      b.range.start.line - a.range.start.line ||
+      b.range.start.character - a.range.start.character,
+  );
+  for (const edit of ordered) {
+    const { start, end } = edit.range;
+    const startLine = lines[start.line];
+    const endLine = lines[end.line];
+    const inRange =
+      startLine !== undefined &&
+      endLine !== undefined &&
+      start.line >= 0 &&
+      end.line >= start.line &&
+      start.character >= 0 &&
+      start.character <= startLine.length &&
+      end.character >= 0 &&
+      end.character <= endLine.length;
+    if (!inRange) {
+      const at = (p: { line: number; character: number }) => `${p.line + 1}:${p.character + 1}`;
+      throw new RangeError(`edit range ${at(start)}–${at(end)} is outside ${source.split("\n").length} line(s)`);
+    }
+    const before = lines.slice(0, start.line);
+    const after = lines.slice(end.line + 1);
+    const head = startLine.slice(0, start.character);
+    const tail = endLine.slice(end.character);
+    const newText = crlf ? edit.newText.replace(/\r?\n/g, "\n") : edit.newText;
+    lines = [...before, ...(head + newText + tail).split("\n"), ...after];
+  }
+  const result = lines.join("\n");
+  return crlf ? result.replace(/\n/g, "\r\n") : result;
 }
 
-export const __lspFormatTest = { collapse_lsp_text: collapse_lsp_text };
+/** Every pending edit, grouped by file — the `preview: true` reply. */
+export function formatEditList(edits: Record<string, LspTextEdit[]>): string {
+  const lines: string[] = [];
+  for (const [file, list] of Object.entries(edits)) {
+    lines.push(`${file}: ${list.length} edit(s)`);
+    for (const edit of list) {
+      const pos = `${edit.range.start.line + 1}:${edit.range.start.character + 1}`;
+      lines.push(`  ${pos} → ${JSON.stringify(edit.newText)}`);
+    }
+  }
+  return lines.join("\n");
+}
