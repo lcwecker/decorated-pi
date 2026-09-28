@@ -38,7 +38,7 @@ const MODULE_LABELS: Record<ModuleName, string> = {
 };
 
 const MODULE_DESCS: Record<ModuleName, string> = {
-  patchOverrideEdit: "Replace Pi native edit/write with patch tool (targeted string replacement)",
+  patchOverrideEdit: "Replace Pi native edit with patch tool (targeted string replacement)",
   lsp: "Language server navigation: definition, references, document symbols, rename",
   mcp: "MCP client with builtin servers (context7, codegraph)",
   websearch: "Keyless web search over AnySearch, Exa and Parallel, with automatic fallback",

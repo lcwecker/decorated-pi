@@ -45,7 +45,7 @@ export interface McpServerEntry {
 
 export interface ModuleSettings {
   tools?: {
-    /** Replace Pi native edit/write with the patch tool. */
+    /** Replace Pi native edit with the patch tool; native write stays active. */
     patchOverrideEdit?: boolean;
     /** Interactive ask tool for user clarification (blocks loop until answered). */
     ask?: boolean;
