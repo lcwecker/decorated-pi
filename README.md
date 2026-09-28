@@ -25,7 +25,7 @@ Multiple layers of token savings that compound across every session.
 **Auxiliary Models** — offloads heavy-but-dumb tasks to cheaper models so your primary model only pays for the hard work:
 
 - **Image Read Fallback** — detects image type via magic bytes, calls a configured vision-capable model, and injects the analysis text, so your main model never touches image tokens
-- **Compact Model** — handles context compaction with a smaller model instead of burning main-model capacity
+- **Compact Model** — handles context compaction with a smaller model instead of burning main-model capacity, and carries the task on after an automatic compaction so the run does not stop early (a manual `/compact` does not resume)
 
 > Configured via `/dp-model`.
 

@@ -1,5 +1,10 @@
-import { describe, expect, it, vi } from "vitest";
-import { compactionModule } from "../hooks/compaction.js";
+import { describe, expect, it, vi, beforeEach } from "vitest";
+import {
+  compactionModule,
+  resetAwaitingResume,
+  MAX_CONSECUTIVE_RESUMES,
+  RESUME_CUSTOM_TYPE,
+} from "../hooks/compaction.js";
 
 vi.mock("../settings.js", () => ({
   getCompactModelKey: vi.fn(() => "review/compact-model"),
@@ -128,5 +133,138 @@ describe("compaction session_before_compact", () => {
       modelRegistry: { find: () => undefined, complete: async () => { throw new Error("must not be called"); } },
     };
     expect(await handler(makeEvent(), ctx)).toBeUndefined();
+  });
+});
+
+// ─── Auto-resume ──────────────────────────────────────────────────────────
+//
+// Pi continues on its own after overflow recovery and after a threshold
+// compaction that lands mid-run. The settle boundary covers the remaining
+// case: an auto-compaction that finished the run.
+
+function makeResumeCtx(sessionId = "session-a") {
+  return { sessionManager: { getSessionId: () => sessionId } };
+}
+
+const autoResume = {
+  input: (ctx: any = makeResumeCtx()) => (compactionModule.hooks.input![0] as any)({}, ctx, {}),
+  agentStart: (ctx: any = makeResumeCtx()) => (compactionModule.hooks.agent_start![0] as any)({}, ctx, {}),
+  assistantMessageEnd: (ctx: any = makeResumeCtx()) =>
+    (compactionModule.hooks.message_end![0] as any)({ message: { role: "assistant" } }, ctx, {}),
+  compacted: (reason: string, willRetry = false, ctx: any = makeResumeCtx()) =>
+    (compactionModule.hooks.session_compact![0] as any)({ reason, willRetry }, ctx, {}),
+  settle: (overrides: Record<string, any> = {}, ctx: any = makeResumeCtx()) =>
+    (compactionModule.hooks.agent_before_settle![0] as any)(
+      { outcome: "completed", entries: [], continue: false, ...overrides },
+      ctx,
+      {},
+    ),
+};
+
+describe("compaction auto-resume", () => {
+  beforeEach(() => {
+    resetAwaitingResume();
+  });
+
+  it("resumes once after an auto-compaction that ended the run", async () => {
+    await autoResume.compacted("threshold");
+
+    const result = await autoResume.settle();
+
+    expect(result.continue).toBe(true);
+    expect(result.entries).toEqual([
+      {
+        type: "custom_message",
+        customType: RESUME_CUSTOM_TYPE,
+        content: expect.stringContaining("auto-compacted"),
+        display: false,
+      },
+    ]);
+    // Consumed: the next settle boundary must stay quiet.
+    expect(await autoResume.settle()).toBeUndefined();
+  });
+
+  it("never resumes after a manual /compact", async () => {
+    await autoResume.compacted("manual");
+    expect(await autoResume.settle()).toBeUndefined();
+  });
+
+  it("stays quiet when pi retries the aborted turn itself", async () => {
+    // Overflow recovery with willRetry: pi calls agent.continue(), so a resume
+    // of ours would add a second turn.
+    await autoResume.compacted("overflow", true);
+    expect(await autoResume.settle()).toBeUndefined();
+  });
+
+  it("stays quiet once pi's own overflow retry starts a run", async () => {
+    await autoResume.compacted("overflow");
+    await autoResume.agentStart();
+    expect(await autoResume.settle()).toBeUndefined();
+  });
+
+  it("stays quiet when a mid-run compaction is followed by an assistant message", async () => {
+    await autoResume.compacted("threshold");
+    await autoResume.assistantMessageEnd();
+    expect(await autoResume.settle()).toBeUndefined();
+  });
+
+  it("leaves errored and aborted runs to pi", async () => {
+    await autoResume.compacted("threshold");
+    expect(await autoResume.settle({ outcome: "error" })).toBeUndefined();
+
+    await autoResume.compacted("threshold");
+    expect(await autoResume.settle({ outcome: "aborted" })).toBeUndefined();
+
+    // Both settles consumed the request, so a following completed run is not
+    // resumed out of a stale pending flag.
+    expect(await autoResume.settle()).toBeUndefined();
+  });
+
+  it("caps back-to-back resumes until the user submits input again", async () => {
+    for (let i = 0; i < MAX_CONSECUTIVE_RESUMES; i++) {
+      await autoResume.compacted("threshold");
+      expect((await autoResume.settle()).continue).toBe(true);
+    }
+
+    await autoResume.compacted("threshold");
+    expect(await autoResume.settle()).toBeUndefined();
+
+    // A user turn starts a fresh budget.
+    await autoResume.input();
+    await autoResume.compacted("threshold");
+    expect((await autoResume.settle()).continue).toBe(true);
+  });
+
+  it("keeps resume state per session", async () => {
+    const a = makeResumeCtx("session-a");
+    const b = makeResumeCtx("session-b");
+
+    await autoResume.compacted("threshold", false, a);
+    // Session B finishing a run must not consume session A's resume.
+    await autoResume.agentStart(b);
+    await autoResume.settle({}, b);
+
+    expect((await autoResume.settle({}, a)).continue).toBe(true);
+  });
+
+  it("appends its entry to entries proposed by other handlers", async () => {
+    await autoResume.compacted("threshold");
+    const proposed = [{ type: "custom", customType: "other", data: { a: 1 } }];
+
+    const result = await autoResume.settle({ entries: proposed, continue: true });
+
+    expect(result.entries[0]).toEqual(proposed[0]);
+    expect(result.entries).toHaveLength(2);
+    expect(result.continue).toBe(true);
+  });
+
+  it("proposes nothing when it has no resume to make", async () => {
+    const proposed = [{ type: "custom", customType: "other", data: { a: 1 } }];
+    expect(await autoResume.settle({ entries: proposed, continue: true })).toBeUndefined();
+  });
+
+  it("message_end leaves the message untouched for later handlers", async () => {
+    const handler = compactionModule.hooks.message_end![0] as any;
+    expect(await handler({ message: { role: "assistant" } }, makeResumeCtx(), {})).toBeUndefined();
   });
 });

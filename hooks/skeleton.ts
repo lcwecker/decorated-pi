@@ -23,6 +23,7 @@ export type HookEvent =
   | "before_agent_start"
   | "agent_start"
   | "agent_end"
+  | "agent_before_settle"
   | "context"
   | "input"
   | "tool_call"
@@ -60,6 +61,28 @@ export type ResultHandler<E extends HookEvent> = (
   pi: ExtensionAPI,
 ) => any | Promise<any>;
 
+/** Boundary: pi dispatches `agent_before_settle` through
+ *  `ExtensionRunner.emitBoundary`, where each handler sees the entries and
+ *  `continue` accumulated so far and may replace either field. `continue: true`
+ *  makes pi run one more provider request. The skeleton mirrors that
+ *  accumulation so the last value set for a field wins.
+ *
+ *  Two differences from pi's own dispatch: pi rebuilds the context preview
+ *  between handlers, while the skeleton sends every module through one
+ *  `pi.on`, so `event.context` is the preview built before the decorated-pi
+ *  modules ran. And registering any handler here disables pi's `hasHandlers`
+ *  fast path, so every run end builds the projection. */
+export interface BoundaryResult {
+  entries?: any[];
+  continue?: boolean;
+}
+
+export type BoundaryHandler<E extends HookEvent> = (
+  event: any,
+  ctx: ExtensionContext,
+  pi: ExtensionAPI,
+) => BoundaryResult | undefined | Promise<BoundaryResult | undefined>;
+
 /** Paths a handler contributes to the resource scan. Pi core concatenates
  *  these across every extension, so the skeleton concatenates them across
  *  every registered module. */
@@ -88,6 +111,7 @@ export interface Module {
     before_agent_start?: ComposeHandler<"before_agent_start">[];
     agent_start?: ParallelHandler<"agent_start">[];
     agent_end?: ParallelHandler<"agent_end">[];
+    agent_before_settle?: BoundaryHandler<"agent_before_settle">[];
     context?: ComposeHandler<"context">[];
     input?: ParallelHandler<"input">[];
     tool_call?: ComposeHandler<"tool_call">[];
@@ -144,6 +168,13 @@ const COMPOSE_EVENTS = new Set<HookEvent>([
  *  default compaction. */
 const RESULT_EVENTS = new Set<HookEvent>([
   "session_before_compact",
+]);
+
+/** Events pi dispatches through `emitBoundary`: handlers run in order, each
+ *  seeing the accumulated `entries` / `continue`, and the last value set for
+ *  either field wins. */
+const BOUNDARY_EVENTS = new Set<HookEvent>([
+  "agent_before_settle",
 ]);
 
 /** Events whose per-handler results are concatenated field-wise instead of
@@ -228,6 +259,27 @@ export function createSkeleton(): Skeleton {
               }
             }
             return Object.keys(merged).length > 0 ? merged : undefined;
+          });
+        } else if (BOUNDARY_EVENTS.has(event)) {
+          pi.on(event as any, async (event: any, ctx: ExtensionContext) => {
+            // Pi hands the accumulated boundary state in with the event; a later
+            // handler's return value replaces the field it sets.
+            let entries: any[] = Array.isArray(event?.entries) ? event.entries : [];
+            let shouldContinue = event?.continue === true;
+            let changed = false;
+            for (const { handler } of handlers) {
+              const result = await handler({ ...event, entries, continue: shouldContinue }, ctx, pi);
+              if (!result) continue;
+              if (result.entries !== undefined) {
+                entries = result.entries;
+                changed = true;
+              }
+              if (result.continue !== undefined) {
+                shouldContinue = result.continue;
+                changed = true;
+              }
+            }
+            return changed ? { entries, continue: shouldContinue } : undefined;
           });
         } else if (RESULT_EVENTS.has(event)) {
           pi.on(event as any, async (event: any, ctx: ExtensionContext) => {

@@ -10,11 +10,19 @@
  * and provider env. If the configured model is missing or the call throws,
  * we fall through (return undefined) and pi runs its own compaction.
  *
- * Auto-retry/resume is handled by pi natively; `reason` and `willRetry`
- * on compaction events describe manual, threshold, and overflow flows.
+ * After an automatic compaction the work should carry on by itself; a manual
+ * `/compact` is the user's own call and stays put. Pi covers two of those cases
+ * already: overflow recovery calls `agent.continue()` itself, and a threshold
+ * compaction that lands mid-run keeps the run alive. This module covers the
+ * third — an automatic compaction that ended the run — by riding pi's
+ * `agent_before_settle` boundary, where `continue: true` becomes one more
+ * provider request. That boundary is pi 0.87+; on 0.86 the handler registers
+ * and is never dispatched, which leaves auto-compaction without a resume there.
+ * Resumes are capped (MAX_CONSECUTIVE_RESUMES) and the cap resets on user input.
  */
 
 import { convertToLlm, serializeConversation } from "@earendil-works/pi-coding-agent";
+import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { uuidv7, type Model } from "@earendil-works/pi-ai";
 import { getCompactModelKey } from "../settings.js";
 import { parseModelKey } from "../settings.js";
@@ -37,6 +45,51 @@ function getConfiguredCompactModel(registry: any): Model<any> | null {
   const parsed = parseModelKey(key);
   if (!parsed) return null;
   return registry.find(parsed.provider, parsed.modelId) ?? null;
+}
+
+/** Custom-message type carried by the resume turn. */
+export const RESUME_CUSTOM_TYPE = "auto_compact_resume";
+
+/** Instruction the resumed turn starts from. */
+export const RESUME_TEXT =
+  "The context was just auto-compacted. Continue the current task based on the summary above. " +
+  "Do not repeat completed work. If unsure about progress, briefly summarize current state then continue.";
+
+/** Most resumes granted back-to-back with no user turn in between. A context
+ *  window whose `keepRecentTokens` sits at or above `contextWindow -
+ *  reserveTokens` comes out of a compaction still over the threshold, so
+ *  without a cap it can compact → resume → compact again and buy a model turn
+ *  every round. Pi's boundary docs ask handlers to guard continuation. */
+export const MAX_CONSECUTIVE_RESUMES = 3;
+
+/** Auto-compaction bookkeeping, keyed by session id: one process can host
+ *  several sessions (SDK/RPC), and one session's `agent_start` must not cancel
+ *  another session's resume. */
+interface ResumeState {
+  /** An auto-compaction is the last thing that happened: nothing has asked the
+   *  model for another request yet. Cleared by every sign that pi continued on
+   *  its own — the `agent_start` of its own overflow retry, and the assistant
+   *  message a mid-run threshold compaction is followed by. */
+  pending: boolean;
+  /** Resumes granted since the user last submitted input. */
+  granted: number;
+}
+
+const resumeStates = new Map<string, ResumeState>();
+
+function resumeState(ctx: ExtensionContext): ResumeState {
+  const id = ctx.sessionManager.getSessionId();
+  let state = resumeStates.get(id);
+  if (!state) {
+    state = { pending: false, granted: 0 };
+    resumeStates.set(id, state);
+  }
+  return state;
+}
+
+/** Test-only: drop the per-session resume state between specs. */
+export function resetAwaitingResume(): void {
+  resumeStates.clear();
 }
 
 /** Compute final file lists from file operations, mirroring pi's
@@ -99,6 +152,62 @@ ${conversationText}
 export const compactionModule: Module = {
   name: "compaction",
   hooks: {
+    // A user turn re-bases both the pending flag and the cap: whatever the
+    // next auto-compaction turns up is again unasked work.
+    input: [
+      (_event, ctx) => {
+        const state = resumeState(ctx);
+        state.pending = false;
+        state.granted = 0;
+      },
+    ],
+    // Any event that means the model gets another request on its own cancels
+    // the pending resume: pi's overflow retry starts a run, and a mid-run
+    // threshold compaction is followed by the assistant message it was
+    // compacted for.
+    agent_start: [
+      (_event, ctx) => {
+        resumeState(ctx).pending = false;
+      },
+    ],
+    message_end: [
+      (event, ctx) => {
+        if (event.message?.role === "assistant") resumeState(ctx).pending = false;
+        return undefined;
+      },
+    ],
+    session_compact: [
+      (event, ctx) => {
+        // `/compact` is the user's own call, and `willRetry` means pi already
+        // hands the interrupted turn back to the model itself.
+        if (event.reason === "manual" || event.willRetry) return;
+        resumeState(ctx).pending = true;
+      },
+    ],
+    agent_before_settle: [
+      (event, ctx) => {
+        const state = resumeState(ctx);
+        if (!state.pending) return;
+        state.pending = false;
+        // Errors and aborts keep pi's own retry/cancellation handling; only a
+        // run that finished leaves work that needs picking back up.
+        if (event.outcome !== "completed") return;
+        if (state.granted >= MAX_CONSECUTIVE_RESUMES) return;
+        state.granted += 1;
+        return {
+          entries: [
+            ...(Array.isArray(event.entries) ? event.entries : []),
+            {
+              type: "custom_message",
+              customType: RESUME_CUSTOM_TYPE,
+              content: RESUME_TEXT,
+              display: false,
+            },
+          ],
+          continue: true,
+        };
+      },
+    ],
     session_before_compact: [
       async (event, ctx) => {
         const model = getConfiguredCompactModel(ctx.modelRegistry);

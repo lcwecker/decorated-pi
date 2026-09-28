@@ -202,6 +202,80 @@ describe("skeleton — module hook dispatch", () => {
     expect(result).toBeUndefined();
   });
 
+  it("accumulates agent_before_settle entries and continue across modules", async () => {
+    // Mirrors emitBoundary(): every handler sees the accumulated state, and the
+    // last value set for a field wins. `continue: true` makes pi run one more
+    // provider request.
+    const seen: any[] = [];
+    const sk = createSkeleton();
+    sk.register({
+      name: "first",
+      hooks: {
+        agent_before_settle: [
+          (event: any) => {
+            seen.push({ module: "first", entries: event.entries, continue: event.continue });
+            return { entries: [...event.entries, { type: "custom", customType: "a" }], continue: true };
+          },
+        ],
+      },
+    });
+    sk.register({
+      name: "second",
+      hooks: {
+        agent_before_settle: [
+          (event: any) => {
+            seen.push({ module: "second", entries: event.entries, continue: event.continue });
+            return { entries: [...event.entries, { type: "custom", customType: "b" }] };
+          },
+        ],
+      },
+    });
+    sk.install(pi as any);
+
+    const handler = pi.handlers.get("agent_before_settle")![0];
+    const result = await handler({ outcome: "completed", entries: [], continue: false }, makeCtx() as any);
+
+    expect(seen).toEqual([
+      { module: "first", entries: [], continue: false },
+      { module: "second", entries: [{ type: "custom", customType: "a" }], continue: true },
+    ]);
+    expect(result).toEqual({
+      entries: [{ type: "custom", customType: "a" }, { type: "custom", customType: "b" }],
+      continue: true,
+    });
+  });
+
+  it("returns undefined when boundary handlers report nothing", async () => {
+    const sk = createSkeleton();
+    sk.register({
+      name: "noop",
+      hooks: {
+        agent_before_settle: [() => undefined],
+      },
+    });
+    sk.install(pi as any);
+
+    const handler = pi.handlers.get("agent_before_settle")![0];
+    expect(await handler({ outcome: "completed", entries: [], continue: false }, makeCtx() as any)).toBeUndefined();
+  });
+
+  it("lets a later boundary handler cancel an earlier continuation", async () => {
+    const sk = createSkeleton();
+    sk.register({
+      name: "continue",
+      hooks: { agent_before_settle: [() => ({ continue: true })] },
+    });
+    sk.register({
+      name: "cancel",
+      hooks: { agent_before_settle: [() => ({ continue: false })] },
+    });
+    sk.install(pi as any);
+
+    const handler = pi.handlers.get("agent_before_settle")![0];
+    const result = await handler({ outcome: "completed", entries: [], continue: false }, makeCtx() as any);
+    expect(result).toEqual({ entries: [], continue: false });
+  });
+
   it("invokes parallel handlers with (event, ctx, pi)", async () => {
     const seen: any[] = [];
     const sk = createSkeleton();
