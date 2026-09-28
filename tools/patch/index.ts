@@ -1,8 +1,9 @@
 /**
  * patch — exact string replacement tool.
  *
- * Replaces pi's native edit/write. Stale-read protection and mtime tracking
- * are in hooks/track-mtime.ts (this tool does not register hooks itself).
+ * Replaces pi's native edit. The native write tool stays active, so whole-file
+ * writes and new files keep going through it. Stale-read protection and mtime
+ * tracking are in hooks/track-mtime.ts (this tool does not register hooks itself).
  */
 
 import { defineTool, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
@@ -21,7 +22,7 @@ const EditSchema = Type.Object({
     anchor: Type.Optional(
         Type.String({
             description:
-                "Optional unique string that appears BEFORE old_str in the file. Narrows the search range.",
+                "Optional unique marker that must appear BEFORE old_str in the file. Narrows where old_str is searched; the replaced text still comes from old_str.",
         }),
     ),
     old_str: Type.String({
@@ -38,6 +39,10 @@ const PatchSchema = Type.Object({
         description: "Path to the file to edit (relative or absolute).",
     }),
     edits: Type.Array(EditSchema, {
+        // No minItems: the strict provider subset lists it as unsupported and pi
+        // forwards it verbatim when it strictifies this schema, so a validating
+        // endpoint would reject every patch request. An empty array reaches the
+        // apply path and is named there instead (EMPTY_EDITS_HINT).
         description:
             "Array of edit objects applied sequentially — always an array, even for a single edit. Each edit does exact string replacement with optional anchor. Must be a real JSON array, not a string containing JSON.",
     }),
@@ -319,8 +324,9 @@ export function registerPatchTool(pi: ExtensionAPI): void {
             name: "patch",
             label: "Patch",
             description: [
-                "Edits a file using exact string replacement, with anchor support.",
-                "When old_str is not unique, add more surrounding context or use anchor to narrow search.",
+                "Edits an existing file using exact string replacement, with anchor support.",
+                "Use the write tool to create a new file — patch only edits files that already exist.",
+                "When old_str is not unique, pass an anchor above it, or repeat the surrounding lines in both old_str and new_str.",
                 "",
                 'Arguments are JSON. "edits" is ALWAYS an array of edit objects — also for a single edit.',
                 'Never send "edits" as a string containing JSON.',
@@ -337,15 +343,22 @@ export function registerPatchTool(pi: ExtensionAPI): void {
                 '  e.g. "## API Reference" in .md or "[dependencies]" in .toml files.',
             ].join("\n"),
             promptSnippet:
-                "Edits a file using exact string replacement, with anchor support.",
+                "Edits an existing file using exact string replacement, with anchor support.",
             promptGuidelines: [
                 "Read the file with the read tool before patching it — patch blocks an edit to a file it has not read, or one that changed since the last read.",
                 "The patch tool is the preferred way to modify files — use it over the bash tool (sed/heredoc/python etc.).",
-                "When editing an existing file, prefer patch over overwrite to avoid overwriting prior changes.",
+                "When editing an existing file, prefer patch over the write tool — a full-file write drops changes made since you read it.",
                 "To prevent hallucinations: 1. Keep each edit batch ≤ 5 changes; 2. Process remaining revisions in sequential steps.",
                 "On repeated failures: read the file first to confirm information accuracy.",
             ],
             parameters: PatchSchema,
+            // Providers that support structured outputs constrain decoding to the
+            // schema, so an edit without old_str cannot be emitted at all. Pi
+            // converts the schema to the strict subset (optional `anchor` becomes
+            // `anyOf: [string, null]` plus required) and normalizes the null away
+            // before validating. Requires pi 0.86+; elsewhere it degrades to the
+            // plain schema.
+            constrainedSampling: { type: "json_schema", strict: "prefer" },
             renderShell: "self",
             prepareArguments: preparePatchArguments,
             execute: async (

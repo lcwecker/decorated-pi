@@ -4,9 +4,8 @@
  * Replaces diff-based format with old_str/new_str matching.
  * No fuzzy matching, no similarity — only exact string matching.
  *
- * Per-file operations:
+ * Per-file operation:
  *   { path, edits: [{ old_str, new_str, anchor? }] }  — targeted replacements
- *   { path, overwrite: true, new_str }                — atomic full-file overwrite
  *
  * This module owns the apply API and the preview API. Everything else lives
  * in sibling modules and is re-exported here so importers keep one entry
@@ -24,7 +23,6 @@ import {
   detectFileEncoding,
   readFileDecoded,
   writeFileEncoded,
-  type FileEncoding,
 } from "./encoding.js";
 
 import {
@@ -35,6 +33,7 @@ import {
 import {
   detectTabWidth,
   diagnoseOldStrMismatch,
+  EMPTY_EDITS_HINT,
   normalizeIndentForFuzzy,
   truncate,
 } from "./diagnostics.js";
@@ -44,12 +43,10 @@ import {
   buildNormToRawMap,
   charOffsetToLine,
   CONTEXT_LINES,
-  ensureParentDir,
   extractLineRange,
   lineAtOffset,
   mergeRanges,
   normalizeLineEndings,
-  randomId,
   resolveAbsPath,
   spliceOntoRaw,
   type LineRange,
@@ -68,7 +65,7 @@ import {
 export type { Edit, FilePatch, PatchResult, ReplacementInfo } from "./types.js";
 export { ApplyError, ParseError } from "./types.js";
 export { generatePatchDiff } from "./diff.js";
-export { diagnoseOldStrMismatch, diagnoseOldStrNotUnique } from "./diagnostics.js";
+export { diagnoseAnchorNotUnique, diagnoseOldStrMismatch, diagnoseOldStrNotUnique, EMPTY_EDITS_HINT, findUniqueExpansion, MAX_UNIQUE_EXPANSION } from "./diagnostics.js";
 
 // ═══════════════════════════════════════════════════════════════════════════
 // Main API
@@ -79,7 +76,6 @@ export async function applyPatch(patch: FilePatch, cwd: string): Promise<PatchRe
 
   const result: PatchResult = {
     modified: [],
-    created: [],
     warnings: [],
     replacements: new Map(),
     originalLines: new Map(),
@@ -88,14 +84,10 @@ export async function applyPatch(patch: FilePatch, cwd: string): Promise<PatchRe
 
   const absPath = resolveAbsPath(cwd, patch.path);
 
-  if (patch.overwrite) {
-    applyOverwrite(absPath, patch.path, patch.new_str ?? "", result);
-  } else if (patch.edits && patch.edits.length > 0) {
+  if (patch.edits && patch.edits.length > 0) {
     await applyEdits(absPath, patch.path, patch.edits, result);
   } else {
-    throw new ParseError(
-      `File ${patch.path}: must provide either edits[] or overwrite:true with new_str.`
-    );
+    throw new ParseError(`File ${patch.path}: ${EMPTY_EDITS_HINT}`);
   }
 
   return result;
@@ -109,7 +101,6 @@ export async function applyPatches(patches: FilePatch[], cwd: string): Promise<P
 
   const result: PatchResult = {
     modified: [],
-    created: [],
     warnings: [],
     replacements: new Map(),
     originalLines: new Map(),
@@ -121,14 +112,10 @@ export async function applyPatches(patches: FilePatch[], cwd: string): Promise<P
 
     const absPath = resolveAbsPath(cwd, p.path);
 
-    if (p.overwrite) {
-      applyOverwrite(absPath, p.path, p.new_str ?? "", result);
-    } else if (p.edits && p.edits.length > 0) {
+    if (p.edits && p.edits.length > 0) {
       await applyEdits(absPath, p.path, p.edits, result);
     } else {
-      throw new ParseError(
-        `File ${p.path}: must provide either edits[] or overwrite:true with new_str.`
-      );
+      throw new ParseError(`File ${p.path}: ${EMPTY_EDITS_HINT}`);
     }
   }
 
@@ -136,37 +123,8 @@ export async function applyPatches(patches: FilePatch[], cwd: string): Promise<P
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// Overwrite (atomic mv)
+// Edits
 // ═══════════════════════════════════════════════════════════════════════════
-
-function applyOverwrite(
-  absPath: string,
-  displayPath: string,
-  content: string,
-  result: PatchResult,
-): void {
-  // Detect encoding from the existing file so we round-trip in the same
-  // bytes. New files default to UTF-8 (no BOM).
-  const enc: FileEncoding | null = fs.existsSync(absPath)
-    ? detectFileEncoding(absPath)
-    : null;
-  const oldContent = enc ? readFileDecoded(absPath, enc) : "";
-
-  // Write to temp file in the same directory (same filesystem → mv is atomic)
-  ensureParentDir(absPath);
-  const dir = path.dirname(absPath);
-  const tmpName = path.join(dir, `.pi-patch-${randomId()}.tmp`);
-  // Overwrite semantics: write exactly what the caller passed, in the
-  // detected encoding (UTF-8 for new files).
-  writeFileEncoded(tmpName, content, enc ?? { encoding: "utf-8", hasBOM: false, isUtf8: true });
-  fs.renameSync(tmpName, absPath);
-
-  if (oldContent) {
-    result.modified.push(displayPath);
-  } else {
-    result.created.push(displayPath);
-  }
-}
 async function applyEdits(
   absPath: string,
   displayPath: string,
@@ -174,7 +132,7 @@ async function applyEdits(
   result: PatchResult,
 ): Promise<void> {
   if (!fs.existsSync(absPath)) {
-    throw new ApplyError(`File not found: ${displayPath}`);
+    throw new ApplyError(`File not found: ${displayPath} — patch edits existing files; use the write tool to create it.`);
   }
   const stat = fs.statSync(absPath);
   if (stat.isDirectory()) {
@@ -229,7 +187,12 @@ async function applyEdits(
         const diag = diagnoseOldStrMismatch(located.oldNorm, content);
         if (located.anchorState === "missing" || located.anchorState === "not_unique") {
           throw new ApplyError(
-            `${located.anchorMessage}\nold_str not found in ${displayPath}: "${truncate(edit.old_str)}".\n${diag}`
+            [
+              located.anchorMessage,
+              located.anchorHint,
+              `old_str not found in ${displayPath}: "${truncate(edit.old_str)}".`,
+              diag,
+            ].filter(Boolean).join("\n")
           );
         }
         throw new ApplyError(
@@ -421,14 +384,11 @@ async function applyEdits(
 
 /**
  * Patch preview without writing to disk.
- * Returns unified diff for edits, or truncated content for overwrites.
+ * Returns a unified diff for the edits.
  */
 export interface PatchPreview {
   diff?: string;
   error?: string;
-  /** Truncated new content preview for overwrite mode */
-  preview?: string;
-  isOverwrite?: boolean;
 }
 
 export async function computePatchPreview(
@@ -442,11 +402,9 @@ export async function computePatchPreview(
 
     const absPath = resolveAbsPath(cwd, patch.path);
 
-    if (patch.overwrite) {
-      return { preview: patch.new_str ?? "", isOverwrite: true };
-    } else if (patch.edits && patch.edits.length > 0) {
+    if (patch.edits && patch.edits.length > 0) {
       if (!fs.existsSync(absPath)) {
-        return { error: "File not found" };
+        return { error: `File not found: ${patch.path} — patch edits existing files; use the write tool to create it.` };
       }
 
       const enc = detectFileEncoding(absPath);
@@ -478,7 +436,14 @@ export async function computePatchPreview(
         if (!located.found) {
           const diag = diagnoseOldStrMismatch(located.oldNorm, content);
           if (located.anchorState === "missing" || located.anchorState === "not_unique") {
-            return { error: `${located.anchorMessage}\nold_str not found: "${truncate(edit.old_str)}"\n${diag}` };
+            return {
+              error: [
+                located.anchorMessage,
+                located.anchorHint,
+                `old_str not found: "${truncate(edit.old_str)}"`,
+                diag,
+              ].filter(Boolean).join("\n"),
+            };
           }
           return { error: `old_str not found: "${truncate(edit.old_str)}".${edit.anchor ? ` after anchor "${truncate(edit.anchor)}"` : ""}\n${diag}` };
         }
@@ -517,7 +482,7 @@ export async function computePatchPreview(
       const diff = generateLocalDiff(patch.path, allReplacements, neededLines, totalLines);
       return { diff };
     } else {
-      return { error: "Must provide edits[] or overwrite:true" };
+      return { error: EMPTY_EDITS_HINT };
     }
   } catch (err) {
     return { error: err instanceof Error ? err.message : String(err) };

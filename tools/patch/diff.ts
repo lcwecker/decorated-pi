@@ -389,7 +389,7 @@ export function generateReplacementDiff(filePath: string, reps: ReplacementInfo[
 // string (the LLM already knows what it asked to change, so the summary
 // was redundant and cost prompt-cache stability). If callers need to
 // surface the file list to a non-LLM UI, they can format `result.modified`
-// and `result.created` themselves — they are plain `string[]`.
+// themselves — it is a plain `string[]`.
 
 /** Collapse chained-edit replacements (where out[i] === in[i+1]) into
  *  net-change replacements showing only the net effect (original→final). */

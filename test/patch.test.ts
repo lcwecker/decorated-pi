@@ -13,10 +13,15 @@ import {
   ApplyError,
   generatePatchDiff,
   computePatchPreview,
+  diagnoseAnchorNotUnique,
   diagnoseOldStrMismatch,
   diagnoseOldStrNotUnique,
+  EMPTY_EDITS_HINT,
+  findUniqueExpansion,
+  MAX_UNIQUE_EXPANSION,
   __patchCoreTest,
 } from "../tools/patch/core.js";
+import { locateEdit } from "../tools/patch/locate.js";
 import { detectFileEncoding, readFileDecoded, writeFileEncoded } from "../tools/patch/encoding.js";
 import { preparePatchArguments, formatPatchMetaLine, registerPatchTool } from "../tools/patch/index.js";
 
@@ -373,8 +378,8 @@ describe("applyPatches", () => {
 
   // ── formatPatchResult (removed) ─────────────────────────────────────────
   // The LLM-facing execute() now returns the constant "Success" on success.
-  // The file list (`result.modified` / `result.created`) is still populated
-  // and the diff stays in `details.diff` for the TUI renderer.
+  // The modified-file list (`result.modified`) is still populated and the diff
+  // stays in `details.diff` for the TUI renderer.
 
   // ── generatePatchDiff ──────────────────────────────────────────────────
 
@@ -1391,6 +1396,210 @@ describe("diagnoseOldStrNotUnique", () => {
   });
 });
 
+// ─── Uniqueness hint: how much to widen ──────────────────────────────────
+
+/** Six identical `doc.SaveFile();` lines, each under a distinct guard, so one
+ *  line of context above is enough to make any of them unique. */
+function guardedSaves(): string {
+  const lines: string[] = [];
+  for (let i = 0; i < 6; i++) lines.push(`\tif (mode == ${i}) {`, "\t\tdoc.SaveFile();", "\t}");
+  return lines.join("\n") + "\n";
+}
+
+describe("findUniqueExpansion", () => {
+  it("finds the smallest window that occurs once", () => {
+    const content = guardedSaves();
+    const expansion = findUniqueExpansion("\t\tdoc.SaveFile();", content);
+    expect(expansion).toEqual({
+      up: 1,
+      down: 0,
+      startLine: 1,
+      endLine: 2,
+      block: "\tif (mode == 0) {\n\t\tdoc.SaveFile();",
+      addedAbove: "\tif (mode == 0) {",
+      addedBelow: "",
+    });
+  });
+
+  it("prefers widening upward when both sides are unique", () => {
+    // Lines below run into the next block, so the guard above is the natural
+    // context to grow into.
+    const content = "\tif (mode == 0) {\n\t\tdoc.SaveFile();\n\t}\n";
+    expect(findUniqueExpansion("\t\tdoc.SaveFile();", content)).toEqual({
+      up: 1,
+      down: 0,
+      startLine: 1,
+      endLine: 2,
+      block: "\tif (mode == 0) {\n\t\tdoc.SaveFile();",
+      addedAbove: "\tif (mode == 0) {",
+      addedBelow: "",
+    });
+  });
+
+  it("returns a window the matcher accepts, overlapping repeats included", () => {
+    // A periodic block: `ab\nab\nab` occurs twice by overlapping start offsets,
+    // so the non-overlapping count alone cannot decide uniqueness.
+    const content = "ab\nab\nab\nab";
+    const expansion = findUniqueExpansion("ab\nab", content)!;
+    expect(expansion).toBeDefined();
+    expect(content.split(expansion.block)).toHaveLength(2);
+    expect(() => locateEdit({ old_str: expansion.block, new_str: "X" }, content, "f.txt")).not.toThrow();
+  });
+
+  it("ignores a trailing newline when measuring the span", () => {
+    // `code();\n` occupies one line. Counting the empty element a trailing
+    // newline produces would drag the line after it into the window.
+    const content = "guard();\ncode();\nother();\ncode();\n";
+    const expansion = findUniqueExpansion("code();\n", content)!;
+    expect(expansion).toMatchObject({ up: 1, down: 0, startLine: 1, endLine: 2 });
+    expect(expansion.block).toBe("guard();\ncode();");
+    expect(expansion.addedAbove).toBe("guard();");
+    expect(expansion.addedBelow).toBe("");
+    expect(expansion.block).not.toContain("other();");
+  });
+
+  it("returns undefined when the surrounding lines repeat too", () => {
+    const content = Array.from({ length: 12 }, () => "same();").join("\n") + "\n";
+    expect(findUniqueExpansion("same();", content)).toBeUndefined();
+  });
+
+  it("returns undefined for text that is absent", () => {
+    expect(findUniqueExpansion("absent();", "a\nb\n")).toBeUndefined();
+  });
+});
+
+describe("duplicate hint names the widening range", () => {
+  it("tells the model how many lines to add, and hands it the text", () => {
+    const msg = diagnoseOldStrNotUnique("\t\tdoc.SaveFile();", guardedSaves());
+
+    expect(msg).toContain("appears 6 times");
+    expect(msg).toContain("Widen old_str by 1 line(s) above (lines 1-2)");
+    // The suggestion is a ready-to-paste JSON string, and it really is unique.
+    const suggested = JSON.parse(msg.split("Suggested old_str:\n  ")[1]!.split("\n")[0]!);
+    expect(suggested).toBe("\tif (mode == 0) {\n\t\tdoc.SaveFile();");
+    expect(guardedSaves().split(suggested)).toHaveLength(2);
+  });
+
+  it("names the added context so an edit cannot drop it", () => {
+    const msg = diagnoseOldStrNotUnique("\t\tdoc.SaveFile();", guardedSaves());
+
+    // The anchor route needs no new_str surgery; the widening route must repeat
+    // the context, or a reused new_str deletes the guard line.
+    expect(msg).toContain("pass\na unique anchor above it");
+    expect(msg).toContain("new_str has to keep the added lines too");
+    expect(msg).toContain('added above: "\\tif (mode == 0) {"');
+    expect(msg).not.toContain("added below:");
+
+    const suggested = JSON.parse(msg.split("Suggested old_str:\n  ")[1]!.split("\n")[0]!);
+    expect(suggested.startsWith("\tif (mode == 0) {")).toBe(true);
+  });
+
+  it("names the limit when no small window is unique", () => {
+    const content = Array.from({ length: 12 }, () => "same();").join("\n") + "\n";
+    const msg = diagnoseOldStrNotUnique("same();", content);
+    expect(msg).toContain(`No unique window within ${MAX_UNIQUE_EXPANSION} lines above or below`);
+    expect(msg).toContain("widen with a distinctive anchor");
+  });
+
+  it("names the limit for an anchor too", () => {
+    // Every line identical, so no window up to the cap is unique.
+    const content = Array.from({ length: 12 }, () => "same();").join("\n") + "\n";
+    const msg = diagnoseAnchorNotUnique("same();", content);
+    expect(msg).toContain("anchor appears 12 times");
+    expect(msg).toContain(`No unique window within ${MAX_UNIQUE_EXPANSION} lines above or below`);
+    expect(msg).toContain("widen with old_str");
+  });
+
+  it("keeps the generic advice for a single occurrence", () => {
+    const msg = diagnoseOldStrNotUnique("unique", "unique\nother");
+    expect(msg).toContain("Add more surrounding context to make it unique.");
+    expect(msg).not.toContain("Widen old_str");
+  });
+
+  it("points an anchor-only duplication at the anchor", () => {
+    const content = "\titem[i].model_type);\n\tother();\n\titem[i].model_type);\n";
+    const msg = diagnoseAnchorNotUnique("item[i].model_type);", content);
+    expect(msg).toContain("anchor appears 2 times");
+    expect(msg).toContain("Widen anchor by 1 line(s) below (lines 1-2)");
+    expect(msg).toContain("Suggested anchor:");
+    expect(msg).not.toContain("old_str");
+  });
+});
+
+// ─── Uniqueness hint: end-to-end through applyPatch ──────────────────────
+
+describe("duplicate hint end-to-end", () => {
+  let tmpDir: string;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "patch-hint-"));
+  });
+
+  afterEach(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it("the suggested old_str is accepted on the next attempt", async () => {
+    const p = path.join(tmpDir, "guards.txt");
+    fs.writeFileSync(p, guardedSaves(), "utf8");
+
+    const error = await applyPatch(
+      { path: p, edits: [{ old_str: "\t\tdoc.SaveFile();", new_str: "\t\tflush();" }] },
+      tmpDir,
+    ).catch((e: Error) => e.message);
+
+    expect(error).toContain("Widen old_str by 1 line(s) above (lines 1-2)");
+    const suggested = JSON.parse((error as string).split("Suggested old_str:\n  ")[1]!.split("\n")[0]!);
+
+    await applyPatch(
+      { path: p, edits: [{ old_str: suggested, new_str: "\tif (mode == 0) {\n\t\tflush();" }] },
+      tmpDir,
+    );
+    expect(fs.readFileSync(p, "utf8").startsWith("\tif (mode == 0) {\n\t\tflush();")).toBe(true);
+  });
+
+  it("reports an ambiguous anchor as an anchor problem", async () => {
+    const p = path.join(tmpDir, "anchor.txt");
+    fs.writeFileSync(p, "if (mode) {\n    save();\n}\nif (mode) {\n    save();\n}\n", "utf8");
+
+    const error = await applyPatch(
+      { path: p, edits: [{ anchor: "if (mode) {", old_str: "    save();", new_str: "    flush();" }] },
+      tmpDir,
+    ).catch((e: Error) => e.message);
+
+    expect(error).toContain("Anchor is not unique");
+    expect(error).toContain("anchor appears 2 times");
+    expect(error).toContain("Suggested anchor:");
+  });
+
+  it("includes the anchor hint when old_str is missing entirely", async () => {
+    const p = path.join(tmpDir, "anchor-missing-old.txt");
+    fs.writeFileSync(p, "if (mode) {\n    save();\n}\nif (mode) {\n    save();\n}\n", "utf8");
+
+    const error = await applyPatch(
+      { path: p, edits: [{ anchor: "if (mode) {", old_str: "    not_there();", new_str: "    flush();" }] },
+      tmpDir,
+    ).catch((e: Error) => e.message);
+
+    expect(error).toContain("Anchor is not unique");
+    expect(error).toContain("anchor appears 2 times");
+    expect(error).toContain("old_str not found");
+  });
+
+  it("carries the same hint into the preview shown in the TUI", async () => {
+    const p = path.join(tmpDir, "preview-anchor.txt");
+    fs.writeFileSync(p, "if (mode) {\n    save();\n}\nif (mode) {\n    save();\n}\n", "utf8");
+
+    const preview = await computePatchPreview(
+      { path: p, edits: [{ anchor: "if (mode) {", old_str: "    save();", new_str: "    flush();" }] },
+      tmpDir,
+    );
+
+    expect(preview.error).toContain("anchor appears 2 times");
+    expect(preview.error).toContain("Suggested anchor:");
+  });
+});
+
 // ─── chained edit merging ─────────────────────────────────────────────────
 
 describe("chained edit merging in diff", () => {
@@ -1632,9 +1841,9 @@ describe("diagnoseOldStrMismatch first-line match", () => {
   });
 });
 
-// ─── line endings and overwrite ───────────────────────────────────────────
+// ─── line endings ────────────────────────────────────────────────────────
 
-describe("patch line endings and overwrite", () => {
+describe("patch line endings", () => {
   let leTmpDir: string;
   beforeEach(() => {
     leTmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "patch-le-"));
@@ -1658,22 +1867,6 @@ describe("patch line endings and overwrite", () => {
     expect(readLeFile("crlf.txt")).toBe("line1\r\nLINE2\r\nline3");
   });
 
-  it("creates a new file via overwrite", async () => {
-    const result = await applyPatches([
-      { path: "new.txt", overwrite: true, new_str: "hello world" },
-    ], leTmpDir);
-    expect(readLeFile("new.txt")).toBe("hello world");
-    expect(result.created).toContain("new.txt");
-  });
-
-  it("overwrites an existing file via overwrite", async () => {
-    writeLeFile("existing.txt", "old content");
-    const result = await applyPatches([
-      { path: "existing.txt", overwrite: true, new_str: "new content" },
-    ], leTmpDir);
-    expect(readLeFile("existing.txt")).toBe("new content");
-    expect(result.modified).toContain("existing.txt");
-  });
 });
 
 // ─── chained edit merge break ─────────────────────────────────────────────
@@ -1905,20 +2098,6 @@ describe("patch encoding round-trip", () => {
     expect(iconv.decode(out, "utf-16le")).toBe("ALPHA\nbeta\n");
   });
 
-  it("overwrite detects existing GBK encoding and writes back in GBK", async () => {
-    const original = iconv.encode("旧内容", "gbk");
-    writeBin("gbk2.txt", original);
-    await applyPatch({
-      path: "gbk2.txt",
-      overwrite: true,
-      new_str: "新内容",
-    }, tmp);
-    const out = readBin("gbk2.txt");
-    expect(iconv.decode(out, "gbk")).toBe("新内容");
-    // UTF-8 of 新 is e6 96 b0 — must NOT appear if we stayed in GBK
-    expect(out.includes(Buffer.from([0xe6, 0x96, 0xb0]))).toBe(false);
-  });
-
   it("computePatchPreview decodes a GBK file for diff", async () => {
     const original = iconv.encode("你好world", "gbk");
     writeBin("gbk3.txt", original);
@@ -2134,5 +2313,91 @@ describe("patch tool description", () => {
   it("tells the model to read the file before patching it", () => {
     const guidelines: string[] = getPatchDefinition().promptGuidelines;
     expect(guidelines.some((g) => /read the file with the read tool before patching/i.test(g))).toBe(true);
+  });
+
+  it("marks old_str and new_str required in every edit", () => {
+    const parameters = getPatchDefinition().parameters as any;
+    expect(parameters.required).toEqual(["path", "edits"]);
+    expect(parameters.properties.edits.items.required).toEqual(["old_str", "new_str"]);
+    // anchor stays optional; pi's strict conversion turns it into
+    // anyOf[String, null] plus required when a tool opts into constrained sampling.
+    expect(parameters.properties.edits.items.properties.anchor).toBeDefined();
+  });
+
+  it("leaves an empty edits array to the runtime diagnostic", async () => {
+    // The strict provider subset rejects length keywords, so the schema stays
+    // without minItems; an empty array is named by the apply path instead.
+    const { Value } = await import("typebox/value");
+    const parameters = getPatchDefinition().parameters as any;
+    expect(Value.Check(parameters, { path: "a.ts", edits: [] })).toBe(true);
+    expect(Value.Check(parameters, { path: "a.ts", edits: [{ old_str: "x", new_str: "y" }] })).toBe(true);
+
+    await expect(applyPatch({ path: "a.ts", edits: [] }, process.cwd())).rejects.toThrow(EMPTY_EDITS_HINT);
+    expect(await computePatchPreview({ path: "a.ts", edits: [] }, process.cwd())).toEqual({
+      error: EMPTY_EDITS_HINT,
+    });
+  });
+
+  it("asks the provider to constrain decoding to the schema", () => {
+    expect(getPatchDefinition().constrainedSampling).toEqual({
+      type: "json_schema",
+      strict: "prefer",
+    });
+  });
+
+  it("stays inside the strict provider subset", () => {
+    // pi strictifies this schema before sending it. Any keyword outside the
+    // subset would make a validating endpoint reject the whole request, so none
+    // of them may be added back.
+    const unsupported = [
+      "minItems", "maxItems", "uniqueItems", "minProperties", "maxProperties",
+      "minLength", "maxLength", "pattern", "format", "minimum", "maximum", "multipleOf",
+    ];
+    const seen: string[] = [];
+    const walk = (node: any): void => {
+      if (!node || typeof node !== "object") return;
+      if (Array.isArray(node)) { node.forEach(walk); return; }
+      for (const [key, value] of Object.entries(node)) {
+        seen.push(key);
+        walk(value);
+      }
+    };
+    walk(getPatchDefinition().parameters);
+    expect(seen.filter((key) => unsupported.includes(key))).toEqual([]);
+  });
+
+  it("strictifies through pi's own converter", async (ctx) => {
+    // The keyword scan above is hand-maintained; this asks pi-ai to do the
+    // conversion, which throws for anything its version considers unsupported.
+    let makeStrictJsonSchema: ((schema: any) => any) | undefined;
+    try {
+      ({ makeStrictJsonSchema } = await import(
+        "../node_modules/@earendil-works/pi-ai/dist/api/constrained-sampling.js"
+      ));
+    } catch {
+      ctx.skip();
+      return;
+    }
+    const strict = makeStrictJsonSchema!(getPatchDefinition().parameters);
+    expect(strict.properties.edits.items.required).toEqual(["anchor", "old_str", "new_str"]);
+    expect(strict.properties.edits.items.additionalProperties).toBe(false);
+    expect(strict.additionalProperties).toBe(false);
+    // Optional anchor survives as a nullable union, which pi normalizes away.
+    expect(strict.properties.edits.items.properties.anchor.anyOf).toEqual([
+      expect.objectContaining({ type: "string" }),
+      { type: "null" },
+    ]);
+  });
+
+  it("rejects the anchor-only shape that used to fail at runtime", async () => {
+    const { Value } = await import("typebox/value");
+    const parameters = getPatchDefinition().parameters as any;
+    expect(Value.Check(parameters, { path: "a.ts", edits: [{ anchor: "fn", new_str: "y" }] })).toBe(false);
+  });
+
+  it("says what anchor is for: narrowing the old_str search", () => {
+    const anchor = getPatchDefinition().parameters.properties.edits.items.properties.anchor;
+    expect(anchor.description).toMatch(/old_str is searched/);
+    expect(anchor.description).toMatch(/replaced text still comes from old_str/);
   });
 });

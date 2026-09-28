@@ -5,7 +5,6 @@
  * No knowledge of edits, anchors, or diffs.
  */
 
-import * as fs from "node:fs";
 import * as path from "node:path";
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -14,11 +13,6 @@ import * as path from "node:path";
 
 export function resolveAbsPath(cwd: string, filePath: string): string {
   return path.isAbsolute(filePath) ? filePath : path.resolve(cwd, filePath);
-}
-
-export function ensureParentDir(absPath: string): void {
-  const dir = path.dirname(absPath);
-  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
 }
 
 export function normalizeLineEndings(text: string): string {
@@ -158,10 +152,6 @@ export function mergeRanges(ranges: LineRange[]): LineRange[] {
     }
   }
   return merged;
-}
-
-export function randomId(): string {
-  return Math.random().toString(36).slice(2, 10);
 }
 
 /** Convert a character offset to a 1-based line number. */

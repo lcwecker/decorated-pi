@@ -18,16 +18,11 @@ export interface FilePatch {
   /** File path (relative to cwd or absolute) */
   path: string;
   /** Targeted edits to apply sequentially */
-  edits?: Edit[];
-  /** If true, replace the entire file content atomically */
-  overwrite?: boolean;
-  /** New file content when overwriting */
-  new_str?: string;
+  edits: Edit[];
 }
 
 export interface PatchResult {
   modified: string[];
-  created: string[];
   warnings: string[];
   /** Per-file replacement info for diff generation */
   replacements: Map<string, ReplacementInfo[]>;

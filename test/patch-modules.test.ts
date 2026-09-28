@@ -74,7 +74,7 @@ describe("patch — module layering", () => {
     expect(src).toContain('export { generatePatchDiff } from "./diff.js"');
     expect(src).toContain('export type { Edit, FilePatch, PatchResult, ReplacementInfo }');
     expect(src).toContain(
-      'export { diagnoseOldStrMismatch, diagnoseOldStrNotUnique } from "./diagnostics.js"',
+      'export { diagnoseAnchorNotUnique, diagnoseOldStrMismatch, diagnoseOldStrNotUnique, EMPTY_EDITS_HINT, findUniqueExpansion, MAX_UNIQUE_EXPANSION } from "./diagnostics.js"',
     );
   });
 

@@ -6,6 +6,7 @@
  */
 
 import {
+  diagnoseAnchorNotUnique,
   diagnoseOldStrNotUnique,
   normalizeIndentForFuzzy,
   truncate,
@@ -29,6 +30,9 @@ export type LocateEditResult =
       oldNorm: string;
       anchorState: "ok" | "missing" | "not_unique";
       anchorMessage?: string;
+      /** Why the anchor failed and how much longer it has to be, when it
+       *  matched more than once. */
+      anchorHint?: string;
     };
 
 /** Shared edit location logic used by both one-shot and sequential paths.
@@ -49,6 +53,7 @@ export function locateEdit(
   let anchorNotUnique = false;
   let anchorState: "ok" | "missing" | "not_unique" = "ok";
   let anchorMessage: string | undefined;
+  let anchorHint: string | undefined;
 
   // ── Anchor parsing ──
   if (edit.anchor) {
@@ -62,6 +67,9 @@ export function locateEdit(
       if (secondAnchor !== -1) {
         anchorState = "not_unique";
         anchorMessage = `Anchor is not unique in ${displayPath}: "${truncate(edit.anchor)}".`;
+        // Without this the failure shows the old_str occurrences, which sends
+        // the model off widening old_str while the anchor is what matched twice.
+        anchorHint = diagnoseAnchorNotUnique(anchorNorm, content);
       } else {
         searchFrom = Math.max(0, anchorIdx - (oldNorm.length - 1));
         displayAnchor = edit.anchor;
@@ -85,7 +93,9 @@ export function locateEdit(
       const secondGlobalMatch = content.indexOf(oldNorm, matchIdx + 1);
       if (secondGlobalMatch !== -1) {
         const dupDiag = diagnoseOldStrNotUnique(oldNorm, content);
-        throw new ApplyError(`${anchorMessage}\n${dupDiag}`);
+        throw new ApplyError(
+          [anchorMessage, anchorHint, dupDiag].filter(Boolean).join("\n"),
+        );
       }
     }
   }
@@ -102,7 +112,7 @@ export function locateEdit(
   }
 
   if (matchIdx === -1) {
-    return { found: false, oldNorm, anchorState, anchorMessage };
+    return { found: false, oldNorm, anchorState, anchorMessage, anchorHint };
   }
 
   // ── Uniqueness check (skip when anchor was used as a fallback) ──
