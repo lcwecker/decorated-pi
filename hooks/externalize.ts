@@ -22,8 +22,7 @@ export const OUTPUT_EXTERNALIZE_THRESHOLD = 30_000;
 
 /** Write content to a temp file under TOOL_OUTPUT_TEMP_DIR.
  *  Returns the file path, or undefined on failure (e.g., /tmp full).
- *  Exported so other modules (e.g. tools/mcp/externalize.ts) can
- *  write to the same location. */
+ *  Exported so other modules can write to the same location. */
 export function writeOutputToTemp(
     toolName: string,
     toolCallId: string,
@@ -51,7 +50,7 @@ export function writeOutputToTemp(
 export function maybeExternalizeToolResult(event: any): any | undefined {
     if (!Array.isArray(event.content) || event.content.length === 0)
         return undefined;
-    const first = event.content[0];
+    const [first, ...rest] = event.content;
     if (!first || first.type !== "text" || typeof first.text !== "string")
         return undefined;
     const text = first.text;
@@ -60,6 +59,9 @@ export function maybeExternalizeToolResult(event: any): any | undefined {
     const filePath = writeOutputToTemp(event.toolName, event.toolCallId, text);
     if (!filePath) return undefined;
 
+    // Replace the oversized part in place and keep the remaining ones: a mixed
+    // result (long text plus an image, or a second text part) must not lose the
+    // parts the model still needs.
     return {
         ...event,
         content: [
@@ -67,13 +69,53 @@ export function maybeExternalizeToolResult(event: any): any | undefined {
                 type: "text" as const,
                 text: `[Output too long, saved to ${filePath}.]`,
             },
+            ...rest,
         ],
     };
+}
+
+/** Delete output files left over from earlier days. The directory is a scratch
+ *  area for the current day's spills, so keeping one day bounds its growth
+ *  while never deleting a file a live session might still cite. Best-effort:
+ *  a missing directory is a no-op. Returns how many files were removed. */
+export function pruneOldOutputs(now: Date = new Date()): number {
+    let entries: string[];
+    try {
+        entries = fs.readdirSync(TOOL_OUTPUT_TEMP_DIR);
+    } catch {
+        return 0;
+    }
+    const startOfToday = new Date(
+        now.getFullYear(),
+        now.getMonth(),
+        now.getDate(),
+    ).getTime();
+    let removed = 0;
+    for (const entry of entries) {
+        const filePath = path.join(TOOL_OUTPUT_TEMP_DIR, entry);
+        try {
+            const stat = fs.statSync(filePath);
+            if (!stat.isFile()) continue;
+            if (stat.mtimeMs >= startOfToday) continue;
+            fs.unlinkSync(filePath);
+            removed++;
+        } catch {
+            // Entry raced away or is unreadable — nothing to prune.
+        }
+    }
+    return removed;
 }
 
 export const externalizeModule: Module = {
     name: "externalize",
     hooks: {
+        // session_start (startup / resume / reload): drop earlier days' spills.
+        // A readdir of a small directory is cheap enough to run every session.
+        session_start: [
+            () => {
+                pruneOldOutputs();
+            },
+        ],
         tool_result: [
             (event) => {
                 return maybeExternalizeToolResult(event);
