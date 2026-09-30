@@ -465,6 +465,12 @@ describe("tps — footer merge", () => {
   function makeTuiCtx(model: Record<string, unknown> = { id: "m", provider: "p", reasoning: false, contextWindow: 1_000 }) {
     const requestRender = vi.fn();
     let footerInstance: any;
+    // 0.99's getSessionStats() caches on (session, sessionId, leafId,
+    // entryCount, limitsModel) and only re-reads the ctx on a miss, so the
+    // failure tests below move `entryCount` before breaking the ctx — that is
+    // what a stale ctx looks like in practice, with the leaf already pointing
+    // somewhere else.
+    const session = { entryCount: 0 };
     // Real pi invokes the factory synchronously inside setFooter(...)
     // (interactive-mode.js: setExtensionFooter) — mirror that here.
     const setFooter = vi.fn((factory: any) => {
@@ -474,16 +480,25 @@ describe("tps — footer merge", () => {
       hasUI: true,
       mode: "tui",
       model,
-      sessionManager: { getEntries: () => [], getCwd: () => "/tmp", getSessionName: () => undefined },
+      // 0.99's getSessionStats() keys its cache on these four, so the fake has
+      // to answer all of them — getEntries() alone is the 0.86 shape.
+      sessionManager: {
+        getEntries: () => [],
+        getEntryCount: () => session.entryCount,
+        getSessionId: () => "session-1",
+        getLeafId: () => "leaf-1",
+        getCwd: () => "/tmp",
+        getSessionName: () => undefined,
+      },
       getContextUsage: () => ({ contextWindow: 1_000, percent: 57.3 }),
       ui: { setStatus, setFooter },
     };
-    return { ctx, setFooter, requestRender, getFooter: () => footerInstance };
+    return { ctx, session, setFooter, requestRender, getFooter: () => footerInstance };
   }
 
   it("tui mode: installs a merged footer; updates re-render instead of setStatus", () => {
     const h = moduleHandlers();
-    const { ctx, setFooter, requestRender, getFooter } = makeTuiCtx();
+    const { ctx, session, setFooter, requestRender, getFooter } = makeTuiCtx();
     h.sessionStart({ type: "session_start" }, ctx);
     expect(setFooter).toHaveBeenCalledTimes(1);
     // Leftover status cleared so TPS never shows on both lines.
@@ -511,7 +526,9 @@ describe("tps — footer merge", () => {
     expect(narrow).toHaveLength(2);
     expect(narrow[1]).not.toContain("tok/s");
 
-    // Stale ctx (getContextUsage throws) → holds the last good frame.
+    // Stale ctx (getContextUsage throws) → holds the last good frame. The
+    // moved entry count is what makes the render re-read the ctx.
+    session.entryCount++;
     ctx.getContextUsage = () => {
       throw new Error("stale");
     };
@@ -538,7 +555,7 @@ describe("tps — footer merge", () => {
 
   it("two consecutive render failures abandon the merge for the status line", async () => {
     const h = moduleHandlers();
-    const { ctx, setFooter, requestRender, getFooter } = makeTuiCtx();
+    const { ctx, session, setFooter, requestRender, getFooter } = makeTuiCtx();
     h.sessionStart({ type: "session_start" }, ctx);
     const comp = getFooter();
 
@@ -553,7 +570,10 @@ describe("tps — footer merge", () => {
     expect(setStatus).toHaveBeenCalledTimes(1);
 
     // One failure is a stale ctx (session switch / reload) — the footer holds
-    // its last good frame because session_start will rebuild it.
+    // its last good frame because session_start will rebuild it. The moved
+    // entry count is what makes the render re-read the ctx at all (0.99 caches
+    // the stats per cache key, and a throwing recompute never refills it).
+    session.entryCount++;
     ctx.getContextUsage = () => {
       throw new Error("stale");
     };
@@ -578,12 +598,13 @@ describe("tps — footer merge", () => {
 
   it("only consecutive failures count — a good render resets the counter", () => {
     const h = moduleHandlers();
-    const { ctx, setFooter, getFooter } = makeTuiCtx();
+    const { ctx, session, setFooter, getFooter } = makeTuiCtx();
     h.sessionStart({ type: "session_start" }, ctx);
     const comp = getFooter();
 
     const healthy = ctx.getContextUsage;
     const breakCtx = () => {
+      session.entryCount++; // moves the stats cache key past the last good frame
       ctx.getContextUsage = () => {
         throw new Error("stale");
       };
@@ -618,6 +639,107 @@ describe("tps — footer merge", () => {
     expect(lines[1]).toContain("new-model");
     expect(lines[1]).not.toContain("old-model");
     expect(setFooter).toHaveBeenCalledTimes(1); // proxy updated in place, no reinstall
+  });
+
+  it("message_end records the physical model behind a virtual selection", () => {
+    const h = moduleHandlers();
+    const virtualModel = {
+      id: "virtual-model",
+      provider: "p",
+      api: "pi-virtual",
+      reasoning: false,
+      contextWindow: 1_000,
+    };
+    const physicalModel = {
+      id: "physical-model",
+      provider: "p",
+      api: "anthropic-messages",
+      reasoning: false,
+      contextWindow: 1_000,
+    };
+    const { ctx, getFooter } = makeTuiCtx(virtualModel);
+    // Pi resolves the route through its catalog and refuses an entry that is
+    // itself virtual (dist/core/model-runtime.js:749) — the stub does both.
+    ctx.modelRegistry = {
+      find: (provider: string, id: string) =>
+        [virtualModel, physicalModel].find((m) => m.provider === provider && m.id === id),
+    };
+    h.sessionStart({ type: "session_start" }, ctx);
+    const comp = getFooter();
+    expect(comp.render(100)[1]).not.toContain("→");
+
+    // The response names a different model than the selected one: pi's footer
+    // shows where the request was routed, with the level it answered at.
+    h.start(assistantStart(), ctx);
+    now = 1_300;
+    h.update(update("abcd"), ctx);
+    now = 1_600;
+    h.end(
+      assistantEnd({ provider: "p", model: "physical-model", thinkingLevel: "medium" }),
+      ctx,
+    );
+    const routed = comp.render(100)[1];
+    expect(routed).toContain("→ physical-model");
+    expect(routed).toContain("medium");
+
+    // An aborted response is not one pi's getter reads, so the route of the
+    // last successful response stays on screen.
+    h.start(assistantStart(), ctx);
+    now = 1_700;
+    h.update(update("abcd"), ctx);
+    now = 1_800;
+    h.end(assistantEnd({ provider: "p", model: "physical-model", stopReason: "aborted" }), ctx);
+    expect(comp.render(100)[1]).toContain("→ physical-model");
+
+    // A model switch drops the recorded route until the next response answers.
+    h.modelSelect(
+      {
+        type: "model_select",
+        model: virtualModel,
+        previousModel: { id: "virtual-model" },
+        source: "set",
+      },
+      ctx,
+    );
+    expect(comp.render(100)[1]).not.toContain("→");
+
+    // A response that names the selection itself resolves to a virtual entry,
+    // which pi refuses — the arrow stays away.
+    h.start(assistantStart(), ctx);
+    now = 2_300;
+    h.update(update("efgh"), ctx);
+    now = 2_600;
+    h.end(assistantEnd({ provider: "p", model: "virtual-model" }), ctx);
+    expect(comp.render(100)[1]).not.toContain("→");
+  });
+
+  it("records no route under a physical selection", () => {
+    const h = moduleHandlers();
+    const { ctx, getFooter } = makeTuiCtx({
+      id: "m",
+      provider: "p",
+      api: "anthropic-messages",
+      reasoning: false,
+      contextWindow: 1_000,
+    });
+    ctx.modelRegistry = {
+      find: () => ({
+        id: "other-model",
+        provider: "p",
+        api: "anthropic-messages",
+        reasoning: false,
+        contextWindow: 1_000,
+      }),
+    };
+    h.sessionStart({ type: "session_start" }, ctx);
+    h.start(assistantStart(), ctx);
+    now = 1_300;
+    h.update(update("abcd"), ctx);
+    now = 1_600;
+    h.end(assistantEnd({ provider: "p", model: "other-model" }), ctx);
+    // Pi's routedModel is undefined outside a virtual selection, so a response
+    // naming another model is not a route.
+    expect(getFooter().render(100)[1]).not.toContain("→");
   });
 
   it("thinking_level_select refreshes the installed footer", () => {

@@ -111,7 +111,12 @@ export interface FooterDisplay {
   /** Refresh the session head the installed footer reads through. Pi calls
    *  setSession() only on its own built-in footer, so a mid-session /model
    *  switch has to be written into the proxy instead of reinstalling. */
-  updateSession?: (patch: { model?: unknown; thinkingLevel?: unknown }) => void;
+  updateSession?: (patch: {
+    model?: unknown;
+    thinkingLevel?: unknown;
+    /** `undefined` clears it — switching back off a virtual selection. */
+    routedModel?: { model: { id: string }; thinkingLevel?: unknown } | undefined;
+  }) => void;
   /** The merged row can no longer be trusted — move the reading elsewhere. */
   onRenderFailure: () => void;
 }
@@ -123,6 +128,12 @@ export interface FooterDisplay {
  *
  *  The proxy is MUTABLE on purpose (see FooterDisplay.updateSession above).
  *
+ *  `model` is a live getter over `state.model`: Pi keys its stats cache on
+ *  `session.model`, so a mid-session /model switch has to be readable here or
+ *  the cache keeps serving the previous model's context-window figures.
+ *  `routedModel` is filled in by the tps module from the model that produced
+ *  the last response — ctx has no routedModel getter of its own.
+ *
  *  Known gap: auto-compact has no extension event, so the "(auto)" marker
  *  stays at its default (shown). It only lies if the user toggled
  *  auto-compact off mid-session. */
@@ -131,15 +142,24 @@ interface SessionProxy {
   sessionManager: unknown;
   getContextUsage: () => unknown;
   modelRuntime: { isUsingSubscription: () => false };
+  /** Same value as `state.model`, read through a getter. */
+  model: unknown;
+  /** Physical model of the latest response, present under a virtual selection. */
+  routedModel: { model: { id: string }; thinkingLevel?: unknown } | undefined;
 }
 
 function fakeSessionFor(ctx: ExtensionContext): SessionProxy {
-  return {
-    state: { model: ctx.model, thinkingLevel: ctx.thinkingLevel },
+  const proxy = {
+    state: { model: ctx.model as unknown, thinkingLevel: ctx.thinkingLevel as unknown },
     sessionManager: ctx.sessionManager,
     getContextUsage: () => ctx.getContextUsage(),
     modelRuntime: { isUsingSubscription: () => false },
+    routedModel: undefined as SessionProxy["routedModel"],
   };
+  // Pi reads `session.model` itself for the stats-cache key; the getter keeps
+  // that reading in step with the mutable `state.model`.
+  Object.defineProperty(proxy, "model", { get: () => proxy.state.model, enumerable: true });
+  return proxy as SessionProxy;
 }
 
 /** Pi's own footer with the TPS text merged into the stats line. */
@@ -202,6 +222,7 @@ export function installTpsFooter(ctx: ExtensionContext, runtime: FooterDisplay):
     runtime.updateSession = (patch) => {
       if (patch.model !== undefined) proxy.state.model = patch.model;
       if (patch.thinkingLevel !== undefined) proxy.state.thinkingLevel = patch.thinkingLevel;
+      if ("routedModel" in patch) proxy.routedModel = patch.routedModel;
     };
     ctx.ui.setFooter((tui, _theme, footerData) => {
       invoked = true;

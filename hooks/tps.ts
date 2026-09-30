@@ -70,6 +70,12 @@ const MIN_LIVE_MS = 200;
 /** Cap live re-renders — message_update fires per content-block event. */
 const THROTTLE_MS = 400;
 
+/** API id of pi's virtual catalog entries. pi exports it as `VIRTUAL_MODEL_API`
+ *  from its own virtual-model module but does not re-export it from the package
+ *  root (dist/core/virtual-models.js:3), and it is what `isVirtualModel()` —
+ *  hence `session.routedModel` — keys on. */
+const VIRTUAL_MODEL_API = "pi-virtual";
+
 interface TpsState {
   /** An assistant message is in flight (started, not yet ended). */
   active: boolean;
@@ -249,7 +255,11 @@ export function createTpsModule(): Module {
       // proxy our TpsFooter reads through instead.
       model_select: [
         (event: ModelSelectEvent) => {
-          runtime.updateSession?.({ model: event.model });
+          // Pi derives its own routedModel only for a virtual selection, and
+          // from the latest response in the session — which may predate this
+          // selection. Dropping the recorded route is the conservative read:
+          // the arrow reappears with the next response.
+          runtime.updateSession?.({ model: event.model, routedModel: undefined });
         },
       ],
 
@@ -283,6 +293,30 @@ export function createTpsModule(): Module {
       message_end: [
         (event: MessageEndEvent, ctx: ExtensionContext) => {
           if (event.message.role !== "assistant") return;
+          // Keep the installed footer's `→ <physical model>` arrow in step
+          // with what pi itself would report. Pi reads it from
+          // `session.routedModel` (dist/core/agent-session.js:1017), which
+          // appends nothing unless the selection is a virtual model, draws the
+          // physical model of the latest *successful* response — errored and
+          // aborted responses are skipped, so an earlier route survives a
+          // failed run — and draws nothing again when that model has left the
+          // catalog. Neither the session nor the route is reachable from ctx,
+          // so the same rules are applied to the response that just arrived.
+          const responded = event.message;
+          if (
+            ctx.model?.api === VIRTUAL_MODEL_API &&
+            responded.stopReason !== "error" &&
+            responded.stopReason !== "aborted"
+          ) {
+            const found = ctx.modelRegistry?.find(responded.provider, responded.model);
+            // pi's own lookup refuses an entry that is itself virtual
+            // (dist/core/model-runtime.js:749), so a response naming the
+            // selection draws no arrow either.
+            const physical = found && found.api !== VIRTUAL_MODEL_API ? found : undefined;
+            runtime.updateSession?.({
+              routedModel: physical && { model: physical, thinkingLevel: responded.thinkingLevel },
+            });
+          }
           state.active = false;
           state.finalized = true;
           const { stopReason, usage } = event.message;
