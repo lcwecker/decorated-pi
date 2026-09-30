@@ -104,49 +104,97 @@ function isPlainObject(value: unknown): value is Record<string, any> {
   return !!value && typeof value === "object" && !Array.isArray(value);
 }
 
+/** Server names this pack has shipped: codegraph, and context7 up to 0.11.0. */
+const PACK_SERVER_NAMES = [CODEGRAPH_SERVER_NAME, "context7"];
+
 /**
- * Moves the `mcpServers` entries out of a legacy file into the file pi reads.
- * Entries already present in the target win, and a corrupt target file is left
- * untouched.
+ * Reads a JSON object. An absent file reads as an empty object; one that holds
+ * anything else reports `null`, which leaves the caller nothing to write.
+ */
+function readJsonObject(filePath: string): Record<string, any> | null {
+  if (!fs.existsSync(filePath)) return {};
+  try {
+    const parsed = JSON.parse(fs.readFileSync(filePath, "utf-8"));
+    return isPlainObject(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Whether a server entry is a leftover on/off flag rather than a server pi can
+ * run.
+ *
+ * Versions before the handover remembered the state of their builtin servers by
+ * writing `{"<name>": {"enabled": true}}` — `toggleMcpServerEnabled` targeted
+ * `~/.pi/agent/mcp.json` for the global scope, the file its own reader used,
+ * and `.pi/agent/mcp.json` for the project scope. pi reads the former as its
+ * global config now and answers such an entry with `needs either "command"
+ * (stdio) or "url" (streamable HTTP)` on every start, while the flag says
+ * nothing it can act on: the servers are registrations from the extension API.
+ */
+function isLeftoverEnabledFlag(name: string, entry: unknown): boolean {
+  if (!isPlainObject(entry)) return false;
+  const keys = Object.keys(entry);
+  if (keys.length > 0 && keys.every((key) => key === "enabled") && typeof entry.enabled === "boolean") {
+    return true;
+  }
+  // The names this pack ships go even when the entry carries more than the
+  // flag: the builtin is the pack's to hand over, and an entry pi cannot run
+  // under one of those names is a leftover by definition.
+  const transportless = typeof entry.command !== "string" && typeof entry.url !== "string";
+  return transportless && PACK_SERVER_NAMES.includes(name);
+}
+
+/**
+ * Moves the `mcpServers` entries out of a legacy file into the file pi reads,
+ * dropping the leftover flags either file still carries. Entries already
+ * present in the target win, and a corrupt target file is left untouched.
  */
 function moveServerEntries(legacyPath: string, newPath: string): void {
-  let legacy: Record<string, any> | null = null;
-  try {
-    legacy = JSON.parse(fs.readFileSync(legacyPath, "utf-8"));
-  } catch {
-    return;
-  }
-  if (!isPlainObject(legacy)) return;
-  const legacyServers = legacy.mcpServers ?? legacy["mcp-servers"];
-  if (!isPlainObject(legacyServers)) return;
-  if (Object.keys(legacyServers).length === 0) return;
+  const legacy = readJsonObject(legacyPath);
+  const newConfig = readJsonObject(newPath);
+  if (newConfig === null) return;
 
-  let newConfig: Record<string, any> = { mcpServers: {} };
-  if (fs.existsSync(newPath)) {
-    try {
-      const parsed = JSON.parse(fs.readFileSync(newPath, "utf-8"));
-      if (!isPlainObject(parsed)) return;
-      newConfig = parsed;
-      if (!isPlainObject(newConfig.mcpServers)) newConfig.mcpServers = {};
-    } catch {
-      return;
+  const legacyServers: unknown = legacy ? (legacy.mcpServers ?? legacy["mcp-servers"]) : undefined;
+  const hadLegacy = isPlainObject(legacyServers) && Object.keys(legacyServers).length > 0;
+
+  const existing = newConfig.mcpServers;
+  const servers: Record<string, any> = isPlainObject(existing) ? existing : {};
+  newConfig.mcpServers = servers;
+  let changed = false;
+
+  for (const name of Object.keys(servers)) {
+    if (!isLeftoverEnabledFlag(name, servers[name])) continue;
+    delete servers[name];
+    changed = true;
+  }
+
+  if (isPlainObject(legacyServers)) {
+    for (const [name, entry] of Object.entries(legacyServers)) {
+      if (name in servers) continue;
+      if (isLeftoverEnabledFlag(name, entry)) continue;
+      servers[name] = entry;
+      changed = true;
     }
   }
 
-  for (const [name, entry] of Object.entries(legacyServers)) {
-    if (!(name in newConfig.mcpServers)) newConfig.mcpServers[name] = entry;
-  }
+  if (!changed && !hadLegacy) return;
 
   // A read-only project directory must not take the extension down: pi drops
   // an extension whose factory throws. The legacy file is left in place when
   // the write fails, so the migration runs again on the next load.
   try {
-    fs.mkdirSync(path.dirname(newPath), { recursive: true });
-    fs.writeFileSync(newPath, JSON.stringify(newConfig, null, 2) + "\n", "utf-8");
+    if (changed) {
+      fs.mkdirSync(path.dirname(newPath), { recursive: true });
+      fs.writeFileSync(newPath, JSON.stringify(newConfig, null, 2) + "\n", "utf-8");
+    }
 
-    delete legacy.mcpServers;
-    delete legacy["mcp-servers"];
-    fs.writeFileSync(legacyPath, JSON.stringify(legacy, null, 2) + "\n", "utf-8");
+    if (hadLegacy && legacy) {
+      delete legacy.mcpServers;
+      delete legacy["mcp-servers"];
+      fs.writeFileSync(legacyPath, JSON.stringify(legacy, null, 2) + "\n", "utf-8");
+    }
   } catch {
     /* Nothing to migrate to — a server list pi cannot read is a server list
        the user still has, one `/reload` away from a writable directory. */
@@ -155,9 +203,12 @@ function moveServerEntries(legacyPath: string, newPath: string): void {
 
 /**
  * Global servers of versions before the dedicated file: they lived in the
- * pack's own `decorated-pi.json`. pi reads `mcp.json`, so the entries move
- * there once — both files are in the agent dir, so this cannot collide with
- * the project migration below.
+ * pack's own `decorated-pi.json`, and its own `mcp.json` reader pointed at
+ * `~/.pi/agent/mcp.json` all along. pi reads `mcp.json`, so the real entries
+ * move there once — both files are in the agent dir, so this cannot collide
+ * with the project migration below — and the enabled flags versions before the
+ * handover kept in either file are dropped: pi validates that file now and
+ * warns about an entry it cannot run.
  */
 export function migrateLegacyGlobalMcpConfig(): void {
   const agentDir = getAgentDir();
@@ -167,6 +218,9 @@ export function migrateLegacyGlobalMcpConfig(): void {
 /**
  * Project servers: pi's built-in MCP extension reads `<cwd>/.pi/mcp.json`,
  * versions of this pack before the handover read `<cwd>/.pi/agent/mcp.json`.
+ *
+ * The legacy path is where the pre-handover toggle wrote, so it carries the
+ * same enabled flags the global migration drops.
  *
  * Launched from the home directory — or with the agent dir pointed inside the
  * project — `<cwd>/.pi/agent/mcp.json` *is* pi's global `mcp.json`. Moving its

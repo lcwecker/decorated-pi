@@ -258,6 +258,46 @@ describe("project server-list migration", () => {
     expect(JSON.parse(fs.readFileSync(path.join(cwd, ".pi/agent/mcp.json"), "utf-8"))).toEqual({});
   });
 
+  it("drops the enabled flags the legacy project file carries", () => {
+    const cwd = initProject(true);
+    writeJson(path.join(cwd, ".pi/agent/mcp.json"), {
+      mcpServers: { codegraph: { enabled: true }, sentry: { url: "https://mcp.sentry.dev/mcp" } },
+      keep: 1,
+    });
+
+    migrateProjectMcpConfig(cwd);
+
+    // A flag with no transport of its own is what pi answers with `needs
+    // either "command" (stdio) or "url" (streamable HTTP)` on every start.
+    expect(JSON.parse(fs.readFileSync(path.join(cwd, ".pi/mcp.json"), "utf-8"))).toEqual({
+      mcpServers: { sentry: { url: "https://mcp.sentry.dev/mcp" } },
+    });
+    expect(JSON.parse(fs.readFileSync(path.join(cwd, ".pi/agent/mcp.json"), "utf-8"))).toEqual({
+      keep: 1,
+    });
+  });
+
+  it("drops a flag the new project file already carries", () => {
+    const cwd = initProject(true);
+    writeJson(path.join(cwd, ".pi/mcp.json"), { mcpServers: { codegraph: { enabled: false } } });
+
+    migrateProjectMcpConfig(cwd);
+
+    expect(JSON.parse(fs.readFileSync(path.join(cwd, ".pi/mcp.json"), "utf-8"))).toEqual({
+      mcpServers: {},
+    });
+  });
+
+  it("creates no target for a legacy list that only holds flags", () => {
+    const cwd = initProject(true);
+    writeJson(path.join(cwd, ".pi/agent/mcp.json"), { mcpServers: { codegraph: { enabled: true } } });
+
+    migrateProjectMcpConfig(cwd);
+
+    expect(fs.existsSync(path.join(cwd, ".pi/mcp.json"))).toBe(false);
+    expect(JSON.parse(fs.readFileSync(path.join(cwd, ".pi/agent/mcp.json"), "utf-8"))).toEqual({});
+  });
+
   it("stays out of the way of an empty server list", () => {
     const cwd = initProject(true);
     writeJson(path.join(cwd, ".pi/agent/mcp.json"), { mcpServers: {}, keep: 1 });
@@ -421,6 +461,63 @@ describe("global server-list migration", () => {
 
     expect(JSON.parse(fs.readFileSync(agentDirFile("mcp.json"), "utf-8"))).toEqual({
       mcpServers: { sentry: { url: "https://new.example/mcp" } },
+    });
+  });
+
+  // These three come last in the file: they leave server entries in the shared
+  // agent dir, and the two above read it as their starting point.
+  it("drops the enabled flags older versions left in pi's file", () => {
+    writeJson(agentDirFile("mcp.json"), {
+      mcpServers: {
+        codegraph: { enabled: true },
+        context7: { enabled: false },
+        sentry: { url: "https://mcp.sentry.dev/mcp" },
+      },
+    });
+
+    migrateLegacyGlobalMcpConfig();
+
+    expect(JSON.parse(fs.readFileSync(agentDirFile("mcp.json"), "utf-8"))).toEqual({
+      mcpServers: { sentry: { url: "https://mcp.sentry.dev/mcp" } },
+    });
+    // Nothing left to drop: a second load writes nothing.
+    migrateLegacyGlobalMcpConfig();
+    expect(JSON.parse(fs.readFileSync(agentDirFile("mcp.json"), "utf-8"))).toEqual({
+      mcpServers: { sentry: { url: "https://mcp.sentry.dev/mcp" } },
+    });
+  });
+
+  it("carries no builtin flag into pi's file", () => {
+    writeJson(agentDirFile("decorated-pi.json"), {
+      mcpServers: { codegraph: { enabled: true }, sentry: { url: "https://mcp.sentry.dev/mcp" } },
+    });
+    writeJson(agentDirFile("mcp.json"), { mcpServers: { codegraph: { enabled: false } } });
+
+    migrateLegacyGlobalMcpConfig();
+
+    expect(JSON.parse(fs.readFileSync(agentDirFile("mcp.json"), "utf-8"))).toEqual({
+      mcpServers: { sentry: { url: "https://mcp.sentry.dev/mcp" } },
+    });
+    expect(JSON.parse(fs.readFileSync(agentDirFile("decorated-pi.json"), "utf-8"))).toEqual({});
+  });
+
+  it("keeps a server definition under a builtin name", () => {
+    // The user's own codegraph entry wins over the registration, and an entry
+    // the pack never shipped is not the pack's to drop.
+    writeJson(agentDirFile("mcp.json"), {
+      mcpServers: {
+        codegraph: { command: "/opt/codegraph", args: ["serve", "--mcp"] },
+        mine: { note: "half-written by hand" },
+      },
+    });
+
+    migrateLegacyGlobalMcpConfig();
+
+    expect(JSON.parse(fs.readFileSync(agentDirFile("mcp.json"), "utf-8"))).toEqual({
+      mcpServers: {
+        codegraph: { command: "/opt/codegraph", args: ["serve", "--mcp"] },
+        mine: { note: "half-written by hand" },
+      },
     });
   });
 });
