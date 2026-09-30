@@ -34,15 +34,6 @@ export interface ProviderCache {
   models: ProviderModelEntry[];
 }
 
-export interface McpServerEntry {
-  url?: string;
-  command?: string;
-  args?: string[];
-  env?: Record<string, string>;
-  enabled?: boolean;
-  description?: string;
-}
-
 export interface ModuleSettings {
   tools?: {
     /** Replace Pi native edit with the patch tool; native write stays active. */
@@ -51,7 +42,7 @@ export interface ModuleSettings {
     ask?: boolean;
     /** Language server navigation: definition, references, document symbols, rename. */
     lsp?: boolean;
-    /** MCP client with builtin servers (context7, codegraph). */
+    /** Hand the builtin MCP servers (context7, codegraph) to pi's MCP module. */
     mcp?: boolean;
     /** Keyless web search over AnySearch, Exa and Parallel, with automatic fallback. */
     websearch?: boolean;
@@ -113,7 +104,6 @@ export interface DecoratedPiConfig {
   dependencies?: Record<string, DependencySettings>;
   providers?: Record<string, ProviderCache>;
   modules?: ModuleSettings;
-  mcpServers?: Record<string, McpServerEntry>;
   usageIndex?: Record<string, UsageIndexEntry>;
 }
 

@@ -10,7 +10,7 @@ import type { Theme as PiTheme, ExtensionUIContext } from "@earendil-works/pi-co
 import { Container, SettingsList, type TUI, type SettingsListTheme, type SettingItem, type Component } from "@earendil-works/pi-tui";
 import { getAllModuleSettings, setModuleEnabled, isModuleEnabled, type ModuleSettings, getDependencyPath, setDependencyPath, isDontBother, setDontBother, getDependencyView, listDependencyViewNames, getAskWho, setAskWho, getTypesafeApiKey, setTypesafeApiKey } from "../settings.js";
 import { listLspBinaryNames } from "../tools/lsp/servers.js";
-import { listMcpBinaryNames } from "../tools/mcp/config.js";
+import { listMcpBinaryNames } from "../tools/mcp.js";
 
 type ModuleName =
   | "patchOverrideEdit"
@@ -40,7 +40,7 @@ const MODULE_LABELS: Record<ModuleName, string> = {
 const MODULE_DESCS: Record<ModuleName, string> = {
   patchOverrideEdit: "Replace Pi native edit with patch tool (targeted string replacement)",
   lsp: "Language server navigation: definition, references, document symbols, rename",
-  mcp: "MCP client with builtin servers (context7, codegraph)",
+  mcp: "Builtin MCP servers (context7, codegraph) handed to pi's MCP extension",
   websearch: "Keyless web search over AnySearch, Exa and Parallel, with automatic fallback",
   webFetch: "Read a URL as markdown/text/HTML — locally first, rendering backend on failure",
   wakatime: "Send coding activity heartbeats to WakaTime",

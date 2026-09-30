@@ -2,9 +2,8 @@
  * Per-spec agent-dir isolation.
  *
  * Every module that resolves an agent-dir path does so through pi's
- * `getAgentDir()` — `settings.ts` (decorated-pi.json), `tools/mcp/config.ts`
- * (mcp.json), `tools/mcp/cache.ts` (mcp-cache.json), `commands/usage.ts`
- * (usage jsonl + sessions). `getAgentDir()` honours `PI_CODING_AGENT_DIR`, so
+ * `getAgentDir()` — `settings.ts` (decorated-pi.json), `commands/usage.ts`
+ * (usage jsonl + sessions), and pi's own MCP extension (`mcp.json`). `getAgentDir()` honours `PI_CODING_AGENT_DIR`, so
  * pointing that at a fresh temp directory keeps the suite off the user's real
  * `~/.pi/agent` state.
  *

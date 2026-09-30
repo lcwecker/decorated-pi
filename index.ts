@@ -32,7 +32,6 @@ import { createImageVisionModule } from "./hooks/image-vision.js";
 import { sessionTitleModule } from "./hooks/session-title.js";
 import { piToolFilterModule } from "./hooks/pi-tool-filter.js";
 import { setupCompaction } from "./hooks/compaction.js";
-import { McpRuntime, createMcpModule } from "./hooks/mcp.js";
 import { setupWakatime } from "./hooks/wakatime.js";
 import { createTpsModule } from "./hooks/tps.js";
 import { createCodeReviewModule } from "./hooks/code-review.js";
@@ -47,14 +46,14 @@ import { registerWebSearchTool } from "./tools/websearch/index.js";
 import { registerWebFetchTool } from "./tools/webfetch/index.js";
 import { CodeReviewRuntime, registerCodeReviewRenderer } from "./tools/code-review/index.js";
 import {
-    resolveMcpConfigs,
+    registerBuiltinMcpServers,
+    collectBuiltinMcpDependencyStatuses,
     migrateLegacyGlobalMcpConfig,
-    collectMcpDependencyStatuses,
-} from "./tools/mcp/config.js";
+    migrateProjectMcpConfig,
+} from "./tools/mcp.js";
 
 import { registerDpModelCommand } from "./commands/dp-model.js";
 import { registerDpSettingsCommand } from "./commands/dp-settings.js";
-import { registerMcpStatusCommand } from "./commands/mcp-status.js";
 import { registerRetryCommand } from "./commands/retry.js";
 import { registerUsageCommand } from "./commands/usage.js";
 import { registerCodeReviewCommand } from "./commands/code-review.js";
@@ -109,15 +108,6 @@ function buildGuidelines(): string[] {
         TALK_NORMAL_GUIDANCE,
         INJECT_AGENTS_MD_GUIDANCE, // from hooks/inject-agents-md.ts — always on
     ];
-}
-
-function canRegisterMcpServer(
-    config: { name: string; command?: string },
-    deps: Array<{ module: string; state: string }>,
-): boolean {
-    if (!config.command) return true;
-    const dep = deps.find((d) => d.module === `mcp:${config.name}`);
-    return dep ? dep.state === "ok" : true;
 }
 
 export default async function (pi: ExtensionAPI) {
@@ -187,18 +177,24 @@ export default async function (pi: ExtensionAPI) {
     if (isModuleEnabled("websearch")) registerWebSearchTool(pi);
     if (isModuleEnabled("webFetch")) registerWebFetchTool(pi);
 
-    // MCP: hook, tools, and /mcp command are gated together. Disabling the
-    // module means no session_start handler runs, no tools register, no
-    // /mcp command is available, and no background connections are attempted.
+    // MCP: pi's built-in MCP extension owns the protocol, the connection
+    // lifecycle, the tool registration and /mcp. All this module does is hand
+    // it the two servers the pack ships (tools/mcp.ts) — context7 always,
+    // codegraph in a project that has a .codegraph index. Disabling the module
+    // registers neither, and the user's own mcp.json servers still connect.
     if (isModuleEnabled("mcp")) {
-        // One-time migration: legacy global MCP configs in
-        // ~/.pi/agent/decorated-pi.json move to ~/.pi/agent/mcp.json. Run
-        // explicitly here so `loadGlobalMcpConfigs` stays pure.
+        // The factory runs before any session exists, so the launch directory is
+        // the project here — the codegraph gate and the LSP servers read it the
+        // same way. A session that moves elsewhere picks the next answer up on
+        // `/reload`.
+        const cwd = process.cwd();
+        // Global servers used to live in the pack's decorated-pi.json, project
+        // servers in <cwd>/.pi/agent/mcp.json; pi reads its own mcp.json files.
+        // Move the entries over once each.
         migrateLegacyGlobalMcpConfig();
-        const mcpRuntime = new McpRuntime();
-        sk.register(createMcpModule(mcpRuntime));
-        const mcpDeps = collectMcpDependencyStatuses(process.cwd());
-        for (const dep of mcpDeps) {
+        migrateProjectMcpConfig(cwd);
+        registerBuiltinMcpServers(pi, cwd);
+        for (const dep of collectBuiltinMcpDependencyStatuses(cwd)) {
             if (dep.state !== "ok") {
                 sk.declareMissing({
                     name: dep.label, // binary name (e.g. "codegraph")
@@ -207,18 +203,6 @@ export default async function (pi: ExtensionAPI) {
                 });
             }
         }
-        const configs = resolveMcpConfigs(process.cwd()).filter(
-            (s) => s.enabled,
-        );
-        // Per-server readiness: cache hit → register from cache (fast).
-        // Cache miss → connect synchronously, write cache, then register
-        // live tools. This blocks startup only for cache-miss servers.
-        // Skip servers whose binary is missing (dependency not met).
-        for (const config of configs) {
-            if (!canRegisterMcpServer(config, mcpDeps)) continue;
-            await mcpRuntime.ensureServerReady(pi, config, process.cwd());
-        }
-        registerMcpStatusCommand(pi, mcpRuntime);
     }
 
     // ── Commands ──────────────────────────────────────────────────────────

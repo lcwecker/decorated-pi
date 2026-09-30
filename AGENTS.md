@@ -31,6 +31,7 @@ decorated-pi/
 - A hook does not care whether the triggering tool was registered by us or by pi core.
 - A command does not participate in the agent loop. When it needs agent-loop state (e.g. `/retry`'s in-flight flag), the state object is created by the command module and the reset lives in a hook module (see `hooks/retry.ts`).
 - The skeleton (`hooks/skeleton.ts`) is the only place that calls `pi.on(...)`.
+- MCP is owned by pi's built-in MCP extension: it reads `mcp.json`, connects, registers the `mcp__<server>__<tool>` tools and serves `/mcp`. `tools/mcp.ts` is not a tool module — it registers the pack's two server definitions with `pi.registerMcpServer()` and migrates the legacy project server list.
 
 ### Skeleton — `hooks/skeleton.ts`
 
@@ -75,7 +76,7 @@ The only shared state is `settings.ts`. Commands write; `index.ts` reads on `/re
 2. In `index.ts`: `if (isModuleEnabled("<name>")) register<Name>Tool(pi);`
 3. *(Optional)* In `commands/dp-settings.ts`: add the module label so users can toggle it via `/dp-settings`. Without this the tool is always on; users would have to edit `settings.json` directly to disable.
 
-If the tool has its own state, protocol client, or dynamic sub-tools, organize it as a directory instead of a single file: `tools/<name>/{client,manager,...}.ts` plus `tools/<name>/index.ts` exporting `register<Name>Tools(pi)`. See `tools/mcp/` and `tools/lsp/` for stateful examples, and `tools/websearch/` (`client` + one file per provider) and `tools/webfetch/` (one file per fetch path) for the stateless split-by-job shape.
+If the tool has its own state, protocol client, or dynamic sub-tools, organize it as a directory instead of a single file: `tools/<name>/{client,manager,...}.ts` plus `tools/<name>/index.ts` exporting `register<Name>Tools(pi)`. See `tools/lsp/` for a stateful example, and `tools/websearch/` (`client` + one file per provider) and `tools/webfetch/` (one file per fetch path) for the stateless split-by-job shape.
 
 When a single tool file grows past ~1000 lines because one algorithm is doing several jobs, split it by concern with `core.ts` as the public API plus re-exports, and keep the siblings acyclic. See `tools/patch/` (`core` = apply + preview + re-exports, siblings = `types` / `lines` / `locate` / `diagnostics` / `diff`); `test/patch-modules.test.ts` pins that layering.
 
@@ -98,14 +99,14 @@ npm test
 Organization rules:
 
 - Tests mirror the source layout one-to-one: `extensions/<area>/<name>.ts` → `test/<name>.test.ts`.
-- All spec files live flat in `test/` (no nested folders). For a tool that is a directory (e.g. `tools/mcp/`), the spec is `test/mcp.test.ts` covering the whole module.
-- Sub-features of the same module may get their own file: `test/mcp-externalize.test.ts` for a specific concern of MCP, `test/patch.test.ts` for the patch tool.
+- All spec files live flat in `test/` (no nested folders). A tool that is a directory gets one spec per module, prefixed with the directory name: `tools/lsp/` → `test/lsp-*.test.ts`.
+- Sub-features of the same module may get their own file: `test/patch-modules.test.ts` pins the layering of `tools/patch/`, `test/dep-gate.test.ts` covers the dependency gate of `index.ts`.
 - Every new feature or bug fix ships with a test — run `npm test` before considering the change done.
 - The suite must never read or write the developer's real `~/.pi/agent`:
   - `test/setup-agent-dir.ts` (vitest `setupFiles`) points `PI_CODING_AGENT_DIR` at a fresh temp directory per spec file. That also lets spec files run in parallel.
   - Specs build agent-dir paths with `agentDir()` / `agentDirFile()` from `test/agent-dir.ts` instead of `os.homedir()`.
   - Because the agent dir is throwaway, specs need no `backupConfig` / `restoreConfig` around it.
-  - Anything that would reach the network on a cold cache (e.g. the URL-based builtin MCP servers) must be disabled in the spec's `mcp.json`.
+  - Anything that would reach the network on a cold cache must be disabled or mocked in the spec (e.g. the URL-based builtin MCP servers, which pi's MCP extension would connect on session start).
 
 ## Release
 

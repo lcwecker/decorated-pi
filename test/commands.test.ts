@@ -1,5 +1,5 @@
 /**
- * /dp-model, /dp-settings, /retry, /mcp — command smoke tests.
+ * /dp-model, /dp-settings, /retry — command smoke tests.
  *
  * These commands are thin glue between ExtensionAPI and UI components /
  * hook functions. We stub everything and assert:
@@ -261,104 +261,5 @@ describe("/retry", () => {
 
     await lastCommand!.handler([], ctx);
     expect(mockSendMessage).toHaveBeenCalledTimes(2);
-  });
-});
-
-// ─── /mcp (non-interactive branch) ────────────────────────────────────────
-
-
-// ─── /mcp (non-interactive branch) ────────────────────────────────────────
-
-describe("/mcp — non-interactive", () => {
-  it("notifies 'No MCP servers configured' when list is empty", async () => {
-    const { registerMcpStatusCommand } = await import("../commands/mcp-status.js");
-    const pi = makePi();
-    const service = { getStatus: () => [], refresh: vi.fn(), setEnabled: vi.fn() };
-    registerMcpStatusCommand(pi as any, service as any);
-
-    const ctx = makeCtx({ hasUI: false });
-    await lastCommand!.handler([], ctx);
-
-    expect(mockNotify).toHaveBeenCalledWith(
-      "No MCP servers configured.",
-      "info",
-    );
-    expect(mockSendMessage).not.toHaveBeenCalled();
-  });
-
-  it("sends a mcp-status custom message when servers are present", async () => {
-    const { registerMcpStatusCommand } = await import("../commands/mcp-status.js");
-    const pi = makePi();
-    const service = {
-      getStatus: () => [
-        {
-          name: "context7",
-          url: "https://mcp.context7.com/mcp",
-          source: "builtin",
-          state: "connected",
-          toolCount: 2,
-          tools: [
-            { name: "web_search", description: "Search the web" },
-            { name: "fetch", description: "Fetch a URL" },
-          ],
-        },
-        {
-          name: "broken",
-          url: "https://broken.example/mcp",
-          source: "project",
-          state: "failed",
-          toolCount: 0,
-          tools: [],
-          error: "DNS resolution failed",
-        },
-      ],
-      refresh: vi.fn(),
-      setEnabled: vi.fn(),
-    };
-    registerMcpStatusCommand(pi as any, service as any);
-
-    const ctx = makeCtx({ hasUI: false });
-    await lastCommand!.handler([], ctx);
-
-    expect(mockSendMessage).toHaveBeenCalledTimes(1);
-    const [msg, opts] = mockSendMessage.mock.calls[0];
-    expect(msg.customType).toBe("mcp-status");
-    expect(msg.display).toBe(true);
-    expect(opts).toEqual({ triggerTurn: false });
-    expect(msg.content).toContain("MCP servers (2):");
-    expect(msg.content).toContain("context7");
-    expect(msg.content).toContain("web_search");
-    expect(msg.content).toContain("broken");
-    expect(msg.content).toContain("failed");
-    expect(msg.content).toContain("DNS resolution failed");
-  });
-
-  it("shows 'connecting...' state without listing tools", async () => {
-    const { registerMcpStatusCommand } = await import("../commands/mcp-status.js");
-    const pi = makePi();
-    const service = {
-      getStatus: () => [
-        {
-          name: "loading",
-          url: "https://loading.example/mcp",
-          source: "global",
-          state: "connecting",
-          toolCount: 0,
-          tools: [],
-        },
-      ],
-      refresh: vi.fn(),
-      setEnabled: vi.fn(),
-    };
-    registerMcpStatusCommand(pi as any, service as any);
-
-    const ctx = makeCtx({ hasUI: false });
-    await lastCommand!.handler([], ctx);
-
-    expect(mockSendMessage).toHaveBeenCalledTimes(1);
-    const [msg] = mockSendMessage.mock.calls[0];
-    expect(msg.content).toContain("loading");
-    expect(msg.content).toContain("connecting...");
-    expect(msg.content).not.toContain("Tools: 0");
   });
 });

@@ -1,6 +1,6 @@
 /**
  * /dp-model — pick image / compact model.
- * UI lives in extensions/ui/model-picker.ts (shared with /mcp status etc).
+ * UI lives in extensions/ui/model-picker.ts (shared with the /dp-settings picker etc).
  */
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";

@@ -24,8 +24,11 @@ const PI_PACKAGES = [
   "@earendil-works/pi-tui",
 ];
 
-/** Hard minimum: `systemPromptOptions.sections` mutations only render here. */
-const REQUIRED_FLOOR = "0.86.0";
+/** Hard minimum: the Pi behaviour this pack is written against. 0.86 was the
+ *  floor for `systemPromptOptions.sections` rendering; the 0.99 API surface
+ *  (event set, tool `exposure`, `agent_before_settle`) is what CI now has to
+ *  verify the pack against, so the floor follows the dev range. */
+const REQUIRED_FLOOR = "0.99.0";
 
 const repoRoot = path.join(import.meta.dirname, "..");
 const pkg = JSON.parse(fs.readFileSync(path.join(repoRoot, "package.json"), "utf-8"));

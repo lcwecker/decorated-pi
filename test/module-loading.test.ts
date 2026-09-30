@@ -199,8 +199,10 @@ describe("index.ts — conditional loading structure (new architecture)", () => 
     expect(indexSrc).toContain("registerUsageCommand");
   });
 
-  it("gates /mcp command behind isModuleEnabled(mcp)", () => {
-    expect(indexSrc).toMatch(/if\s*\(\s*isModuleEnabled\(["']mcp["']\)\s*\)[\s\S]*?registerMcpStatusCommand\(pi,/);
+  it("gates MCP server registration behind isModuleEnabled(mcp)", () => {
+    // /mcp, the connections and the tool registration live in pi's built-in
+    // MCP extension now; the pack only contributes its two server definitions.
+    expect(indexSrc).toMatch(/if\s*\(\s*isModuleEnabled\(["']mcp["']\)\s*\)[\s\S]*?registerBuiltinMcpServers\(pi, cwd\)/);
   });
 
   it("imports isModuleEnabled from settings", () => {

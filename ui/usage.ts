@@ -5,7 +5,7 @@
  *   1. Overall table (4 slices: Today / Week / Month / All Time)
  *   2. Per-Model tree (collapsed by default, ↑↓ Enter to expand)
  *
- * Follows ui/mcp-status.ts visual conventions.
+ * Follows the panel conventions of the other decorated-pi UI components.
  */
 
 import type { Theme } from "@earendil-works/pi-coding-agent";

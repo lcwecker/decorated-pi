@@ -32,7 +32,7 @@ Multiple layers of token savings that compound across every session.
 **Cache‑friendly Design** — stable system prompt prefix:
 
 - tool definitions, guidelines, and skills are sorted alphabetically so the system prompt stays deterministic for the same project and configuration
-- MCP tool schemas are persisted after a successful connection, keeping the tool list stable across restarts and temporary server outages
+- MCP servers are registered with pi's built-in MCP extension, so the session keeps one connection path and one tool list
 
 **Pi Native Prompt Slimming** — moves the default Pi documentation block out of the system prompt and into a builtin `pi-docs` skill, so the docs reference loads on demand instead of sitting in every turn's prompt.
 
@@ -88,14 +88,14 @@ Two native tools, both keyless. Search runs through three hosted backends and fa
 
 ### 4. MCP Ecosystem
 
-Zero-config MCP client with built-in servers:
+Protocol, connections, tool registration and `/mcp` come from pi's built-in MCP extension. The pack contributes two server definitions, handed over with `pi.registerMcpServer()` and named by pi as `mcp__<server>__<tool>`:
 
 | Server | Tool Prefix | Source |
 | --- | --- | --- |
-| Context7 | `context7_*` | `https://mcp.context7.com/mcp` |
-| codegraph | `codegraph_*` | local `codegraph` CLI |
+| Context7 | `mcp__context7__*` | `https://mcp.context7.com/mcp` |
+| codegraph | `mcp__codegraph__*` | local `codegraph` CLI, only where a `.codegraph` index exists |
 
-**Custom servers** in `.pi/agent/mcp.json` (project) or `~/.pi/agent/mcp.json` (global). Project entries override global entries with the same name. Tool prompts and schemas are cached after a successful connection for fast startup on subsequent sessions.
+**Custom servers** in `~/.pi/agent/mcp.json` (global) or `.pi/mcp.json` (project, trusted projects only). Project entries replace global entries with the same name, and an `mcp.json` entry of the same name takes precedence over the builtin registration.
 
 ```json
 {
@@ -104,8 +104,8 @@ Zero-config MCP client with built-in servers:
       "url": "https://my-mcp.example.com/mcp",
       "enabled": true
     },
-    "my-sse": {
-      "url": "https://my-mcp.example.com/sse",
+    "my-disabled": {
+      "url": "https://my-mcp.example.com/other",
       "enabled": false
     },
     "my-stdio": {
@@ -117,7 +117,7 @@ Zero-config MCP client with built-in servers:
 }
 ```
 
-Use `/mcp` to view connection status and toggle servers.
+Use `/mcp` to sign in, reconnect, enable or disable a server and change its exposure — the servers the pack ships appear there with scope `extension`. Servers speak stdio or streamable HTTP; the SSE transport of the older MCP spec is not available. An `mcp.json` entry of the same name replaces a builtin server, and it has to carry a valid `command`/`url` for the override to be accepted — `{ "codegraph": { "command": "codegraph", "args": ["serve", "--mcp"], "enabled": false } }` switches it off. Servers the pack used to read from a project's `.pi/agent/mcp.json` are moved to `.pi/mcp.json` the next time the pack loads with the MCP module enabled — and like any project entry they count only in a trusted project.
 
 ### 5. Other
 
