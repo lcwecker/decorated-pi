@@ -1,5 +1,5 @@
 /**
- * Tests for read/bash tool result externalization
+ * Tests for tool result externalization — every tool pi leaves uncapped.
  */
 
 import { describe, it, expect, afterEach } from "vitest";
@@ -10,6 +10,7 @@ import {
   externalizeModule,
   maybeExternalizeToolResult,
   OUTPUT_EXTERNALIZE_THRESHOLD,
+  PI_SPILLED_TOOLS,
   pruneOldOutputs,
   writeOutputToTemp,
   TOOL_OUTPUT_TEMP_DIR,
@@ -69,7 +70,7 @@ describe("maybeExternalizeToolResult", () => {
   });
 
   it("returns undefined for small results", () => {
-    const event = makeEvent("bash", "small output");
+    const event = makeEvent("read", "small output");
     const result = maybeExternalizeToolResult(event);
     expect(result).toBeUndefined();
   });
@@ -81,15 +82,17 @@ describe("maybeExternalizeToolResult", () => {
     expect(result).toBeUndefined();
   });
 
-  it("externalizes bash results above threshold", () => {
+  it("leaves the built-in bash tool to pi's own capture", () => {
+    // pi hands the model a 50 KB / 2000-line tail of shell output and writes the
+    // full text to its own spill file; externalizing here would take that tail
+    // away in exchange for a path.
     const text = "y".repeat(OUTPUT_EXTERNALIZE_THRESHOLD + 10_000);
-    const event = makeEvent("bash", text);
-    const result = maybeExternalizeToolResult(event);
-    expect(result).toBeDefined();
-    const outText = result!.content![0].text as string;
-    expect(outText).toMatch(/^\[Output too long, saved to .+\.]$/);
-    expect(outText.length).toBeLessThan(200); // single-line pointer
-    expect(outText).toContain("decorated-pi-results");
+    expect(maybeExternalizeToolResult(makeEvent("bash", text))).toBeUndefined();
+    expect(fs.existsSync(TOOL_OUTPUT_TEMP_DIR)).toBe(false);
+  });
+
+  it("captures only the shell tool pi spills itself", () => {
+    expect([...PI_SPILLED_TOOLS]).toEqual(["bash"]);
   });
 
   it("externalizes read results above threshold", () => {
@@ -104,7 +107,7 @@ describe("maybeExternalizeToolResult", () => {
 
   it("saves full content to temp file", () => {
     const text = "a".repeat(OUTPUT_EXTERNALIZE_THRESHOLD + 5_000);
-    const event = makeEvent("bash", text, "call_00_saveTest123");
+    const event = makeEvent("read", text, "call_00_saveTest123");
     const result = maybeExternalizeToolResult(event);
     expect(result).toBeDefined();
 
@@ -119,7 +122,7 @@ describe("maybeExternalizeToolResult", () => {
 
   it("returns undefined for non-text content", () => {
     const event = {
-      ...makeEvent("bash", ""),
+      ...makeEvent("read", ""),
       content: [{ type: "image", data: "base64..." }],
     };
     const result = maybeExternalizeToolResult(event);
@@ -145,7 +148,7 @@ describe("maybeExternalizeToolResult", () => {
     const text = "y".repeat(OUTPUT_EXTERNALIZE_THRESHOLD + 1);
     const trailing = { type: "text", text: "trailing note" };
     const event = {
-      ...makeEvent("bash", text),
+      ...makeEvent("mcp_tool", text),
       content: [{ type: "text", text }, trailing],
     };
 
@@ -156,7 +159,7 @@ describe("maybeExternalizeToolResult", () => {
 
   it("returns undefined for empty content array", () => {
     const event = {
-      ...makeEvent("bash", ""),
+      ...makeEvent("read", ""),
       content: [],
     };
     const result = maybeExternalizeToolResult(event);

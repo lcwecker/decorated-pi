@@ -2,8 +2,11 @@
  * externalize — large tool_result → temp file.
  *
  * Keeps the messages segment small so the prompt cache stays warm across turns.
- * Applies to ANY tool whose first text content exceeds OUTPUT_EXTERNALIZE_THRESHOLD
- * bytes — read, bash, MCP tools, all the same. The tool name is preserved
+ * Applies to the first text part above OUTPUT_EXTERNALIZE_THRESHOLD bytes of any
+ * tool pi leaves uncapped — read, MCP tools, the pack's own fetch and search
+ * tools. The built-in bash tool is left alone: pi captures shell output itself
+ * (50 KB / 2000 lines tail, with the full text in a spill file), so a second
+ * copy here would only compete with it. The tool name is preserved
  * in the temp filename so users can correlate the truncation with the
  * call that produced it.
  */
@@ -45,9 +48,18 @@ export function writeOutputToTemp(
     }
 }
 
+/**
+ * Tools whose output pi already captures and spills. The built-in bash tool
+ * hands the model a 50 KB / 2000-line tail and writes the full text to a spill
+ * file, so externalizing it here would add a second copy of the same output and
+ * take the captured tail away from the model in exchange for a path.
+ */
+export const PI_SPILLED_TOOLS = new Set(["bash"]);
+
 /** Externalize a tool_result event if content is above the threshold.
  *  Returns the modified event, or undefined to leave the original untouched. */
 export function maybeExternalizeToolResult(event: any): any | undefined {
+    if (PI_SPILLED_TOOLS.has(event.toolName)) return undefined;
     if (!Array.isArray(event.content) || event.content.length === 0)
         return undefined;
     const [first, ...rest] = event.content;

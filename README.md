@@ -36,7 +36,7 @@ Multiple layers of token savings that compound across every session.
 
 **Pi Native Prompt Slimming** — moves the default Pi documentation block out of the system prompt and into a builtin `pi-docs` skill, so the docs reference loads on demand instead of sitting in every turn's prompt.
 
-**Large Result Externalization** — a `tool_result` hook saves a tool's first text result when it exceeds 30,000 characters to `/tmp/decorated-pi-results/<tool>-<callId>.txt`, replacing it with a one-line pointer (`[Output too long, saved to /tmp/…]`) that the LLM can read on demand. Only the oversized part is replaced — an image or a second text part in the same result stays in context. Earlier days' files are swept on session start.
+**Large Result Externalization** — a `tool_result` hook saves a tool's first text result when it exceeds 30,000 characters to `/tmp/decorated-pi-results/<tool>-<callId>.txt`, replacing it with a one-line pointer (`[Output too long, saved to /tmp/…]`) that the LLM can read on demand. Only the oversized part is replaced — an image or a second text part in the same result stays in context. The built-in `bash` tool is left to pi, which captures shell output itself (50 KB / 2000 lines, full text in a spill file). Earlier days' files are swept on session start.
 
 ### 2. Smarter Tools
 
