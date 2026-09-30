@@ -21,26 +21,80 @@ import { agentDir, agentDirFile } from "./agent-dir.js";
 const CONFIG_DIR = agentDir();
 const CONFIG_FILE = agentDirFile("decorated-pi.json");
 
-/** Minimal mock pi: just enough surface for setupXxx() to run. */
+/** Minimal mock pi: just enough surface for setupXxx() to run, plus the
+ *  handler registry and a live active-tool list so a test can dispatch an
+ *  event the way pi would. */
 function makeMockPi(): any {
   const log = {
     events: [] as string[],
     tools: [] as string[],
     commands: [] as string[],
+    activeTools: ["read", "bash", "write", "edit", "grep", "find", "ls"],
+    handlers: {} as Record<string, Array<(event: any, ctx: any) => any>>,
   };
   const pi: any = {
-    on: (event: string) => log.events.push(event),
+    on: (event: string, handler: any) => {
+      log.events.push(event);
+      (log.handlers[event] ??= []).push(handler);
+    },
     registerTool: (tool: any) => log.tools.push(tool.name),
     registerCommand: (name: string) => log.commands.push(name),
     registerMessageRenderer: () => {},
-    getActiveTools: () => ["read", "bash", "write", "edit", "grep", "find", "ls"],
-    setActiveTools: () => {},
+    getActiveTools: () => [...log.activeTools],
+    setActiveTools: (names: string[]) => {
+      log.activeTools = [...names];
+    },
     sendMessage: () => {},
     setSessionName: () => {},
     appendEntry: () => {},
   };
   Object.defineProperty(pi, "log", { value: log, enumerable: true });
   return pi as ReturnType<typeof makeMockPi>;
+}
+
+/** A config naming every module switch, so a test never inherits a default
+ *  that reaches the network or a language server. */
+function moduleConfig(patchOverrideEdit: boolean) {
+  return {
+    modules: {
+      tools: {
+        patchOverrideEdit,
+        ask: false,
+        lsp: false,
+        mcp: false,
+        websearch: false,
+        webFetch: false,
+      },
+      hooks: { wakatime: false, tps: false },
+      commands: { retry: false, usage: false },
+    },
+  };
+}
+
+function writeConfig(config: unknown): void {
+  if (!fs.existsSync(CONFIG_DIR)) fs.mkdirSync(CONFIG_DIR, { recursive: true });
+  fs.writeFileSync(CONFIG_FILE, JSON.stringify(config, null, 2) + "\n", "utf-8");
+}
+
+/** A session_start ctx carrying the surface our handlers touch. */
+function makeCtx(): any {
+  return {
+    cwd: process.cwd(),
+    hasUI: false,
+    mode: "print",
+    sessionManager: {
+      getEntries: () => [],
+      getBranch: () => [],
+      getSessionName: () => null,
+    },
+  };
+}
+
+/** Run the skeleton's session_start handler the way pi does. */
+async function dispatchSessionStart(pi: any): Promise<void> {
+  for (const handler of pi.log.handlers["session_start"] ?? []) {
+    await handler({ type: "session_start", reason: "startup" }, makeCtx());
+  }
 }
 
 describe("extension load smoke test", () => {
@@ -93,5 +147,35 @@ describe("extension load smoke test", () => {
     expect(mockPi.log.events).toEqual(
       expect.arrayContaining(["session_start", "before_agent_start"]),
     );
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// The native `edit` tool belongs to whoever replaces it
+// ═══════════════════════════════════════════════════════════════════════════
+
+describe("native edit ownership follows the patch switch", () => {
+  it("registers patch and drops native edit when patchOverrideEdit is on", async () => {
+    writeConfig(moduleConfig(true));
+    const mod = await import("../index.js");
+    const pi = makeMockPi();
+    await mod.default(pi);
+    await dispatchSessionStart(pi);
+
+    expect(pi.log.tools).toContain("patch");
+    expect(pi.log.activeTools).not.toContain("edit");
+  });
+
+  it("leaves native edit active when patchOverrideEdit is off", async () => {
+    writeConfig(moduleConfig(false));
+    const mod = await import("../index.js");
+    const pi = makeMockPi();
+    await mod.default(pi);
+    await dispatchSessionStart(pi);
+
+    // No replacement is registered, so dropping `edit` would leave the agent
+    // without a targeted editor.
+    expect(pi.log.tools).not.toContain("patch");
+    expect(pi.log.activeTools).toContain("edit");
   });
 });

@@ -148,8 +148,10 @@ export default async function (pi: ExtensionAPI) {
 
     // session_start handlers (parallel)
     // pi-tool-filter must register first so native tools are dropped before
-    // anything else inspects the tool list.
-    sk.register(piToolFilterModule);
+    // anything else inspects the tool list. It exists to clear the way for the
+    // patch tool, so it follows the same switch: with patch off, native edit
+    // stays active and nothing would replace it.
+    if (isModuleEnabled("patchOverrideEdit")) sk.register(piToolFilterModule);
     sk.register(createCodeReviewModule(codeReviewRuntime));
     sk.register(sessionTitleModule);
     // Compaction + optional integrations.
