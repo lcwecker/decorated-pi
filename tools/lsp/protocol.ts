@@ -27,9 +27,15 @@ export interface JsonRpcNotification {
 }
 
 export class LspProtocolError extends Error {
-  constructor(public readonly code: number, message: string) {
+  // Declared and assigned explicitly: parameter properties are rejected by
+  // Node's strip-only TypeScript mode, which is what pi may load extensions
+  // with.
+  readonly code: number;
+
+  constructor(code: number, message: string) {
     super(`LSP error ${code}: ${message}`);
     this.name = "LspProtocolError";
+    this.code = code;
   }
 }
 

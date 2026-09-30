@@ -287,9 +287,15 @@ class LspStartupCancelledError extends Error {
 }
 
 export class LspToolError extends Error {
-  constructor(public readonly details: LspToolErrorDetail) {
+  // Declared and assigned explicitly: parameter properties are rejected by
+  // Node's strip-only TypeScript mode, which is what pi may load extensions
+  // with.
+  readonly details: LspToolErrorDetail;
+
+  constructor(details: LspToolErrorDetail) {
     super(details.message);
     this.name = "LspToolError";
+    this.details = details;
   }
 }
 
