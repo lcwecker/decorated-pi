@@ -3,7 +3,7 @@
  *
  * The protocol, the connection lifecycle, tool registration and `/mcp`
  * belong to pi's built-in MCP extension. What is left here is the part pi
- * cannot know: the two server definitions the pack ships. They are handed
+ * cannot know: the server definitions the pack ships. They are handed
  * over with `pi.registerMcpServer()`, which connects them next to the
  * servers from `mcp.json` — and an `mcp.json` entry of the same name takes
  * precedence over the registration.
@@ -19,18 +19,10 @@ import type { ExtensionAPI, McpServerConfig } from "@earendil-works/pi-coding-ag
 import { resolveDependency } from "../settings.js";
 import type { DependencyStatus } from "../hooks/skeleton.js";
 
-export const CONTEXT7_SERVER_NAME = "context7";
 export const CODEGRAPH_SERVER_NAME = "codegraph";
 
 /** Command of the codegraph server — also its dependency-gate key. */
 const CODEGRAPH_COMMAND = "codegraph";
-
-/** context7 — hosted library documentation over streamable HTTP. */
-export const CONTEXT7_BUILTIN = {
-  type: "http",
-  url: "https://mcp.context7.com/mcp",
-  exposure: "direct",
-} satisfies McpServerConfig;
 
 /** codegraph — local code knowledge graph served by the `codegraph` CLI. */
 export const CODEGRAPH_BUILTIN = {
@@ -63,7 +55,6 @@ export function listMcpBinaryNames(): string[] {
  * answer up on the next `/reload`.
  */
 export function registerBuiltinMcpServers(pi: ExtensionAPI, cwd: string): void {
-  register(pi, CONTEXT7_SERVER_NAME, CONTEXT7_BUILTIN);
   // Same gate as the dependency-gate entry below: an index without the CLI
   // registers nothing, so /mcp never lists a server that cannot start. The
   // reading of a settings path wins over PATH, and re-resolving after the CLI
@@ -91,9 +82,9 @@ function register(pi: ExtensionAPI, name: string, config: McpServerConfig): void
 }
 
 /**
- * Dependency-gate entries for the builtin servers. context7 is a hosted URL
- * and needs nothing installed; codegraph needs its CLI, and only in a project
- * that has an index — the same condition that registers it.
+ * Dependency-gate entries for the builtin servers. codegraph needs its CLI,
+ * and only in a project that has an index — the same condition that registers
+ * it.
  */
 export function collectBuiltinMcpDependencyStatuses(cwd: string): DependencyStatus[] {
   if (!hasCodegraphIndex(cwd)) return [];

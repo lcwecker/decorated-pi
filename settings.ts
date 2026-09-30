@@ -42,7 +42,7 @@ export interface ModuleSettings {
     ask?: boolean;
     /** Language server navigation: definition, references, document symbols, rename. */
     lsp?: boolean;
-    /** Hand the builtin MCP servers (context7, codegraph) to pi's MCP module. */
+    /** Hand the builtin MCP server (codegraph) to pi's MCP module. */
     mcp?: boolean;
     /** Keyless web search over AnySearch, Exa and Parallel, with automatic fallback. */
     websearch?: boolean;

@@ -88,11 +88,10 @@ Two native tools, both keyless. Search runs through three hosted backends and fa
 
 ### 4. MCP Ecosystem
 
-Protocol, connections, tool registration and `/mcp` come from pi's built-in MCP extension. The pack contributes two server definitions, handed over with `pi.registerMcpServer()` and named by pi as `mcp__<server>__<tool>`:
+Protocol, connections, tool registration and `/mcp` come from pi's built-in MCP extension. The pack contributes the one server definition it cannot do without, handed over with `pi.registerMcpServer()` and named by pi as `mcp__<server>__<tool>`:
 
 | Server | Tool Prefix | Source |
 | --- | --- | --- |
-| Context7 | `mcp__context7__*` | `https://mcp.context7.com/mcp` |
 | codegraph | `mcp__codegraph__*` | local `codegraph` CLI, only where a `.codegraph` index exists |
 
 **Custom servers** in `~/.pi/agent/mcp.json` (global) or `.pi/mcp.json` (project, trusted projects only). Project entries replace global entries with the same name, and an `mcp.json` entry of the same name takes precedence over the builtin registration.

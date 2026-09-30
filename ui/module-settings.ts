@@ -40,7 +40,7 @@ const MODULE_LABELS: Record<ModuleName, string> = {
 const MODULE_DESCS: Record<ModuleName, string> = {
   patchOverrideEdit: "Replace Pi native edit with patch tool (targeted string replacement)",
   lsp: "Language server navigation: definition, references, document symbols, rename",
-  mcp: "Builtin MCP servers (context7, codegraph) handed to pi's MCP extension",
+  mcp: "Builtin MCP server (codegraph) handed to pi's MCP extension",
   websearch: "Keyless web search over AnySearch, Exa and Parallel, with automatic fallback",
   webFetch: "Read a URL as markdown/text/HTML — locally first, rendering backend on failure",
   wakatime: "Send coding activity heartbeats to WakaTime",

@@ -5,11 +5,10 @@
  * are NOT registered with pi. These tests verify that behavior by
  * importing index.ts with a mock pi and inspecting what was registered.
  *
- * The MCP module hands pi's built-in MCP extension the servers the pack
- * ships. context7 is a hosted URL and is always handed over; codegraph is
- * handed over only in a project that has an index *and* a CLI on disk, and the
- * same condition produces its dependency-gate entry. The LSP dep gate is
- * checked against whether at least one LSP server is available.
+ * The MCP module hands pi's built-in MCP extension the server the pack
+ * ships. codegraph is handed over only in a project that has an index *and* a
+ * CLI on disk, and the same condition produces its dependency-gate entry. The
+ * LSP dep gate is checked against whether at least one LSP server is available.
  *
  * Both gates consult `utils/which.ts`, which uses `fs.accessSync(X_OK)`
  * to stat candidates on $PATH. We mock `node:fs.accessSync` to throw
@@ -108,14 +107,12 @@ describe("index.ts dep gate", () => {
     const mockPi = makeMockPi();
     await mod.default(mockPi);
 
-    // `accessSync` is mocked to fail above, so no binary resolves: context7 is
-    // hosted and always handed over, codegraph needs its CLI before it is
-    // offered — the same gate its dependency-gate entry reports on, even in an
-    // indexed checkout like this one. The old self-hosted client registered
-    // codegraph_* tools itself; pi names the tools of a registered server
-    // mcp__<server>__<tool>, so none appear here.
-    expect(mockPi.log.mcpServers.map((s: any) => s.name)).toEqual(["context7"]);
-    expect(mockPi.log.mcpServers[0].config.url).toBe("https://mcp.context7.com/mcp");
+    // `accessSync` is mocked to fail above, so no binary resolves: codegraph
+    // needs its CLI before it is offered — the same gate its dependency-gate
+    // entry reports on, even in an indexed checkout like this one. The old
+    // self-hosted client registered codegraph_* tools itself; pi names the
+    // tools of a registered server mcp__<server>__<tool>, so none appear here.
+    expect(mockPi.log.mcpServers).toEqual([]);
     expect(mockPi.log.tools.filter((t: string) => t.startsWith("codegraph_"))).toEqual([]);
   });
 });

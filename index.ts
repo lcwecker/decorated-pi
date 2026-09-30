@@ -179,9 +179,9 @@ export default async function (pi: ExtensionAPI) {
 
     // MCP: pi's built-in MCP extension owns the protocol, the connection
     // lifecycle, the tool registration and /mcp. All this module does is hand
-    // it the two servers the pack ships (tools/mcp.ts) — context7 always,
-    // codegraph in a project that has a .codegraph index. Disabling the module
-    // registers neither, and the user's own mcp.json servers still connect.
+    // it the server the pack ships (tools/mcp.ts) — codegraph, in a project
+    // that has a .codegraph index. Disabling the module registers nothing, and
+    // the user's own mcp.json servers still connect.
     if (isModuleEnabled("mcp")) {
         // The factory runs before any session exists, so the launch directory is
         // the project here — the codegraph gate and the LSP servers read it the

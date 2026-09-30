@@ -38,8 +38,6 @@ vi.mock("node:fs", async (importOriginal) => {
 import { which } from "../utils/which.js";
 import { agentDirFile } from "./agent-dir.js";
 import {
-  CONTEXT7_BUILTIN,
-  CONTEXT7_SERVER_NAME,
   CODEGRAPH_BUILTIN,
   CODEGRAPH_SERVER_NAME,
   hasCodegraphIndex,
@@ -87,14 +85,6 @@ afterEach(() => {
 });
 
 describe("builtin server definitions", () => {
-  it("context7 is a hosted HTTP server", () => {
-    expect(CONTEXT7_BUILTIN).toEqual({
-      type: "http",
-      url: "https://mcp.context7.com/mcp",
-      exposure: "direct",
-    });
-  });
-
   it("codegraph runs its CLI over stdio", () => {
     expect(CODEGRAPH_BUILTIN).toEqual({
       type: "stdio",
@@ -104,11 +94,10 @@ describe("builtin server definitions", () => {
     });
   });
 
-  it("declares both servers with direct exposure, so the model sees their tools", () => {
+  it("declares the server with direct exposure, so the model sees its tools", () => {
     // pi's default is codemode, where the tools are reachable only from
-    // codemode scripts. The pack's two servers are meant to look like plain
-    // tools, the way they did before the handover.
-    expect(CONTEXT7_BUILTIN.exposure).toBe("direct");
+    // codemode scripts. The pack's server is meant to look like a plain
+    // tool, the way it did before the handover.
     expect(CODEGRAPH_BUILTIN.exposure).toBe("direct");
   });
 
@@ -123,17 +112,16 @@ describe("codegraph project gate", () => {
     expect(hasCodegraphIndex(initProject(true))).toBe(true);
   });
 
-  it("registers context7 everywhere and codegraph only in an indexed project with its CLI", () => {
+  it("registers codegraph only in an indexed project with its CLI", () => {
     vi.mocked(which).mockReturnValue("/usr/local/bin/codegraph");
 
     const bare = makeMockPi();
     registerBuiltinMcpServers(bare.pi, initProject(false));
-    expect(bare.registrations.map((r) => r.name)).toEqual([CONTEXT7_SERVER_NAME]);
+    expect(bare.registrations).toEqual([]);
 
     const indexed = makeMockPi();
     registerBuiltinMcpServers(indexed.pi, initProject(true));
     expect(indexed.registrations).toEqual([
-      { name: "context7", config: expect.objectContaining({ url: "https://mcp.context7.com/mcp" }) },
       {
         name: "codegraph",
         config: expect.objectContaining({
@@ -149,7 +137,7 @@ describe("codegraph project gate", () => {
     // the dependency gate below is what tells the user to install it.
     const { pi, registrations } = makeMockPi();
     registerBuiltinMcpServers(pi, initProject(true));
-    expect(registrations.map((r) => r.name)).toEqual([CONTEXT7_SERVER_NAME]);
+    expect(registrations).toEqual([]);
   });
 
   it("registers the codegraph command a /dp-settings path resolves to", () => {
@@ -164,12 +152,18 @@ describe("codegraph project gate", () => {
   it("keeps loading when pi rejects a registration", () => {
     // A clash with another extension's server throws; the throw must not
     // escape the factory, because pi drops an extension whose factory throws.
-    const pi = {
-      registerMcpServer: () => {
-        throw new Error("another extension registered \"context7\"");
-      },
-    };
+    // The CLI has to resolve for the registration to be attempted at all.
+    vi.mocked(which).mockReturnValue("/usr/local/bin/codegraph");
+    const registerMcpServer = vi.fn(() => {
+      throw new Error("another extension registered \"codegraph\"");
+    });
+
+    const pi = { registerMcpServer };
     expect(() => registerBuiltinMcpServers(pi as any, initProject(true))).not.toThrow();
+    expect(registerMcpServer).toHaveBeenCalledWith(
+      CODEGRAPH_SERVER_NAME,
+      expect.objectContaining({ type: "stdio" }),
+    );
   });
 });
 
