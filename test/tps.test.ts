@@ -11,9 +11,11 @@
  *  - "no misleading numbers": aborted / missing usage never freezes a partial
  *    window; a non-streaming reply shows an em dash instead of a rate
  *  - the frozen value survives agent_end; stale/headless ctx never throws
- *  - the footer merge: insertIntoStatsLine inlines TPS into the stats line
- *    (length-preserving), tui mode installs a FooterComponent subclass via
- *    setFooter, rpc mode falls back to the setStatus status line
+ *  - the footer merge (hooks/tps-footer.ts): insertIntoStatsLine inlines TPS
+ *    into the stats line (length-preserving), tui mode installs a
+ *    FooterComponent subclass via setFooter, rpc mode falls back to the
+ *    setStatus status line, and repeated render failures abandon the merge for
+ *    the status line instead of freezing a stale reading
  *  - the skeleton dispatches message_start / message_update (parallel) and
  *    message_end (compose, no replacement) to the module
  */
@@ -26,13 +28,15 @@ import {
   calcDecodeTps,
   formatTps,
   formatTtft,
+  splitChars,
+  TPS_STATUS_KEY,
+} from "../hooks/tps.js";
+import {
   insertIntoStatsLine,
   insertBestFit,
   restoreEllipsisStyle,
-  splitChars,
   tpsDisplayVariants,
-  TPS_STATUS_KEY,
-} from "../hooks/tps.js";
+} from "../hooks/tps-footer.js";
 import { createSkeleton } from "../hooks/skeleton.js";
 
 // ─── Harness ──────────────────────────────────────────────────────────────
@@ -530,6 +534,68 @@ describe("tps — footer merge", () => {
     now = 1_600;
     h.update(update("abcd"), rpcCtx);
     expect(setStatus).toHaveBeenLastCalledWith(TPS_STATUS_KEY, "~3.3 tok/s");
+  });
+
+  it("two consecutive render failures abandon the merge for the status line", async () => {
+    const h = moduleHandlers();
+    const { ctx, setFooter, requestRender, getFooter } = makeTuiCtx();
+    h.sessionStart({ type: "session_start" }, ctx);
+    const comp = getFooter();
+
+    h.start(assistantStart(), ctx);
+    now = 1_300;
+    h.update(update(), ctx);
+    now = 1_600;
+    h.update(update("abcd"), ctx);
+    expect(comp.render(100)[1]).toContain("~3.3 tok/s");
+    // Merged readings never touch the status channel; the one call so far is
+    // session_start clearing a leftover status.
+    expect(setStatus).toHaveBeenCalledTimes(1);
+
+    // One failure is a stale ctx (session switch / reload) — the footer holds
+    // its last good frame because session_start will rebuild it.
+    ctx.getContextUsage = () => {
+      throw new Error("stale");
+    };
+    expect(() => comp.render(100)).not.toThrow();
+    expect(setFooter).toHaveBeenCalledTimes(1); // still merged, nothing swapped
+
+    // A second consecutive failure means the frame is not coming back on its
+    // own, so the reading changes place instead of freezing in place.
+    comp.render(100);
+    await Promise.resolve(); // the swap is deferred past the failing render
+    expect(setFooter).toHaveBeenLastCalledWith(undefined);
+    expect(setStatus).toHaveBeenLastCalledWith(TPS_STATUS_KEY, "~3.3 tok/s");
+
+    // Subsequent updates now go to the status screen line: same reading,
+    // shorter window, and no more re-render requests.
+    const renders = requestRender.mock.calls.length;
+    now = 2_000;
+    h.update(update("efgh"), ctx);
+    expect(setStatus).toHaveBeenLastCalledWith(TPS_STATUS_KEY, "~2.9 tok/s");
+    expect(requestRender.mock.calls.length).toBe(renders);
+  });
+
+  it("only consecutive failures count — a good render resets the counter", () => {
+    const h = moduleHandlers();
+    const { ctx, setFooter, getFooter } = makeTuiCtx();
+    h.sessionStart({ type: "session_start" }, ctx);
+    const comp = getFooter();
+
+    const healthy = ctx.getContextUsage;
+    const breakCtx = () => {
+      ctx.getContextUsage = () => {
+        throw new Error("stale");
+      };
+    };
+
+    breakCtx();
+    comp.render(100); // failure 1
+    ctx.getContextUsage = healthy;
+    comp.render(100); // success — the count starts over
+    breakCtx();
+    comp.render(100); // failure 1 again, still under the limit
+    expect(setFooter).toHaveBeenCalledTimes(1); // never swapped
   });
 
   it("model_select refreshes the installed footer without reinstalling", () => {
