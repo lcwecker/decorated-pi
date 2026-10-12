@@ -44,6 +44,8 @@ import { collectLspDependencyStatuses } from "./tools/lsp/servers.js";
 import { registerAskTool } from "./tools/ask/index.js";
 import { registerWebSearchTool } from "./tools/websearch/index.js";
 import { registerWebFetchTool } from "./tools/webfetch/index.js";
+import { PDF_INFO_BINARY, PDF_RENDER_BINARY } from "./tools/pdf/core.js";
+import { registerPdfReaderTools } from "./tools/pdf/index.js";
 import { CodeReviewRuntime, registerCodeReviewRenderer } from "./tools/code-review/index.js";
 import {
     registerBuiltinMcpServers,
@@ -58,7 +60,7 @@ import { registerRetryCommand } from "./commands/retry.js";
 import { registerUsageCommand } from "./commands/usage.js";
 import { registerCodeReviewCommand } from "./commands/code-review.js";
 
-import { captureModuleSnapshot, isModuleEnabled } from "./settings.js";
+import { captureModuleSnapshot, isModuleEnabled, resolveDependency } from "./settings.js";
 
 // ─── System-prompt guidelines (hard-coded base, per-module imports) ────────
 //
@@ -136,6 +138,20 @@ export default async function (pi: ExtensionAPI) {
     sk.register(createInjectAgentsMdModule());
     sk.register(createImageVisionModule());
 
+    // poppler answers both questions a PDF read asks: `pdfinfo` the page count
+    // and the encryption flag on every read, `pdftoppm` the page-window render.
+    // resolveDependency honours a path set in /dp-settings and records what was
+    // found for that display; a missing binary is declared here so the failure
+    // arrives as a session-start notice instead of a raw ENOENT mid-read.
+    for (const binary of [PDF_INFO_BINARY, PDF_RENDER_BINARY]) {
+        if (resolveDependency(binary)) continue;
+        sk.declareMissing({
+            name: binary,
+            module: "pdf",
+            hint: "Install poppler-utils: pdfinfo supplies a PDF's page count, pdftoppm renders a page range.",
+        });
+    }
+
     // session_start handlers (parallel)
     // pi-tool-filter must register first so native tools are dropped before
     // anything else inspects the tool list. It exists to clear the way for the
@@ -176,6 +192,11 @@ export default async function (pi: ExtensionAPI) {
     // keyless hosted services, so no key check gates registration.
     if (isModuleEnabled("websearch")) registerWebSearchTool(pi);
     if (isModuleEnabled("webFetch")) registerWebFetchTool(pi);
+
+    // PDFs are read through `read_pdf`. pi's own read tool cannot be extended
+    // from an extension — its schema and its description belong to pi — so the
+    // page window is declared as a tool of our own instead.
+    registerPdfReaderTools(pi);
 
     // MCP: pi's built-in MCP extension owns the protocol, the connection
     // lifecycle, the tool registration and /mcp. All this module does is hand

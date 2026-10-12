@@ -94,6 +94,7 @@ export interface DependencyView extends DependencySettings {
 export interface DecoratedPiConfig {
   codeReviewModelKey?: string | null;
   imageModelKey?: string | null;
+  pdfModelKey?: string | null;
   compactModelKey?: string | null;
   /** Who answers the `ask` tool: the user (default), or Jev — a TypeSafe
    *  System One model that answers closed questions and can hand a question
@@ -218,6 +219,10 @@ export function getImageModelKey(): string | null {
   return loadConfig().imageModelKey ?? null;
 }
 
+export function getPdfModelKey(): string | null {
+  return loadConfig().pdfModelKey ?? null;
+}
+
 export function getCompactModelKey(): string | null {
   return loadConfig().compactModelKey ?? null;
 }
@@ -320,6 +325,10 @@ export function setCodeReviewModelKey(key: string | null) {
 
 export function setImageModelKey(key: string | null) {
   saveConfig({ imageModelKey: key });
+}
+
+export function setPdfModelKey(key: string | null) {
+  saveConfig({ pdfModelKey: key });
 }
 
 export function setCompactModelKey(key: string | null) {
