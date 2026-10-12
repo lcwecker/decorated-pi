@@ -86,6 +86,24 @@ describe("image-vision", () => {
       expect(await analyzeImage({} as any, "", "image/png", runtime as any))
         .toBe("No analysis returned.");
     });
+
+    it("throws when the runtime reports a failed completion instead of returning the placeholder", async () => {
+      const runtime = {
+        complete: async () => ({
+          content: [],
+          stopReason: "error",
+          errorMessage: "401 Unauthorized",
+        }),
+      };
+      await expect(analyzeImage({} as any, "", "image/png", runtime as any))
+        .rejects.toThrow(/Image analysis failed \(error\): 401 Unauthorized/);
+    });
+
+    it("throws when the runtime reports an aborted completion", async () => {
+      const runtime = { complete: async () => ({ content: [], stopReason: "aborted" }) };
+      await expect(analyzeImage({} as any, "", "image/png", runtime as any))
+        .rejects.toThrow(/Image analysis failed \(aborted\): the provider returned no error message/);
+    });
   });
 });
 

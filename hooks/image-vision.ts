@@ -41,7 +41,9 @@ const DEFAULT_PROMPT = "Please describe this image in detail, including any text
 
 /** Analyze an image with the configured vision model through pi's model
  *  runtime. Returns the concatenated text content, or a placeholder when the
- *  model produced no text. */
+ *  model produced no text. Throws when the runtime reports a failed or aborted
+ *  completion — `complete()` resolves in that case, so the caller must not treat
+ *  an empty message as a successful analysis. */
 export async function analyzeImage(
   model: Model<any>,
   imageBase64: string,
@@ -62,6 +64,17 @@ export async function analyzeImage(
     maxTokens: 4096,
     signal: signal ?? AbortSignal.timeout(60_000),
   });
+  // `complete()` resolves rather than rejects on failure, delivering an empty
+  // message with `stopReason: "error" | "aborted"`. Without this check a
+  // credential error or a rejected payload would read as "No analysis
+  // returned." and the caller would replace the image with that placeholder.
+  if (response.stopReason === "error" || response.stopReason === "aborted") {
+    throw new Error(
+      `Image analysis failed (${response.stopReason}): `
+      + (response.errorMessage ?? "the provider returned no error message"),
+    );
+  }
+
   const text = response.content
     .filter((part): part is { type: "text"; text: string } => part.type === "text")
     .map((part) => part.text)
