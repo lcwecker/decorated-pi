@@ -25,6 +25,7 @@ Multiple layers of token savings that compound across every session.
 **Auxiliary Models** — offloads heavy-but-dumb tasks to cheaper models so your primary model only pays for the hard work:
 
 - **Image Read Fallback** — detects image type via magic bytes, calls a configured vision-capable model, and injects the analysis text, so your main model never touches image tokens
+- **PDF Read** — reads PDFs with the configured model: a document of ten pages or fewer whole, a longer one in page ranges rendered to images, returning the extraction as text
 - **Compact Model** — handles context compaction with a smaller model instead of burning main-model capacity, and carries the task on after an automatic compaction so the run does not stop early (a manual `/compact` does not resume)
 
 > Configured via `/dp-model`.
@@ -69,6 +70,12 @@ Collect text, single-choice and multi-choice answers when the agent needs clarif
 - **Who answers** — `me` (default) opens the wizard in the terminal. `jev` has a [TypeSafe](https://typesafe.ai) System One model judge each question against the supplied `context`, answering closed questions without a round trip; only single- and multi-choice questions have an answer space to judge, and free text always goes to the user.
 - **Escalation** — anything Jev is not sure of comes back marked as needing the user: low confidence, a "the context does not determine it" verdict, a missing key, or a transport failure. The agent then puts those questions in its reply, so this path needs no terminal and works in rpc/json/print sessions.
 - **Configuration** — `/dp-settings` → Tools → Ask (Enabled / Who answers / key), or `askWho` and `typesafeApiKey` in `decorated-pi.json`. `TYPESAFE_API_KEY` takes precedence so the key can stay out of the file; the UI masks it.
+
+#### PDF Reader
+
+`read_pdf` reads a PDF with the model configured for it. A document of ten pages or fewer goes to the provider whole; a longer one must be read in page ranges (`pages: "1-5"`, 1-indexed, at most twenty pages per call), which are rendered to images with poppler's `pdftoppm`. Rendering is what makes the page path portable: an image block works on every vision model, including providers whose API cannot receive a PDF document (Bedrock is refused the whole read with a message pointing at the page range it does accept). The page count comes from `pdfinfo` and is stated in the result (`[PDF: 42 pages, showing pages 11-15]`), so the model reads a long document in consecutive windows; asking for a whole read of one fails with the count and an example range. `read` is untouched — a `.pdf` path handed to it still returns the file's raw bytes.
+
+The model comes from `/dp-model` → PDF, falling back to the session's active model. Both poppler binaries are required: without `poppler-utils` a PDF cannot be read at all. `/dp-settings` reports the missing binary and takes a path override for it.
 
 ### 3. Web Access
 
