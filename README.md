@@ -65,11 +65,10 @@ Supported languages: c/cpp, go, java, lua, python, ruby, rust, svelte, typescrip
 
 #### Ask tool
 
-Collect text, single-choice and multi-choice answers when the agent needs clarification. The agent passes a `context` with the facts needed to answer, and the answering path decides who responds:
+Collect text, single-choice and multi-choice answers when the agent needs clarification. One question per page in the terminal: type for free text, `↑↓` or digits to pick an option, `Space` to toggle in a multi-choice, `Enter`/`Tab` to commit and advance, `Shift+Tab` to go back, `Esc` to cancel the whole call.
 
-- **Who answers** — `me` (default) opens the wizard in the terminal. `jev` has a [TypeSafe](https://typesafe.ai) System One model judge each question against the supplied `context`, answering closed questions without a round trip; only single- and multi-choice questions have an answer space to judge, and free text always goes to the user.
-- **Escalation** — anything Jev is not sure of comes back marked as needing the user: low confidence, a "the context does not determine it" verdict, a missing key, or a transport failure. The agent then puts those questions in its reply, so this path needs no terminal and works in rpc/json/print sessions.
-- **Configuration** — `/dp-settings` → Tools → Ask (Enabled / Who answers / key), or `askWho` and `typesafeApiKey` in `decorated-pi.json`. `TYPESAFE_API_KEY` takes precedence so the key can stay out of the file; the UI masks it.
+- **Interactive only** — a session without a UI gets an error instead of a guess, so the agent puts the questions in its reply and works in rpc/json/print sessions.
+- **Configuration** — `/dp-settings` → Tools → Ask, or `modules.tools.ask` in `decorated-pi.json`.
 
 #### PDF Reader
 
@@ -157,7 +156,6 @@ Runtime settings live in `~/.pi/agent/decorated-pi.json`. Run `/dp-settings` to 
       "usage": true
     }
   },
-  "askWho": "me",
   "dependencies": {
     "wakatime-cli": {
       "dontBother": true
@@ -167,7 +165,6 @@ Runtime settings live in `~/.pi/agent/decorated-pi.json`. Run `/dp-settings` to 
 ```
 
 - `modules` can be toggled on/off to enable/disable features. All are enabled by default.
-- `askWho` picks who answers the `ask` tool: `"me"` opens the terminal wizard, `"jev"` has a TypeSafe System One model answer closed questions from the context the agent supplied. `"jev"` needs `typesafeApiKey` here or the `TYPESAFE_API_KEY` environment variable, which takes precedence.
 - `dependencies[binaryName].path` overrides the lookup location for a binary (file or directory). `dependencies[binaryName].dontBother` silences missing-dependency notifications for that binary. Both are optional.
 
 ## License
