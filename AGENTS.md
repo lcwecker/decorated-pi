@@ -90,6 +90,11 @@ When a single tool file grows past ~1000 lines because one algorithm is doing se
 2. In `index.ts`: call `register<Name>Command(pi)`.
 3. If the command needs agent-loop state, derive it from a shared object it returns and register the resetting hook module with `sk.register(...)`.
 
+**New dependency**:
+1. Prefer a binary the host already has over a package. `resolveDependency(name)` in `settings.ts` resolves it (honouring a `/dp-settings` path override) and `utils/which.ts` does the lookup; the runtime dependencies stay at five small libraries.
+2. A binary needs all three hooks up: `resolveDependency(name)` at the call site, the name in `listDependencyViewNames([...])` in `ui/module-settings.ts` — the row list *and* `summaryForDependencies()` — and `sk.declareMissing({ name, module, hint })` in `index.ts`. Export a `list<X>BinaryNames()` from the module that owns the binaries so all three read one list; without the UI entry a path override is reachable only by hand-editing `decorated-pi.json`.
+3. An npm package goes into `dependencies`. A lockfile whose `resolved` URLs name another registry needs the checked-in `.npmrc` (`allow-remote=all`), or npm 12 aborts `npm ci` with `EALLOWREMOTE` before installing anything.
+
 ## Test
 
 ```bash
