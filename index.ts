@@ -44,8 +44,7 @@ import { collectLspDependencyStatuses } from "./tools/lsp/servers.js";
 import { registerAskTool } from "./tools/ask/index.js";
 import { registerWebSearchTool } from "./tools/websearch/index.js";
 import { registerWebFetchTool } from "./tools/webfetch/index.js";
-import { PDF_INFO_BINARY, PDF_RENDER_BINARY } from "./tools/pdf/core.js";
-import { registerPdfReaderTools } from "./tools/pdf/index.js";
+import { listPdfBinaryNames, registerPdfReaderTools } from "./tools/pdf/index.js";
 import { CodeReviewRuntime, registerCodeReviewRenderer } from "./tools/code-review/index.js";
 import {
     registerBuiltinMcpServers,
@@ -143,7 +142,7 @@ export default async function (pi: ExtensionAPI) {
     // resolveDependency honours a path set in /dp-settings and records what was
     // found for that display; a missing binary is declared here so the failure
     // arrives as a session-start notice instead of a raw ENOENT mid-read.
-    for (const binary of [PDF_INFO_BINARY, PDF_RENDER_BINARY]) {
+    for (const binary of listPdfBinaryNames()) {
         if (resolveDependency(binary)) continue;
         sk.declareMissing({
             name: binary,

@@ -73,3 +73,23 @@ describe("Tools submenu — module rows", () => {
     expect(isModuleEnabled("ask")).toBe(true);
   });
 });
+
+// ═════════════════════════════════════════════════════════════════════════════
+// Dependencies submenu
+// ═════════════════════════════════════════════════════════════════════════════
+
+describe("Dependencies submenu", () => {
+  it("lists every builtin the pack looks up, poppler included", () => {
+    const component = new ModuleSettingsComponent({} as any, theme, makeUi(), () => {});
+    walk(component, [DOWN, ENTER]); // Commands → Dependencies
+
+    // The list shows ten rows at a time, so walk the whole thing.
+    let seen = "";
+    for (let step = 0; step < 30; step++) seen += walk(component, [DOWN]);
+
+    expect(seen).toContain("wakatime-cli");
+    expect(seen).toContain("codegraph");
+    expect(seen).toContain("pdfinfo");
+    expect(seen).toContain("pdftoppm");
+  });
+});

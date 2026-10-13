@@ -11,6 +11,7 @@ import { Container, SettingsList, type TUI, type SettingsListTheme, type Setting
 import { getAllModuleSettings, setModuleEnabled, isModuleEnabled, type ModuleSettings, getDependencyPath, setDependencyPath, isDontBother, setDontBother, getDependencyView, listDependencyViewNames } from "../settings.js";
 import { listLspBinaryNames } from "../tools/lsp/servers.js";
 import { listMcpBinaryNames } from "../tools/mcp.js";
+import { listPdfBinaryNames } from "../tools/pdf/index.js";
 
 type ModuleName =
   | "patchOverrideEdit"
@@ -244,6 +245,7 @@ class DependenciesSubmenu extends Container {
       "wakatime-cli",
       ...listLspBinaryNames(),
       ...listMcpBinaryNames(),
+      ...listPdfBinaryNames(),
     ]);
 
     const items: SettingItem[] = this.binaryNames.map((name) => ({
@@ -321,11 +323,12 @@ export class ModuleSettingsComponent extends Container {
 
 /** Count how many binaries have an explicit override. */
 function summaryForDependencies(): string {
-  // Builtins we know about: wakatime-cli, LSP servers, MCP servers.
+  // Builtins we know about: wakatime-cli, LSP servers, MCP servers, poppler.
   const known = listDependencyViewNames([
     "wakatime-cli",
     ...listLspBinaryNames(),
     ...listMcpBinaryNames(),
+    ...listPdfBinaryNames(),
   ]);
   const overridden = known.filter((n) => getDependencyPath(n) !== null).length;
   const silenced = known.filter((n) => isDontBother(n)).length;

@@ -18,6 +18,8 @@ import { getPdfModelKey, parseModelKey } from "../../settings.js";
 import { renderToolTextResult } from "../../utils/tool-output.js";
 import {
   MAX_PDF_PAGES_PER_CALL,
+  PDF_INFO_BINARY,
+  PDF_RENDER_BINARY,
   WHOLE_PDF_PAGE_LIMIT,
   expandHome,
   extractPdf,
@@ -54,6 +56,12 @@ function resolveTargetModel(ctx: ExtensionContext): Model<any> | undefined {
   const model = ctx.modelRegistry.find(parsed.provider, parsed.modelId);
   if (!model) throw new Error(`Configured PDF model '${pdfKey}' not found in registry.`);
   return model as Model<any>;
+}
+
+/** The binaries a PDF read needs, for the dependency list in /dp-settings and
+ *  the missing-dependency notice. Both come from poppler-utils. */
+export function listPdfBinaryNames(): string[] {
+  return [PDF_INFO_BINARY, PDF_RENDER_BINARY];
 }
 
 export function registerPdfReaderTools(pi: ExtensionAPI): void {

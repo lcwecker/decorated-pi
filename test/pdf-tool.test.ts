@@ -6,7 +6,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { registerPdfReaderTools } from "../tools/pdf/index.js";
+import { listPdfBinaryNames, registerPdfReaderTools } from "../tools/pdf/index.js";
 import { setPdfModelKey } from "../settings.js";
 import { agentDir } from "./agent-dir.js";
 
@@ -275,5 +275,11 @@ describe("read_pdf with a model that cannot take the document", () => {
     expect(result.content[0].text).toContain("[PDF: 12 pages, showing pages 1-2]");
     const images = runtime.complete.mock.calls[0][1].messages[0].content.filter((part: any) => part.type === "image");
     expect(images).toHaveLength(2);
+  });
+});
+
+describe("pdf dependencies", () => {
+  it("names the poppler binaries the dependency list and the notice use", () => {
+    expect(listPdfBinaryNames()).toEqual(["pdfinfo", "pdftoppm"]);
   });
 });
