@@ -30,6 +30,10 @@ export interface AskQuestion {
   default?: string;
 }
 
+/** The same question with `type` optional: what a caller may hand to the
+ *  wizard, before `normalizeQuestions` fills the type in. */
+export type AskQuestionInput = Omit<AskQuestion, "type"> & { type?: AskQuestionType };
+
 export interface AskAnswer {
   id: string;
   value: string | string[];
