@@ -25,9 +25,12 @@ const PI_PACKAGES = [
 ];
 
 /** Hard minimum: the Pi behaviour this pack is written against. 0.86 was the
- *  floor for `systemPromptOptions.sections` rendering; the 0.99 API surface
- *  (event set, tool `exposure`, `agent_before_settle`) is what CI now has to
- *  verify the pack against, so the floor follows the dev range. */
+ *  floor for `systemPromptOptions.sections` rendering; 0.99 is the floor for the
+ *  extension API surface it calls (event set, tool `exposure`,
+ *  `agent_before_settle`). Newer Pi fields are read only when present — the
+ *  patch row applies `outputPad` and shows `durationMs` from pi 1.1 on and falls
+ *  back to its own defaults below that — so the peer floor stays at 0.99 while
+ *  the dev range climbs to the release CI verifies. */
 const REQUIRED_FLOOR = "0.99.0";
 
 const repoRoot = path.join(import.meta.dirname, "..");
