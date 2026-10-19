@@ -262,4 +262,24 @@ describe("/retry", () => {
     await lastCommand!.handler([], ctx);
     expect(mockSendMessage).toHaveBeenCalledTimes(2);
   });
+
+  it("agent_settled releases the guard when no run follows the retry", async () => {
+    const { registerRetryCommand } = await import("../commands/retry.js");
+    const { createRetryModule } = await import("../hooks/retry.js");
+    const pi = makePi();
+    const state = registerRetryCommand(pi as any);
+    const module = createRetryModule(state);
+
+    const ctx = makeCtx({ isIdle: () => false });
+    await lastCommand!.handler([], ctx);
+    expect(state.inProgress).toBe(true);
+
+    // pi counts as busy while a run starts, so this /retry aborted a run that
+    // had not begun and queued its message into it. When the message goes down
+    // with the abort, no agent_start follows and the command would keep
+    // answering "already in progress" forever.
+    expect(module.hooks.agent_settled).toHaveLength(1);
+    await module.hooks.agent_settled![0]({ type: "agent_settled", aborted: true }, ctx as any, pi as any);
+    expect(state.inProgress).toBe(false);
+  });
 });

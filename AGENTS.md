@@ -58,7 +58,7 @@ decorated-pi/
 **Rules**:
 - Registration order = execution order.
 - Five handler modes:
-  - **parallel** — return values ignored. Lifecycle events: `session_start`, `session_shutdown`, `session_compact`, `agent_start`, `agent_end`, `input`.
+  - **parallel** — return values ignored. Lifecycle events: `session_start`, `session_shutdown`, `session_compact`, `agent_start`, `agent_end`, `agent_settled`, `input`. `agent_settled` is notification-only in pi and fires once pi will not continue on its own; `hooks/retry.ts` uses it to release the `/retry` guard when a retry started no run.
   - **compose** — the next handler receives the previous return value. Transformation chains: `before_agent_start` mutates `systemPrompt`, `tool_call` mutates `input.command`, `tool_result` mutates `content`, plus `context` and `message_end`.
   - **result** — every handler sees the original event, the last non-undefined return wins. `session_before_compact`.
   - **collect** — the array fields (`skillPaths`, `promptPaths`, `themePaths`) of every handler's result are concatenated. `resources_discover`, mirroring how pi core accumulates those paths across all extensions.

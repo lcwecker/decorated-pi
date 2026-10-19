@@ -99,6 +99,34 @@ describe("skeleton — module hook dispatch", () => {
     expect(order).toEqual(["first", "second"]);
   });
 
+  it("dispatches agent_settled in parallel and ignores the return value", async () => {
+    const seen: Array<boolean | undefined> = [];
+    const sk = createSkeleton();
+    sk.register({
+      name: "retry",
+      hooks: {
+        // pi 1.1+ adds `aborted` to the event. Settling is notification-only in
+        // pi's runner, so what a handler returns must not reach pi.
+        agent_settled: [((e: any) => {
+          seen.push(e.aborted);
+          return "ignored";
+        }) as any],
+      },
+    });
+    sk.register({
+      name: "second",
+      hooks: {
+        agent_settled: [(e: any) => { seen.push(e.aborted); }],
+      },
+    });
+    sk.install(pi as any);
+
+    const handler = pi.handlers.get("agent_settled")![0];
+    const result = await handler({ type: "agent_settled", aborted: true }, makeCtx() as any);
+    expect(seen).toEqual([true, true]);
+    expect(result).toBeUndefined();
+  });
+
   it("chains compose events and returns mutated event", async () => {
     const sk = createSkeleton();
     sk.register({

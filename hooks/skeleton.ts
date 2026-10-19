@@ -24,6 +24,7 @@ export type HookEvent =
   | "agent_start"
   | "agent_end"
   | "agent_before_settle"
+  | "agent_settled"
   | "context"
   | "input"
   | "tool_call"
@@ -112,6 +113,7 @@ export interface Module {
     agent_start?: ParallelHandler<"agent_start">[];
     agent_end?: ParallelHandler<"agent_end">[];
     agent_before_settle?: BoundaryHandler<"agent_before_settle">[];
+    agent_settled?: ParallelHandler<"agent_settled">[];
     context?: ComposeHandler<"context">[];
     input?: ParallelHandler<"input">[];
     tool_call?: ComposeHandler<"tool_call">[];
