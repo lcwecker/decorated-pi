@@ -152,6 +152,7 @@ interface PatchCallComponent extends Box {
     previewArgsKey?: string;
     previewPending?: boolean;
     settledError: boolean;
+    durationMs?: number;
 }
 
 export function createPatchCallComponent(): PatchCallComponent {
@@ -160,7 +161,33 @@ export function createPatchCallComponent(): PatchCallComponent {
         previewArgsKey: undefined,
         previewPending: false,
         settledError: false,
+        durationMs: undefined,
     });
+}
+
+/** Horizontal padding for the box. This tool draws its own shell
+ *  (`renderShell: "self"`), so pi hands it the `outputPad` setting to apply
+ *  itself; the field exists from pi 1.1, and an older install keeps the box's
+ *  default of one column. */
+function applyOutputPad(component: Box, context: any): void {
+    if (typeof context?.outputPad !== "number") return;
+    component.setPaddingX(context.outputPad);
+}
+
+/** Duration pi measured for the tool call. Under a second it stays in
+ *  milliseconds — a patch usually takes a few, and `0.0s` on every row says
+ *  nothing — above that it uses the shape pi's own rows use (`1.2s`, `1m 5s`,
+ *  `1h 2m`). */
+export function formatPatchDuration(ms: number): string {
+    if (ms < 1000) return `${Math.round(ms)}ms`;
+    const seconds = ms / 1000;
+    if (seconds < 60) return `${seconds.toFixed(1)}s`;
+    const totalSeconds = Math.floor(seconds);
+    const minutes = Math.floor(totalSeconds / 60);
+    const remainder = totalSeconds % 60;
+    return minutes < 60
+        ? `${minutes}m ${remainder}s`
+        : `${Math.floor(minutes / 60)}h ${minutes % 60}m`;
 }
 
 function getPatchCallComponent(
@@ -278,8 +305,14 @@ function buildPatchCallComponent(
             );
         }
     }
+    const duration =
+        component.durationMs === undefined
+            ? ""
+            : theme.fg("dim", ` · ${formatPatchDuration(component.durationMs)}`);
     const headerText =
-        theme.fg("toolTitle", theme.bold("patch")) + (label ? " " + label : "");
+        theme.fg("toolTitle", theme.bold("patch")) +
+        (label ? " " + label : "") +
+        duration;
     component.addChild(new Text(headerText, 0, 0));
     if (component.settledError || !component.preview) return component;
     const preview = component.preview;
@@ -388,6 +421,7 @@ export function registerPatchTool(pi: ExtensionAPI): void {
                     state,
                     context.lastComponent,
                 );
+                applyOutputPad(component, context);
                 const argsKey = args ? JSON.stringify(args) : undefined;
                 if (component.previewArgsKey !== argsKey) {
                     component.preview = undefined;
@@ -407,6 +441,11 @@ export function registerPatchTool(pi: ExtensionAPI): void {
                     context.state.callComponent;
                 let changed = false;
                 if (callComponent) {
+                    applyOutputPad(callComponent, context);
+                    if (callComponent.durationMs !== context.durationMs) {
+                        callComponent.durationMs = context.durationMs;
+                        changed = true;
+                    }
                     const resultDiff = !context.isError && result.details?.diff;
                     if (typeof resultDiff === "string") {
                         const newPreview = { diff: resultDiff };

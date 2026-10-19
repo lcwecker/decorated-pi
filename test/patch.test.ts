@@ -23,7 +23,13 @@ import {
 } from "../tools/patch/core.js";
 import { locateEdit } from "../tools/patch/locate.js";
 import { detectFileEncoding, readFileDecoded, writeFileEncoded } from "../tools/patch/encoding.js";
-import { preparePatchArguments, formatPatchMetaLine, registerPatchTool } from "../tools/patch/index.js";
+import {
+  preparePatchArguments,
+  formatPatchDuration,
+  formatPatchMetaLine,
+  registerPatchTool,
+} from "../tools/patch/index.js";
+import { initTheme } from "@earendil-works/pi-coding-agent";
 
 // ═══════════════════════════════════════════════════════════════════════════
 // applyPatches Tests
@@ -2399,5 +2405,94 @@ describe("patch tool description", () => {
     const anchor = getPatchDefinition().parameters.properties.edits.items.properties.anchor;
     expect(anchor.description).toMatch(/old_str is searched/);
     expect(anchor.description).toMatch(/replaced text still comes from old_str/);
+  });
+});
+
+// ─── render row: duration and outputPad from pi's render context ──────────
+
+describe("patch render row", () => {
+  function getPatchDefinition(): any {
+    let definition: any;
+    registerPatchTool({
+      registerTool: (def: any) => {
+        definition = def;
+      },
+    } as any);
+    return definition;
+  }
+
+  /** Theme stub: colors wrap the text so assertions can see the bucket. */
+  function mockTheme() {
+    return {
+      fg: (name: string, text: string) => `[${name}]${text}[/${name}]`,
+      bold: (text: string) => `*${text}*`,
+      bg: (_name: string, text: string) => text,
+    };
+  }
+
+  function makeContext(state: any, extra: any = {}) {
+    return {
+      args: { path: "a.ts", edits: [{ old_str: "a", new_str: "b" }] },
+      state,
+      lastComponent: undefined,
+      expanded: false,
+      isError: false,
+      outputPad: 1,
+      durationMs: undefined,
+      ...extra,
+    };
+  }
+
+  // renderDiff reads pi's global theme, so the row renders against a real one.
+  initTheme("dark");
+
+  /** renderCall populates the row; renderResult settles it with a diff. */
+  function renderRow(context: any, result: any = { details: { diff: "@@ lines 1 @@\n-a\n+b" } }) {
+    const def = getPatchDefinition();
+    const theme = mockTheme();
+    def.renderCall(context.args, theme, context);
+    def.renderResult({ content: [], ...result }, { expanded: false }, theme, context);
+    return context.state.callComponent as any;
+  }
+
+  it("formats a duration the way the row reads it", () => {
+    // Sub-second stays in ms: a patch usually takes a few, and `0.0s` on every
+    // row would say nothing.
+    expect(formatPatchDuration(0)).toBe("0ms");
+    expect(formatPatchDuration(3)).toBe("3ms");
+    expect(formatPatchDuration(999)).toBe("999ms");
+    // Above a second it matches pi's own rows.
+    expect(formatPatchDuration(1000)).toBe("1.0s");
+    expect(formatPatchDuration(1234)).toBe("1.2s");
+    expect(formatPatchDuration(59_940)).toBe("59.9s");
+    expect(formatPatchDuration(60_000)).toBe("1m 0s");
+    expect(formatPatchDuration(3_725_000)).toBe("1h 2m");
+  });
+
+  it("applies the outputPad setting, since it draws its own shell", () => {
+    const context = makeContext({}, { outputPad: 0 });
+    const row = renderRow(context);
+    expect(row.paddingX).toBe(0);
+  });
+
+  it("keeps its default padding when pi hands over no outputPad", () => {
+    const context = makeContext({});
+    delete (context as any).outputPad;
+    const row = renderRow(context);
+    expect(row.paddingX).toBe(1);
+  });
+
+  it("shows the recorded duration once pi reports it", () => {
+    const state: any = {};
+    const context = makeContext(state);
+    const row = renderRow(context);
+    expect(row.render(80).join("\n")).not.toMatch(/\d+(?:\.\d)?(?:ms|s)/);
+
+    // The final result carries the measured execution time; the row picks it
+    // up without a second call-render.
+    const settled = makeContext(state, { durationMs: 1234 });
+    const def = getPatchDefinition();
+    def.renderResult({ content: [] }, { expanded: false }, mockTheme(), settled);
+    expect(row.render(80).join("\n")).toContain("1.2s");
   });
 });
