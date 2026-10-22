@@ -30,9 +30,11 @@ export interface AskQuestion {
   default?: string;
 }
 
-/** The same question with `type` optional: what a caller may hand to the
- *  wizard, before `normalizeQuestions` fills the type in. */
-export type AskQuestionInput = Omit<AskQuestion, "type"> & { type?: AskQuestionType };
+/** The same question with `type` optional and nullable: what a caller may hand
+ *  to the wizard, before `normalizeQuestions` fills the type in. `null` is in
+ *  the schema because a model reading an optional field as nullable sends one
+ *  instead of leaving it out, and that call used to be rejected. */
+export type AskQuestionInput = Omit<AskQuestion, "type"> & { type?: AskQuestionType | null };
 
 export interface AskAnswer {
   id: string;

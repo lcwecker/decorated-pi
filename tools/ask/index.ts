@@ -14,8 +14,8 @@ const askQuestionSchema = Type.Object({
   id: Type.String({ description: "Unique identifier for this question in the result." }),
   type: Type.Optional(
     Type.Union(
-      [Type.Literal("text"), Type.Literal("single"), Type.Literal("multi")],
-      { description: "text = free input, single = one option, multi = many options. Optional: a question that lists options defaults to single, one without options to text." },
+      [Type.Literal("text"), Type.Literal("single"), Type.Literal("multi"), Type.Null()],
+      { description: "Send this on every question. text = free input, single = one option, multi = many options. A question that leaves it out and lists options is read as single, one without options as text." },
     ),
   ),
   question: Type.String({ description: "Question text shown to the user." }),
@@ -26,7 +26,9 @@ const askQuestionSchema = Type.Object({
 /**
  * Fills in a missing `type`: options mean one choice, no options mean free
  * text. Without this a call that omits the field fails schema validation
- * before `execute` ever runs, which costs the model a round trip.
+ * before `execute` ever runs, which costs the model a round trip. A `null`
+ * type — what a model sends when it reads an optional field as nullable —
+ * falls through the same `??` and is resolved the same way.
  */
 export function normalizeQuestions(questions: AskQuestionInput[]): AskQuestion[] {
   return questions.map((q) => ({
@@ -35,22 +37,27 @@ export function normalizeQuestions(questions: AskQuestionInput[]): AskQuestion[]
   }));
 }
 
+/** Whether the model left the type to us: absent, or `null` for the same
+ *  reason. Both end up in the note that names what was inferred. */
+function hasNoType(q: AskQuestionInput): boolean {
+  return q.type === undefined || q.type === null;
+}
+
 /**
- * Model-facing note for questions whose `type` was left out, so a wrong
- * inference (options read as one choice) arrives in the result rather than
- * passing unmentioned. `details` reaches the TUI, and this reaches the caller.
+ * Model-facing note for the questions whose `type` we inferred.
+ *
+ * Only a choice question can be answered wrongly, so a question read as free
+ * text stays silent: free text accepts every answer an option list would have
+ * offered, and a note about it costs the caller tokens on a call that lost
+ * nothing.
  */
 export function inferredTypeNote(questions: AskQuestion[], inferredIds: string[]): string {
-  if (inferredIds.length === 0) return "";
-  const resolved = inferredIds
-    .map((id) => {
-      const q = questions.find((x) => x.id === id);
-      return q ? `${id} \u2192 "${q.type}"` : undefined;
-    })
-    .filter((entry): entry is string => entry !== undefined)
-    .join(", ");
-  if (!resolved) return "";
-  return `\n\nNote: no \`type\` given; resolved ${resolved}. Re-ask with an explicit type when the intent differed: a question with options defaults to "single", and multiple selections need "multi".`;
+  const readAsOneChoice = inferredIds
+    .map((id) => questions.find((q) => q.id === id))
+    .filter((q): q is AskQuestion => q !== undefined && q.type === "single")
+    .map((q) => q.id);
+  if (readAsOneChoice.length === 0) return "";
+  return `\n\nNote: no \`type\` given; ${readAsOneChoice.join(", ")} read as one choice. Send "multi" when several selections are possible.`;
 }
 
 function formatAnswer(q: AskQuestion, value: string | string[]): string {
@@ -73,7 +80,7 @@ export function registerAskTool(pi: ExtensionAPI): void {
   pi.registerTool({
     name: "ask",
     label: "Ask user",
-    description: "Ask the user one or more questions and return their answers. Supports free text, single choice, and multiple choice.",
+    description: "Ask the user one or more questions and return their answers. Supports free text, single choice, and multiple choice; every question carries its `type`.",
     promptSnippet: "Ask the user one or more clarifying questions",
     promptGuidelines: [
       "Before acting on a prompt, ensure you fully understand the user's intent — if ambiguous, ask clarifying questions using the ask tool.",
@@ -81,12 +88,15 @@ export function registerAskTool(pi: ExtensionAPI): void {
     parameters: Type.Object({
       questions: Type.Array(askQuestionSchema, {
         minItems: 1,
-        description: "Questions to ask. Each one needs an id and a question; add options for a choice question. The type is optional — a question with options reads as single choice, one without as free text. User navigates between them with Tab / Shift+Tab.",
+        // The example is what makes models send `type` — the schema marks it
+        // optional so an omission is still accepted, and a description alone
+        // does not carry the shape.
+        description: "Questions to ask. Send `type` on every question; a question with options needs one. Example: [{\"id\":\"scope\",\"type\":\"single\",\"question\":\"Which scope?\",\"options\":[\"local\",\"remote\"]}]. User navigates between them with Tab / Shift+Tab.",
       }),
     }),
     execute: async (_id, params, _signal, _update, ctx: ExtensionContext) => {
       const questions = normalizeQuestions(params.questions);
-      const inferredTypeIds = params.questions.filter((q) => q.type === undefined).map((q) => q.id);
+      const inferredTypeIds = params.questions.filter(hasNoType).map((q: AskQuestionInput) => q.id);
 
       // Validate options for single/multi.
       for (const q of questions) {

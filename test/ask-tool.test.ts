@@ -88,7 +88,7 @@ describe("ask tool — wizard path", () => {
 
     expect(result.isError).toBeUndefined();
     expect(result.content[0].text).toContain("Which environment?: prod");
-    expect(result.content[0].text).toContain('q1 \u2192 "single"');
+    expect(result.content[0].text).toContain('Note: no `type` given; q1 read as one choice');
   });
 
   it("accepts a question that omits both type and options as free text", async () => {
@@ -100,7 +100,23 @@ describe("ask tool — wizard path", () => {
     const result = await tool.execute("1", { questions: [raw] }, undefined, undefined, ctx);
 
     expect(result.content[0].text).toContain("What should the module be called?: nvr-stream");
-    expect(result.content[0].text).toContain('q1 \u2192 "text"');
+    // Free text accepts every answer an option list would have offered, so the
+    // inference is not reported.
+    expect(result.content[0].text).not.toContain("Note:");
+  });
+
+  it("accepts a null type, which a model sends for an optional field", async () => {
+    const tool = captureTool();
+    const raw = { id: "q1", question: "Which environment?", type: null, options: ["staging", "prod"] };
+    expect(Value.Check(tool.parameters, { questions: [raw] })).toBe(true);
+
+    const ctx = meCtx([{ id: "q1", value: "staging" }]);
+    const result = await tool.execute("1", { questions: [raw] }, undefined, undefined, ctx);
+
+    expect(result.isError).toBeUndefined();
+    expect(result.content[0].text).toContain("Which environment?: staging");
+    // null reads like an omitted type, so it is inferred and reported the same way.
+    expect(result.content[0].text).toContain('Note: no `type` given; q1 read as one choice');
   });
 
   it("rejects a choice question with no options before opening the wizard", async () => {
@@ -128,6 +144,15 @@ describe("normalizeQuestions", () => {
     expect(c).toEqual({ id: "c", question: "Notes?", type: "text" });
     expect(d.options).toEqual([]);
   });
+
+  it("resolves a null type the same way as an omitted one", () => {
+    const [a, b] = normalizeQuestions([
+      { id: "a", type: null, question: "Which environment?", options: ["staging", "prod"] },
+      { id: "b", type: null, question: "Notes?" },
+    ]);
+
+    expect([a.type, b.type]).toEqual(["single", "text"]);
+  });
 });
 
 describe("inferredTypeNote", () => {
@@ -135,11 +160,18 @@ describe("inferredTypeNote", () => {
     expect(inferredTypeNote([single], [])).toBe("");
   });
 
-  it("names only the questions whose type was filled in", () => {
-    const note = inferredTypeNote([single, text], ["q3"]);
+  it("names the questions whose options were read as one choice", () => {
+    const inferred = { id: "q4", type: "single" as const, question: "Which scope?", options: ["local", "remote"] };
+    const note = inferredTypeNote([single, inferred], ["q4"]);
 
-    expect(note).toContain('q3 \u2192 "text"');
+    expect(note).toContain("q4 read as one choice");
     expect(note).not.toContain("q1");
+    // The only action that matters: a multi selection needs its own type.
+    expect(note).toContain('Send "multi"');
+  });
+
+  it("stays silent for a question read as free text", () => {
+    expect(inferredTypeNote([text], ["q3"])).toBe("");
   });
 
   it("renders nothing when no id matches a question", () => {
