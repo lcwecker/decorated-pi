@@ -71,8 +71,10 @@ describe("compaction session_before_compact", () => {
     expect(captured.context.messages[0].content[0].text).toContain("Earlier context.");
     expect(captured.context.messages[0].content[0].text).toContain("focus on security");
     expect(captured.context.messages[0].content[0].text).toContain("old work");
-    // Bounded by both the reserve-token budget and the model's output limit.
-    expect(captured.options.maxTokens).toBe(8192);
+    // The model's own output limit applies; pi-ai reduces it when input and
+    // output have to fit the context window. `reserveTokens` only decides when
+    // compaction starts (pi 1.4).
+    expect(captured.options.maxTokens).toBeUndefined();
     expect(captured.options.cacheRetention).toBe("none");
     expect(typeof captured.options.sessionId).toBe("string");
     expect(captured.options.sessionId).not.toHaveLength(0);
@@ -87,7 +89,7 @@ describe("compaction session_before_compact", () => {
     });
   });
 
-  it("bounds maxTokens by the reserve-token budget when the model has no limit", async () => {
+  it("does not derive an output cap from reserveTokens", async () => {
     const handler = compactionModule.hooks.session_before_compact![0] as any;
     let captured: any;
     const ctx = makeCtx({ maxTokens: 0 }, async (_model: any, _context: any, options: any) => {
@@ -95,7 +97,8 @@ describe("compaction session_before_compact", () => {
       return { content: [{ type: "text", text: "s" }] };
     });
     await handler(makeEvent(), ctx);
-    expect(captured.maxTokens).toBe(16000); // 0.8 * reserveTokens(20000)
+    // 0.8 * reserveTokens(20000) used to become the cap here.
+    expect(captured.maxTokens).toBeUndefined();
   });
 
   it("skips the file-operation section when no files were touched", async () => {

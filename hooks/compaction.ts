@@ -220,12 +220,12 @@ export const compactionModule: Module = {
           );
         }
         try {
-          // Bound the output like pi's native compaction: respect both the
-          // reserve-token budget and the model's own output limit.
-          const maxTokens = Math.min(
-            Math.floor(0.8 * preparation.settings.reserveTokens),
-            model.maxTokens > 0 ? model.maxTokens : Number.POSITIVE_INFINITY,
-          );
+          // The request leaves the output limit to the model, the way pi's own
+          // compaction does since 1.4: `compaction.reserveTokens` only decides
+          // when compaction starts, and pi-ai applies the model's output limit —
+          // reduced when input and output have to fit the context window.
+          // Capping here at `0.8 * reserveTokens` is what made a summary with
+          // long reasoning hit "generation hit the token cap".
           const response = await ctx.modelRegistry.complete(model, {
             messages: [{
               role: "user",
@@ -233,7 +233,6 @@ export const compactionModule: Module = {
               timestamp: Date.now(),
             }],
           }, {
-            maxTokens,
             signal,
             cacheRetention: "none",
             // Summaries are standalone requests — a fresh session id keeps
