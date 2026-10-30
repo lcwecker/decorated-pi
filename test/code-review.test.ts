@@ -164,10 +164,11 @@ describe("SCM helpers", () => {
     }
   });
 
-  it("passes the task through stdin and gives the reviewer all tools", () => {
+  it("passes the task through stdin and gives the reviewer all tools but ask", () => {
     const args = buildReviewerArgs("review/reviewer");
     expect(args).not.toContain("--tools");
     expect(args).not.toContain("--extension");
+    expect(args[args.indexOf("--exclude-tools") + 1]).toBe("ask");
     expect(args).toContain("--append-system-prompt");
   });
 });

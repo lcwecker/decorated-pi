@@ -217,10 +217,19 @@ export function buildReviewTask(scm: "git" | "svn" | null, prompt: string): stri
   ].filter(Boolean).join("\n");
 }
 
+/**
+ * Tools the reviewer must not have. It runs headless, so `ask` has no user to
+ * reach: a call there only burns a turn on "requires an interactive UI
+ * session" and leaves the review without a verdict. Excluded up front so the
+ * model never sees the tool.
+ */
+const REVIEWER_EXCLUDED_TOOLS = ["ask"];
+
 export function buildReviewerArgs(model: string): string[] {
   return [
     "--mode", "json", "-p", "--no-session",
     "--model", model,
+    "--exclude-tools", REVIEWER_EXCLUDED_TOOLS.join(","),
     "--append-system-prompt", REVIEWER_SYSTEM_PROMPT,
   ];
 }
