@@ -7,8 +7,8 @@
  * native web tools all render through here.
  */
 
-import { keyHint } from "@earendil-works/pi-coding-agent";
-import { Text } from "@earendil-works/pi-tui";
+import { keyHint as importedKeyHint } from "@earendil-works/pi-coding-agent";
+import { Text, type Keybinding } from "@earendil-works/pi-tui";
 
 export const TOOL_RESULT_FOLD_LINES = 30;
 
@@ -37,6 +37,13 @@ export function textResultContent(result: { content?: Array<{ type: string; text
 }
 
 /**
+ * Formats a keybinding hint. Pi 1.5+ injects this into the render context, so it
+ * always reads the host's keybindings rather than those of whichever copy of
+ * pi-coding-agent the extension resolved.
+ */
+export type KeyHint = (keybinding: Keybinding, description: string) => string;
+
+/**
  * Render folded text. A `[Truncated: ...]` line that the producer appended and
  * that survives the fold is pulled out of the body and shown in the warning
  * color; when the fold cuts before it, the `... (N more lines)` hint takes its
@@ -46,6 +53,7 @@ export function formatToolResultText(
   text: string,
   expanded: boolean,
   theme: any,
+  keyHint: KeyHint,
   maxLines = TOOL_RESULT_FOLD_LINES,
 ): string {
   const { totalLines, displayLines, remainingLines } = collapseToolText(
@@ -77,6 +85,22 @@ export function renderToolTextResult(
   maxLines = TOOL_RESULT_FOLD_LINES,
 ): any {
   const component = context.lastComponent ?? new Text("", 0, 0);
-  component.setText(formatToolResultText(textResultContent(result), options.expanded, theme, maxLines));
+  component.setText(
+    formatToolResultText(
+      textResultContent(result),
+      options.expanded,
+      theme,
+      renderKeyHint(context),
+      maxLines,
+    ),
+  );
   return component;
+}
+
+/** The host's hint formatter when the render context carries one. */
+export function renderKeyHint(context: any): KeyHint {
+  if (typeof context?.keyHint === "function") {
+    return (keybinding: Keybinding, description: string) => context.keyHint(keybinding, description);
+  }
+  return importedKeyHint;
 }
