@@ -12,6 +12,7 @@ import { keyHint } from "@earendil-works/pi-coding-agent";
 
 import {
   formatToolResultText,
+  keyTextLabel,
   renderKeyHint,
   renderToolTextResult,
   TOOL_RESULT_FOLD_LINES,
@@ -101,5 +102,30 @@ describe("renderToolTextResult", () => {
     renderToolTextResult(textResult("a\nb\nc\nd"), { expanded: false }, theme, context, 2);
 
     expect(painted).toContain("(2 more lines, 4 total,");
+  });
+});
+
+describe("keyTextLabel", () => {
+  it("uses the host's label and keeps its `this`", () => {
+    const context = {
+      bindings: "ctrl+o",
+      keyText(this: any, keybinding: string) {
+        return `${this.bindings} (${keybinding})`;
+      },
+    };
+    expect(keyTextLabel(context, "app.tools.expand")).toBe("ctrl+o (app.tools.expand)");
+  });
+
+  it("treats an empty label as no label", () => {
+    // `keyText` answers "" when nothing is bound to the id. A hint built from
+    // that reads "( to expand)", which is the failure this guards.
+    expect(keyTextLabel({ keyText: () => "" }, "app.tools.expand")).toBeUndefined();
+  });
+
+  it("gives up instead of guessing when no formatter is reachable", () => {
+    // A host in the peer range 0.99–1.4 injects no keyText; the static import
+    // then formats through a theme this process never initialised.
+    expect(keyTextLabel({}, "app.tools.expand")).toBeUndefined();
+    expect(keyTextLabel(undefined, "app.tools.expand")).toBeUndefined();
   });
 });

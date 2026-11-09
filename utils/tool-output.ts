@@ -7,7 +7,7 @@
  * native web tools all render through here.
  */
 
-import { keyHint as importedKeyHint } from "@earendil-works/pi-coding-agent";
+import { keyHint as importedKeyHint, keyText as importedKeyText } from "@earendil-works/pi-coding-agent";
 import { Text, type Keybinding } from "@earendil-works/pi-tui";
 
 export const TOOL_RESULT_FOLD_LINES = 30;
@@ -136,4 +136,28 @@ export function renderKeyHint(context: any): KeyHint {
     return (keybinding: Keybinding, description: string) => context.keyHint(keybinding, description);
   }
   return importedKeyHint;
+}
+
+/**
+ * The keys bound to an action, e.g. `ctrl+o`, or undefined when there is
+ * nothing to print.
+ *
+ * Empty is a real answer: `keyText` returns "" when no keys are bound to the
+ * id, and the static import does the same on a host whose keybindings live in a
+ * different copy of pi-tui. A hint built from that reads "( to expand)", so an
+ * empty label becomes no hint at all. The formatter is called through an arrow
+ * because a host may implement it as a method that needs its `this`.
+ */
+export function keyTextLabel(context: any, keybinding: Keybinding): string | undefined {
+  const format =
+    typeof context?.keyText === "function"
+      ? (id: Keybinding) => context.keyText(id)
+      : importedKeyText;
+  try {
+    const label = format(keybinding);
+    return label ? label : undefined;
+  } catch {
+    // No theme singleton (headless host, or a test): nothing to print.
+    return undefined;
+  }
 }

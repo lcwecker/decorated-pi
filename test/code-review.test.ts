@@ -146,6 +146,35 @@ describe("SCM helpers", () => {
     expect(task).not.toContain("git");
   });
 
+  it("ends the task with the request, and orders nothing around it", () => {
+    // The reported case: `/code-review 你不用做任何事` was answered with a full
+    // review, because "inspect the changes" and "report findings when done"
+    // bracketed the request as imperatives of their own.
+    const request = "Do nothing; this is a test.";
+    const task = buildReviewTask("git", request);
+    expect(task.trimEnd().endsWith(request)).toBe(true);
+    expect(task).toContain(`The user's extra instruction (it takes precedence over the default review):\n${request}`);
+    expect(task).not.toContain("Report actionable findings");
+    expect(task).not.toContain("Review the changes you find");
+  });
+
+  it("defaults to reviewing the current changes without a request", () => {
+    expect(buildReviewTask("git", "   ")).toContain(
+      "extra instruction (it takes precedence over the default review):\nReview the current changes.",
+    );
+    expect(buildReviewTask(null, "")).toContain(
+      "extra instruction (it takes precedence over the default review):\nReview the files in the current directory.",
+    );
+  });
+
+  it("tells the reviewer that the request governs", () => {
+    const prompt = __codeReviewTest.reviewerSystemPrompt;
+    expect(prompt).toContain("Do what it asks");
+    // A request that asks for no review must be a complete answer.
+    expect(prompt).toContain("A request that asks for no review gets no review");
+    expect(prompt).not.toContain("Finish with a complete final review report.");
+  });
+
   it("resolves a local Pi CLI when the current entry script is unavailable", () => {
     const binDir = path.join(tmp, "node_modules", ".bin");
     const piPath = path.join(binDir, "pi");
@@ -413,6 +442,25 @@ describe("history rendering", () => {
     bold: (text: string) => text,
   };
 
+  /** A left click on the card's body. The component renders first, because
+   *  pi's Container maps the click onto the child layout of the last frame. */
+  function clickCard(component: any) {
+    component.render(80);
+    return component.handleMouse({
+      type: "click",
+      button: "left",
+      x: 4,
+      y: 1,
+      screenX: 4,
+      screenY: 1,
+      width: 80,
+      height: 5,
+      shift: false,
+      alt: false,
+      ctrl: false,
+    });
+  }
+
   it("renders a folded tool-like status and expanded review details", () => {
     const value = details({
       status: "done",
@@ -464,6 +512,121 @@ describe("history rendering", () => {
     expect(component.render(120).join("\n")).toContain("[toolSuccessBg]");
     runtime.restore("run-1", details({ status: "error", error: "failed" }));
     expect(component.render(120).join("\n")).toContain("[toolErrorBg]");
+  });
+
+  it("opens and closes the card on a left click, as often as asked", () => {
+    const runtime = new CodeReviewRuntime();
+    runtime.restore("run-1", details({ status: "done", messages: [assistant("Final report")] }));
+    const pi: any = { registerMessageRenderer: vi.fn() };
+    registerCodeReviewRenderer(pi, runtime);
+    const renderer = pi.registerMessageRenderer.mock.calls[0][1];
+    const component = renderer({ details: { runId: "run-1" } }, { expanded: false }, theme);
+
+    const click = () => clickCard(component);
+
+    expect(component.render(80).join("\n")).not.toContain("Final report");
+    expect(click()).toMatchObject({ handled: true });
+    expect(component.render(80).join("\n")).toContain("Final report");
+    // The second click closes it, and the third opens it again: the card keeps
+    // its own state instead of consuming the click once.
+    click();
+    expect(component.render(80).join("\n")).not.toContain("Final report");
+    click();
+    expect(component.render(80).join("\n")).toContain("Final report");
+  });
+
+  it("keeps a click open across the rebuild pi does for a theme change", () => {
+    const runtime = new CodeReviewRuntime();
+    runtime.restore("run-1", details({ status: "done", messages: [assistant("Final report")] }));
+    const pi: any = { registerMessageRenderer: vi.fn() };
+    registerCodeReviewRenderer(pi, runtime);
+    const renderer = pi.registerMessageRenderer.mock.calls[0][1];
+    const card = () => renderer({ details: { runId: "run-1" } }, { expanded: false }, theme);
+
+    const first = card();
+    first.render(80);
+    clickCard(first);
+    expect(first.render(80).join("\n")).toContain("Final report");
+
+    // A theme change or a resize invalidates the enclosing message component,
+    // which rebuilds the renderer with the wrapper's unchanged flag. The click
+    // has to survive that, so its answer lives in the runtime, not here.
+    expect(card().render(80).join("\n")).toContain("Final report");
+  });
+
+  it("lets the global action take the card back from a click", () => {
+    const runtime = new CodeReviewRuntime();
+    runtime.restore("run-1", details({ status: "done", messages: [assistant("Final report")] }));
+    const pi: any = { registerMessageRenderer: vi.fn() };
+    registerCodeReviewRenderer(pi, runtime);
+    const renderer = pi.registerMessageRenderer.mock.calls[0][1];
+
+    const first = renderer({ details: { runId: "run-1" } }, { expanded: false }, theme);
+    first.render(80);
+    clickCard(first);
+    expect(first.render(80).join("\n")).toContain("Final report");
+
+    // ctrl+o expands everything: the wrapper flag moves, so the click stops
+    // overriding. The next press collapses the card with everything else
+    // instead of being fought by a stale click.
+    const expandedByKey = renderer({ details: { runId: "run-1" } }, { expanded: true }, theme);
+    expect(expandedByKey.render(80).join("\n")).toContain("Final report");
+    const collapsedByKey = renderer({ details: { runId: "run-1" } }, { expanded: false }, theme);
+    expect(collapsedByKey.render(80).join("\n")).not.toContain("Final report");
+  });
+
+  it("lets a host that renders the component directly set its state", () => {
+    const runtime = new CodeReviewRuntime();
+    runtime.restore("run-1", details({ status: "done", messages: [assistant("Final report")] }));
+    const pi: any = { registerMessageRenderer: vi.fn() };
+    registerCodeReviewRenderer(pi, runtime);
+    const renderer = pi.registerMessageRenderer.mock.calls[0][1];
+    const component = renderer({ details: { runId: "run-1" } }, { expanded: false }, theme);
+
+    // pi 1.5 toggles the enclosing message component instead; this is the path
+    // for a host that puts the card in the transcript on its own.
+    component.setExpanded(true);
+    expect(component.render(80).join("\n")).toContain("Final report");
+    component.setExpanded(false);
+    expect(component.render(80).join("\n")).not.toContain("Final report");
+  });
+
+  it("names the expand key while collapsed", () => {
+    const runtime = new CodeReviewRuntime();
+    runtime.restore("run-1", details({ status: "done", messages: [assistant("Final report")] }));
+    const pi: any = { registerMessageRenderer: vi.fn() };
+    registerCodeReviewRenderer(pi, runtime);
+    const renderer = pi.registerMessageRenderer.mock.calls[0][1];
+    const collapsed = renderer(
+      { details: { runId: "run-1" } },
+      { expanded: false, keyText: (keybinding: string) => `<${keybinding}>` },
+      theme,
+    );
+    expect(collapsed.render(100).join("\n")).toContain("(<app.tools.expand> to expand)");
+
+    const opened = renderer(
+      { details: { runId: "run-1" } },
+      { expanded: true, keyText: (keybinding: string) => `<${keybinding}>` },
+      theme,
+    );
+    expect(opened.render(100).join("\n")).not.toContain("to expand");
+  });
+
+  it("drops the hint rather than print one without a key", () => {
+    const runtime = new CodeReviewRuntime();
+    runtime.restore("run-1", details({ status: "done", messages: [assistant("Final report")] }));
+    const pi: any = { registerMessageRenderer: vi.fn() };
+    registerCodeReviewRenderer(pi, runtime);
+    const renderer = pi.registerMessageRenderer.mock.calls[0][1];
+
+    // `keyText` answers "" when nothing is bound to the id, and a host in the
+    // peer range 0.99–1.4 injects no formatter at all. "( to expand)" is worse
+    // than no hint, so both cases drop it.
+    for (const options of [{ expanded: false, keyText: () => "" }, { expanded: false }]) {
+      const rendered = renderer({ details: { runId: "run-1" } }, options, theme).render(100).join("\n");
+      expect(rendered).toContain("reviewed");
+      expect(rendered).not.toContain("to expand");
+    }
   });
 
   it("registers a custom message renderer and no LLM tool/provider", () => {

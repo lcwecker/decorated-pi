@@ -13,7 +13,8 @@ import {
   getMarkdownTheme,
   type ExtensionAPI,
 } from "@earendil-works/pi-coding-agent";
-import { Box, Container, Markdown, Spacer, Text } from "@earendil-works/pi-tui";
+import { Box, Container, Markdown, MouseRegion, Spacer, Text } from "@earendil-works/pi-tui";
+import { keyTextLabel } from "../../utils/tool-output.js";
 import { which } from "../../utils/which.js";
 
 export const CODE_REVIEW_VIEW_MESSAGE = "code-review-view";
@@ -21,18 +22,15 @@ export const CODE_REVIEW_RESULT_MESSAGE = "code-review-result";
 export const CODE_REVIEW_STATE_ENTRY = "decorated-pi.code-review-state";
 
 const REVIEWER_SYSTEM_PROMPT = [
-  "You are a senior code reviewer. Review the current changes or the scope described in the task.",
+  "You are a senior code reviewer in a headless process: no user can answer a question, so decide from the task and the repository.",
+  "The task ends with the user request. It says what to do — a review of the current changes is the default, but it may narrow the scope, point at a file, or ask for something else. Do what it asks.",
   "",
   "Guidelines:",
-  "- This is a strictly read-only review. Use tools only to inspect the changes and surrounding code.",
-  "- Inspect the current changes yourself with read-only SCM commands (git status/diff, svn status/diff) when a repository is present.",
-  "- When there is no repository, review exactly the scope described in the task.",
+  "- Work read-only. Use tools only to inspect the changes and the surrounding code.",
+  "- Inspect the changes yourself with read-only SCM commands (git status/diff, svn status/diff) when a repository is present.",
   "- Do not modify files, SCM state, configuration, dependencies, or the environment.",
-  "- Focus on correctness, bugs, security, performance, maintainability, and tests.",
-  "- Cite file paths and relevant code context for each finding.",
-  "- Classify findings by severity and explain concrete impact.",
-  "- If the changes are clean, state that explicitly.",
-  "- Finish with a complete final review report.",
+  "- When reviewing, focus on correctness, bugs, security, performance, maintainability, and tests; cite file paths and code context; classify findings by severity and explain the concrete impact; state explicitly when the changes are clean.",
+  "- Answer the request that was made. A request that asks for no review gets no review, and saying so is the complete answer.",
   "- Be direct and specific. Do not add filler.",
 ].join("\n");
 
@@ -78,6 +76,37 @@ export function emptyUsage(): ReviewUsage {
 export class CodeReviewRuntime {
   active: ActiveCodeReview | null = null;
   private readonly runs = new Map<string, ReviewRunDetails>();
+  /** Expand state per run — outside the component, because pi rebuilds that.
+   *  `wrapper` is what the enclosing message component was constructed with;
+   *  `override` is a click's answer, which that component never hears about. */
+  private readonly expansion = new Map<string, { wrapper: boolean; override?: boolean }>();
+
+  /**
+   * The expand state for a card.
+   *
+   * pi wraps this renderer in a `CustomMessageComponent` and rebuilds it on a
+   * theme change, a resize, or the global expand action — each rebuild hands a
+   * fresh flag to a fresh component. Keeping the answer here is what survives
+   * that, and a wrapper flag that actually moved clears the click, so the
+   * global action stays authoritative instead of being fought by a stale click.
+   */
+  expansionFor(runId: string, wrapperExpanded: boolean): { wrapper: boolean; override?: boolean } {
+    let state = this.expansion.get(runId);
+    if (!state) {
+      state = { wrapper: wrapperExpanded };
+      this.expansion.set(runId, state);
+      if (this.expansion.size > 64) {
+        const oldest = this.expansion.keys().next().value;
+        if (oldest !== undefined) this.expansion.delete(oldest);
+      }
+      return state;
+    }
+    if (state.wrapper !== wrapperExpanded) {
+      state.wrapper = wrapperExpanded;
+      state.override = undefined;
+    }
+    return state;
+  }
 
   begin(active: ActiveCodeReview): boolean {
     if (this.active) return false;
@@ -196,25 +225,28 @@ export function hasTrackedChanges(scm: "git" | "svn", status: string): boolean {
 }
 
 export function buildReviewTask(scm: "git" | "svn" | null, prompt: string): string {
-  const context = scm
+  // The request is the last block and the only instruction. Everything above
+  // says what is available, never what to do: a request that asks for no review
+  // must be able to win, and an imperative on either side of it ("inspect the
+  // changes", "report findings when done") used to overrule it.
+  const available = scm
     ? [
         `The current project's SCM is ${scm}.`,
-        "Inspect the current changes yourself with read-only SCM commands:",
+        "Read-only commands that show what changed:",
         scm === "git"
           ? "  git status --short --untracked-files=all, git diff, git diff --cached"
           : "  svn status, svn diff",
-        "Review the changes you find and the relevant surrounding code.",
+        "",
+        "The user's extra instruction (it takes precedence over the default review):",
+        prompt.trim() || "Review the current changes.",
       ]
     : [
         "There is no version control in the current directory.",
-        "Review exactly the scope described below using the available tools.",
+        "",
+        "The user's extra instruction (it takes precedence over the default review):",
+        prompt.trim() || "Review the files in the current directory.",
       ];
-  return [
-    ...context,
-    "",
-    prompt.trim(),
-    "Report actionable findings when the review is complete.",
-  ].filter(Boolean).join("\n");
+  return available.join("\n");
 }
 
 /**
@@ -532,6 +564,7 @@ export function renderReviewDetails(
   details: ReviewRunDetails,
   expanded: boolean,
   theme: any,
+  expandHint?: string,
 ): Container {
   const component = new Container();
   const icon = details.status === "done" ? theme.fg("success", "✓")
@@ -543,7 +576,10 @@ export function renderReviewDetails(
     0,
     0,
   ));
-  if (!expanded) return component;
+  if (!expanded) {
+    if (expandHint) component.addChild(new Text(theme.fg("muted", expandHint), 0, 0));
+    return component;
+  }
 
   const finalOutput = getFinalOutput(details.messages);
   const items = displayItems(details.messages);
@@ -578,13 +614,33 @@ export function renderReviewDetails(
 }
 
 class LiveReviewComponent extends Container {
+  /** Shared with the runtime, so a rebuild keeps a click's answer. */
+  private readonly expansion: { wrapper: boolean; override?: boolean };
+
   constructor(
     private readonly runtime: CodeReviewRuntime,
     private readonly runId: string,
-    private readonly expanded: boolean,
+    wrapperExpanded: boolean,
     private readonly theme: any,
+    /** The host's key label, so the collapsed hint names the real key. */
+    private readonly expandKey: string | undefined,
   ) {
     super();
+    this.expansion = runtime.expansionFor(runId, wrapperExpanded);
+  }
+
+  /** Opened state: a click's answer when there is one, the wrapper's flag
+   *  otherwise. pi toggles the wrapper, never this component. */
+  private isExpanded(): boolean {
+    return this.expansion.override ?? this.expansion.wrapper;
+  }
+
+  /** Set the row's own state. A host that renders this component directly (no
+   *  `CustomMessageComponent` in between) reaches the global action here. */
+  setExpanded(expanded: boolean): void {
+    if (this.isExpanded() === expanded) return;
+    this.expansion.override = expanded;
+    this.invalidate();
   }
 
   render(width: number): string[] {
@@ -596,6 +652,7 @@ class LiveReviewComponent extends Container {
       error: "Code review state is unavailable.",
       usage: emptyUsage(),
     };
+    const expanded = this.isExpanded();
     // Mirror Pi's ToolExecutionComponent shell: one padded Box whose background
     // changes from pending to success/error, with renderCall then renderResult.
     const bg = details.status === "running" ? "toolPendingBg"
@@ -608,20 +665,34 @@ class LiveReviewComponent extends Container {
       0,
       0,
     ));
-    box.addChild(renderReviewDetails(details, this.expanded, this.theme));
-    this.addChild(box);
+    box.addChild(renderReviewDetails(details, expanded, this.theme, this.collapsedHint(expanded)));
+    // Pi wraps its own collapsible rows (tool results, branch and compaction
+    // summaries) in a MouseRegion that toggles that row on a left click. A
+    // custom message renderer gets no such wrapper, which made this the one row
+    // in the transcript that could not be clicked open.
+    this.addChild(new MouseRegion(box, (event) => {
+      if (event.type !== "click" || event.button !== "left") return undefined;
+      this.setExpanded(!this.isExpanded());
+      return { handled: true };
+    }));
     return super.render(width);
+  }
+
+  private collapsedHint(expanded: boolean): string | undefined {
+    if (expanded || this.expandKey === undefined) return undefined;
+    return `(${this.expandKey} to expand)`;
   }
 }
 
 export function registerCodeReviewRenderer(pi: ExtensionAPI, runtime: CodeReviewRuntime): void {
   pi.registerMessageRenderer<{ runId: string }>(
     CODE_REVIEW_VIEW_MESSAGE,
-    (message, { expanded }, theme) => new LiveReviewComponent(
+    (message, options, theme) => new LiveReviewComponent(
       runtime,
       String((message.details as any)?.runId ?? ""),
-      expanded,
+      options.expanded,
       theme,
+      keyTextLabel(options, "app.tools.expand"),
     ),
   );
 }
