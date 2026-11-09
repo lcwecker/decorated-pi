@@ -134,11 +134,13 @@ Publishing is a CI pipeline: `.github/workflows/release.yml` creates the tag and
    npm run typecheck && npm test
    ```
 
-3. Commit. The subject carries the version and acts as the trigger — it must match the field from step 1, in the strict form `chore(release): vX.Y.Z` (a prerelease suffix such as `-rc.1` fails validation):
+3. Commit. The subject carries the version and acts as the trigger — it must match the field from step 1, in the strict form `chore(release): vX.Y.Z` (a prerelease suffix such as `-rc.1` fails validation). The **body is the release notes**: the workflow publishes it verbatim, so write it for someone reading the changelog and name the issue a change closes there:
 
    ```bash
    git add package.json package-lock.json
-   git commit -m "chore(release): v0.9.5"
+   git commit -m "chore(release): v0.9.5" -m "## What changed
+
+**A folded tool result keeps its key hint.** …"
    ```
 
 4. Push to `main`, then watch with `gh run watch` or the Actions tab:
@@ -156,4 +158,4 @@ A push to `main` runs `.github/workflows/ci.yml`; when the head commit's subject
 
 **Never**: put a token in the publish step (`NODE_AUTH_TOKEN` set to anything, empty included, disables the OIDC fallback), or push the release tag by hand.
 
-**Release notes** are filled in after the workflow creates the release, with `gh release edit vX.Y.Z --notes-file <file>`: follow the `## What changed` shape of earlier releases and name the issue a change closes. Installation stays in the README, so the notes leave it out.
+**Release notes** are the body of the release commit, verbatim: the workflow prepends `## What changed` when the body does not already open with a heading, appends the compare link, and falls back to `gh`'s generated notes only when the body is empty. Nothing is edited after publishing, so the body has to stand on its own; installation stays in the README, so the notes leave it out.

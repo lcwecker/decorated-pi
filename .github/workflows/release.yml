@@ -151,4 +151,29 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ steps.meta.outputs.tag }}
-        run: gh release create "$TAG" --title "$TAG" --generate-notes
+        run: |
+          set -euo pipefail
+
+          # The notes are the release commit's body: the same text lands in
+          # `git log` and on the Release page, so there is one thing to write.
+          body=$(git log -1 --format=%b)
+          if [[ -z "${body//[[:space:]]/}" ]]; then
+            gh release create "$TAG" --title "$TAG" --generate-notes
+            exit 0
+          fi
+
+          # Keep the published shape: a body that opens with its own heading
+          # keeps it, plain prose gets the heading earlier releases use.
+          if [[ "$body" != '## '* ]]; then
+            body=$(printf '## What changed\n\n%s' "$body")
+          fi
+
+          # `--generate-notes` adds this line; a body handed in by hand has to
+          # carry it, or the compare link drops off the release page.
+          previous=$(git describe --tags --abbrev=0 "${TAG}^" 2>/dev/null || true)
+          if [[ -n "$previous" ]]; then
+            body+=$'\n\n'
+            body+="**Full Changelog**: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/compare/${previous}...${TAG}"
+          fi
+
+          printf '%s\n' "$body" | gh release create "$TAG" --title "$TAG" --notes-file -
