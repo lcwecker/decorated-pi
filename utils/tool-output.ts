@@ -71,9 +71,42 @@ export function formatToolResultText(
   let rendered = outputText ? theme.fg("toolOutput", outputText) : "";
   if (truncationMsg) rendered += (rendered ? "\n" : "") + theme.fg("warning", truncationMsg);
   if (!expanded && remainingLines > 0) {
-    rendered += `${theme.fg("muted", `\n... (${remainingLines} more lines, ${totalLines} total,`)} ${keyHint("app.tools.expand", "to expand")})`;
+    rendered += foldFooter(remainingLines, totalLines, theme, keyHint);
   }
   return rendered;
+}
+
+/**
+ * The folded-view footer: how many lines are hidden and the expand key.
+ * Shared by every folding renderer so the wording stays identical.
+ */
+export function foldFooter(
+  remainingLines: number,
+  totalLines: number,
+  theme: any,
+  keyHint: KeyHint,
+): string {
+  if (remainingLines <= 0) return "";
+  return `${theme.fg("muted", `\n... (${remainingLines} more lines, ${totalLines} total,`)} ${keyHint("app.tools.expand", "to expand")})`;
+}
+
+/**
+ * Fold text the caller already styled. `formatToolResultText` paints the whole
+ * block in one color, which ends at the first inner reset — renderers that
+ * color their own rows fold through this instead.
+ */
+export function foldToolText(
+  styled: string,
+  expanded: boolean,
+  theme: any,
+  keyHint: KeyHint,
+  maxLines = TOOL_RESULT_FOLD_LINES,
+): string {
+  const { totalLines, displayLines, remainingLines } = collapseToolText(
+    styled,
+    expanded ? Number.MAX_SAFE_INTEGER : maxLines,
+  );
+  return displayLines.join("\n") + foldFooter(remainingLines, totalLines, theme, keyHint);
 }
 
 /** `renderResult` implementation for text-only tools. */

@@ -9,6 +9,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 import { __lspToolsTest, registerLspTools } from "../tools/lsp/tools.js";
 
 function captureTools(manager: any): Record<string, any> {
@@ -22,6 +23,17 @@ function mockManager(client: any) {
     resolveFileState: vi.fn(async (file: string) => ({
       ok: true as const,
       result: { abs: `/cwd/${file}`, uri: `file:///cwd/${file}`, state: { client } },
+    })),
+  };
+}
+
+/** A manager whose queried file is a real one: the stub above answers with
+ *  `/cwd/...`, which holds nothing to read the queried symbol from. */
+function mockManagerAt(client: any, abs: string) {
+  return {
+    resolveFileState: vi.fn(async () => ({
+      ok: true as const,
+      result: { abs, uri: pathToFileURL(abs).href, state: { client } },
     })),
   };
 }
@@ -85,6 +97,17 @@ describe("lsp_definition", () => {
     const result = await captureTools(manager).lsp_definition.execute("id", { path: "a.ts", line: 2, character: 4 }, undefined, () => {}, {});
     expect(result.content[0].text).toBe("a.ts: no definition found at 2:4");
   });
+
+  it("names the symbol the definition answers for", async () => {
+    const file = tempFile("a.ts", "export function total() {}\n");
+    const definition = vi.fn(async () => [{ uri: pathToFileURL(file).href, range: range(0, 16, 0, 21) }]);
+    const result = await captureTools(mockManagerAt({ definition }, file)).lsp_definition.execute(
+      "id", { path: "a.ts", line: 1, character: 17 }, undefined, () => {}, {},
+    );
+
+    expect(result.content[0].text).toBe(`${file}:1:17: export function total() {}`);
+    expect(result.details).toMatchObject({ ok: true, symbol: "total", files: 1, total: 1 });
+  });
 });
 
 describe("lsp_references", () => {
@@ -101,6 +124,44 @@ describe("lsp_references", () => {
     expect(references).toHaveBeenCalledWith("file:///cwd/a.ts", { line: 0, character: 0 }, true, 30_000, undefined);
     expect(result.details.count).toBe(2);
     expect(result.content[0].text).toContain("/cwd/b.ts:2:2");
+  });
+
+  it("shows the source line at each reference, relative to the workspace", async () => {
+    const file = tempFile("a.ts", [
+      "import { sum } from './math';",
+      "export const total = sum(1, 2);",
+      "const again = sum(3, 4);",
+      "",
+    ].join("\n"));
+    const references = vi.fn(async () => [
+      { uri: pathToFileURL(file).href, range: range(1, 21, 1, 24) },
+      { uri: pathToFileURL(file).href, range: range(2, 14, 2, 17) },
+    ]);
+    const cwd = file.slice(0, file.lastIndexOf("/"));
+    const result = await captureTools(mockManagerAt({ references }, file)).lsp_references.execute(
+      "id", { path: "a.ts", line: 2, character: 22 }, undefined, () => {}, { cwd },
+    );
+
+    expect(result.content[0].text).toBe([
+      "a.ts:2:22: export const total = sum(1, 2);",
+      "a.ts:3:15: const again = sum(3, 4);",
+    ].join("\n"));
+    expect(result.details).toMatchObject({ ok: true, count: 2, total: 2, files: 1, omitted: 0, symbol: "sum" });
+    // The renderer highlights `sum` from these fields instead of re-reading.
+    expect(result.details.locations[0]).toMatchObject({ symbol: "sum", symbolStart: 21 });
+  });
+
+  it("caps a long list and says what it hid", async () => {
+    const file = tempFile("a.ts", "export const total = sum(1, 2);\n");
+    const locations = Array.from({ length: 3 }, () => ({
+      uri: pathToFileURL(file).href,
+      range: range(0, 21, 0, 24),
+    }));
+    const result = await captureTools(mockManagerAt({ references: vi.fn(async () => locations) }, file))
+      .lsp_references.execute("id", { path: "a.ts", line: 1, character: 22, limit: 2 }, undefined, () => {}, {});
+
+    expect(result.content[0].text).toContain("[Showing 2 of 3 locations.");
+    expect(result.details).toMatchObject({ count: 2, total: 3, omitted: 1 });
   });
 });
 
@@ -152,6 +213,11 @@ describe("lsp_rename", () => {
     expect(readFileSync(file, "utf-8")).toBe("const value = 1;\n");
     expect(result.details).toMatchObject({ ok: true, preview: true });
     expect(result.content[0].text).toContain(`${file}: 1 edit(s)`);
+    // A preview shows what each edit replaces, not only what it writes.
+    expect(result.content[0].text).toContain("1:7: value → total");
+    expect(result.details.changes).toEqual([
+      { file, line: 1, character: 7, before: "value", after: "total" },
+    ]);
   });
 
   it("reports a position that holds no renamable symbol", async () => {

@@ -8,9 +8,17 @@
 import { describe, expect, it } from "vitest";
 import {
   applyTextEdits,
+  flattenDocumentSymbols,
+  formatChangeGroups,
+  formatChangeRows,
   formatDocumentSymbols,
-  formatEditList,
-  formatLocations,
+  formatLocationRows,
+  identifierAt,
+  limitNotice,
+  relativeToCwd,
+  textInRange,
+  truncateSource,
+  type LocationRow,
 } from "../tools/lsp/format.js";
 import type { LspDocumentSymbol, LspTextEdit } from "../tools/lsp/types.js";
 
@@ -18,26 +26,91 @@ function range(sl: number, sc: number, el: number, ec: number) {
   return { start: { line: sl, character: sc }, end: { line: el, character: ec } };
 }
 
-describe("formatLocations", () => {
+function row(overrides: Partial<LocationRow> = {}): LocationRow {
+  return { file: "a.ts", line: 3, character: 5, source: "const x = 1;", ...overrides };
+}
+
+describe("formatLocationRows", () => {
   it("returns the empty message when there is nothing", () => {
-    expect(formatLocations([], "none")).toBe("none");
+    expect(formatLocationRows([], "none")).toBe("none");
   });
 
-  it("prints one-based path:line:character per location", () => {
-    const out = formatLocations(
+  it("prints path:line:character and the source line", () => {
+    const out = formatLocationRows(
       [
-        { uri: "file:///ws/a.ts", range: range(2, 4, 2, 8) },
-        { uri: "file:///ws/b.ts", range: range(0, 0, 0, 1) },
+        row({ file: "a.ts", source: "const total = sum(a, b);" }),
+        row({ file: "b.ts", line: 1, character: 1, source: "import { sum } from './a';" }),
       ],
       "none",
     );
-    expect(out).toBe("/ws/a.ts:3:5\n/ws/b.ts:1:1");
+    expect(out).toBe([
+      "a.ts:3:5: const total = sum(a, b);",
+      "b.ts:1:1: import { sum } from './a';",
+    ].join("\n"));
+  });
+
+  it("keeps the position when the file could not be read", () => {
+    // A reference in a generated or deleted file is still a place to open.
+    expect(formatLocationRows([row({ file: "gone.ts", source: "" })], "none")).toBe("gone.ts:3:5");
   });
 
   it("shows a non-file URI verbatim", () => {
-    // `untitled:` and `jdt://` have no path; they must not be mangled or dropped.
-    const out = formatLocations([{ uri: "untitled:Untitled-1", range: range(0, 0, 0, 1) }], "none");
-    expect(out).toBe("untitled:Untitled-1:1:1");
+    expect(formatLocationRows([row({ file: "untitled:Untitled-1", line: 1, character: 1, source: "" })], "none"))
+      .toBe("untitled:Untitled-1:1:1");
+  });
+});
+
+describe("identifierAt", () => {
+  it("returns the identifier covering the column and where it starts", () => {
+    expect(identifierAt("const total = sum(a, b);", 6)).toEqual({ name: "total", start: 6 });
+    expect(identifierAt("const total = sum(a, b);", 8)).toEqual({ name: "total", start: 6 });
+    expect(identifierAt("const total = sum(a, b);", 14)).toEqual({ name: "sum", start: 14 });
+  });
+
+  it("returns undefined on whitespace or punctuation", () => {
+    // A position that holds no symbol is what makes rename return no edits.
+    expect(identifierAt("const total = 1;", 5)).toBeUndefined();
+    expect(identifierAt("const total = 1;", 11)).toBeUndefined();
+    expect(identifierAt("", 0)).toBeUndefined();
+    expect(identifierAt("   ", 1)).toBeUndefined();
+  });
+
+  it("covers identifiers that are not ASCII", () => {
+    expect(identifierAt("const 总计 = 1;", 6)).toEqual({ name: "总计", start: 6 });
+  });
+});
+
+describe("relativeToCwd", () => {
+  it("strips the workspace prefix", () => {
+    expect(relativeToCwd("/ws/src/a.ts", "/ws")).toBe("src/a.ts");
+    expect(relativeToCwd("/ws/src/a.ts", "/ws/")).toBe("src/a.ts");
+  });
+
+  it("leaves a path outside the workspace absolute", () => {
+    expect(relativeToCwd("/other/a.ts", "/ws")).toBe("/other/a.ts");
+    expect(relativeToCwd("/wssrc/a.ts", "/ws")).toBe("/wssrc/a.ts");
+    expect(relativeToCwd("/ws/a.ts", undefined)).toBe("/ws/a.ts");
+  });
+});
+
+describe("truncateSource", () => {
+  it("drops indentation and expands tabs", () => {
+    expect(truncateSource("\t\treturn x;")).toBe("return x;");
+    expect(truncateSource("    return x;   ")).toBe("return x;");
+  });
+
+  it("cuts a long line so the row stays one line", () => {
+    const out = truncateSource("x".repeat(400));
+    expect(out).toHaveLength(160);
+    expect(out.endsWith("...")).toBe(true);
+  });
+});
+
+describe("limitNotice", () => {
+  it("says how many of the total were shown", () => {
+    expect(limitNotice(100, 250)).toBe(
+      "[Showing 100 of 250 locations. Pass a higher limit for more, or narrow the query.]",
+    );
   });
 });
 
@@ -112,21 +185,44 @@ describe("applyTextEdits", () => {
   });
 });
 
-describe("formatEditList", () => {
-  it("groups edits by file with their target positions", () => {
-    const out = formatEditList({
-      "/ws/a.ts": [{ range: range(0, 6, 0, 11), newText: "renamed" }],
-      "/ws/b.ts": [
-        { range: range(2, 0, 2, 5), newText: "renamed" },
-        { range: range(4, 0, 4, 5), newText: "renamed" },
-      ],
-    });
+describe("formatChangeGroups", () => {
+  it("groups edits by file and shows the text they replace", () => {
+    const out = formatChangeGroups([
+      { file: "/ws/a.ts", rows: [{ file: "/ws/a.ts", line: 1, character: 7, before: "total", after: "sum" }] },
+      {
+        file: "/ws/b.ts",
+        rows: [
+          { file: "/ws/b.ts", line: 3, character: 1, before: "total", after: "sum" },
+          { file: "/ws/b.ts", line: 5, character: 9, before: "total", after: "sum" },
+        ],
+      },
+    ]);
     expect(out).toBe([
       "/ws/a.ts: 1 edit(s)",
-      '  1:7 → "renamed"',
+      "  1:7: total → sum",
       "/ws/b.ts: 2 edit(s)",
-      '  3:1 → "renamed"',
-      '  5:1 → "renamed"',
+      "  3:1: total → sum",
+      "  5:9: total → sum",
     ].join("\n"));
+  });
+});
+
+describe("formatChangeRows", () => {
+  it("prints one row per change, flattening multi-line text", () => {
+    const out = formatChangeRows([
+      { file: "a.ts", line: 2, character: 3, before: "aa\nbb", after: "cc" },
+      { file: "a.ts", line: 4, character: 1, before: "", after: "dd" },
+    ]);
+    expect(out).toBe(["a.ts:2:3: aa bb → cc", "a.ts:4:1: (nothing) → dd"].join("\n"));
+  });
+});
+
+describe("textInRange", () => {
+  it("takes a single-line range", () => {
+    expect(textInRange("const total = 1;", range(0, 6, 0, 11))).toBe("total");
+  });
+
+  it("joins a multi-line range", () => {
+    expect(textInRange("a\nbb\nccc\nd", range(0, 1, 2, 2))).toBe("\nbb\ncc");
   });
 });

@@ -15,16 +15,21 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { readFile, writeFile } from "node:fs/promises";
-import { renderToolTextResult } from "../../utils/tool-output.js";
 import { LspServerManager, formatToolError } from "./manager.js";
 import {
   applyTextEdits,
+  flattenDocumentSymbols,
+  formatChangeGroups,
   formatDocumentSymbols,
-  formatEditList,
-  formatLocations,
+  formatLocationRows,
+  limitNotice,
+  textInRange,
+  type ChangeRow,
 } from "./format.js";
+import { readLocationRows, symbolAtPosition } from "./locations.js";
+import { makeCallRenderer, makeLocationResultRenderer, renderRenameResult, renderSymbolsResult } from "./render.js";
 import { isLocalFilePath } from "./uri.js";
-import type { LspDocumentSymbol } from "./types.js";
+import type { LspDocumentSymbol, LspLocation, LspTextEdit } from "./types.js";
 
 const DEFAULT_TIMEOUT_MS = 30_000;
 
@@ -38,6 +43,41 @@ function ok(text: string, details: Record<string, unknown> = {}): ToolResult {
 
 function err(details: any): ToolResult {
   return ok(formatToolError(details), { ok: false, error: details });
+}
+
+/** Locations → rows → the tool reply.
+ *
+ * The rows carry the source line and the identifier under the position, so the
+ * model can tell a call site from a comment without a second `read`, and the
+ * renderer gets the same rows instead of re-reading the files.
+ */
+async function locationResult(
+  locations: readonly LspLocation[],
+  options: { cwd?: string; empty: string; symbol?: string; limit?: number },
+): Promise<ToolResult> {
+  const found = await readLocationRows(locations, { cwd: options.cwd, limit: options.limit });
+  let text = formatLocationRows(found.rows, options.empty);
+  if (found.omitted > 0) text += `\n\n${limitNotice(found.rows.length, found.total)}`;
+  return ok(text, {
+    ok: true,
+    count: found.rows.length,
+    total: found.total,
+    files: found.files,
+    omitted: found.omitted,
+    locations: found.rows,
+    ...(options.symbol === undefined ? {} : { symbol: options.symbol }),
+  });
+}
+
+/** One edit as a row: the text it replaces, the text it writes. */
+function changeRow(file: string, text: string, edit: LspTextEdit): ChangeRow {
+  return {
+    file,
+    line: edit.range.start.line + 1,
+    character: edit.range.start.character + 1,
+    before: textInRange(text, edit.range),
+    after: edit.newText,
+  };
 }
 
 function abortError(signal?: AbortSignal | null): Error {
@@ -121,6 +161,9 @@ const pathParam = Type.String({ description: "File to query, relative to cwd or 
 const lineParam = Type.Number({ minimum: 1, description: "One-based line of the symbol, the number the read tool shows." });
 const characterParam = Type.Number({ minimum: 1, description: "One-based character column on that line." });
 const timeoutParam = Type.Number({ description: `Overall max ms including server startup. Default ${DEFAULT_TIMEOUT_MS}.` });
+const limitParam = Type.Optional(
+  Type.Number({ minimum: 1, description: "Maximum locations to return. Default 100." }),
+);
 
 // ─── Register tools ───────────────────────────────────────────────────────
 
@@ -137,14 +180,15 @@ export function registerLspTools(pi: ExtensionAPI, manager: LspServerManager): v
     promptGuidelines: [
       "Prefer lsp_definition over grepping for a definition: the server follows imports, re-exports and overloads that a text search misses.",
     ],
-    renderResult: renderToolTextResult,
+    renderCall: makeCallRenderer("LSP: definition"),
+    renderResult: makeLocationResultRenderer("definition"),
     parameters: Type.Object({
       path: pathParam,
       line: lineParam,
       character: characterParam,
       timeout_ms: Type.Optional(timeoutParam),
     }),
-    execute: async (_id, params, signal): Promise<ToolResult> => {
+    execute: async (_id, params, signal, _onUpdate, ctx): Promise<ToolResult> => {
       const bad = positionError(params);
       if (bad) return err({ kind: "invalid_position", file: params.path, message: bad });
       const totalTimeout = params.timeout_ms ?? DEFAULT_TIMEOUT_MS;
@@ -154,10 +198,11 @@ export function registerLspTools(pi: ExtensionAPI, manager: LspServerManager): v
         const locations = await resolved.result.state.client.definition(
           resolved.result.uri, toLspPosition(params), totalTimeout, signal,
         );
-        return ok(
-          formatLocations(locations, `${params.path}: no definition found at ${params.line}:${params.character}`),
-          { ok: true, count: locations.length },
-        );
+        return locationResult(locations, {
+          cwd: ctx?.cwd,
+          empty: `${params.path}: no definition found at ${params.line}:${params.character}`,
+          symbol: await symbolAtPosition(resolved.result.abs, params),
+        });
       }), totalTimeout, "LSP definition", signal);
     },
   });
@@ -171,15 +216,20 @@ export function registerLspTools(pi: ExtensionAPI, manager: LspServerManager): v
     promptGuidelines: [
       "Call lsp_references before changing a symbol's signature or meaning: it finds every call site the language server can see, including ones in files you have not opened.",
     ],
-    renderResult: renderToolTextResult,
+    renderCall: makeCallRenderer("LSP: references", (args) => [
+      ...(args?.include_declaration === false ? ["no declaration"] : []),
+      ...(args?.limit === undefined ? [] : [`limit ${args.limit}`]),
+    ]),
+    renderResult: makeLocationResultRenderer("reference"),
     parameters: Type.Object({
       path: pathParam,
       line: lineParam,
       character: characterParam,
       include_declaration: Type.Optional(Type.Boolean({ description: "Include the symbol's own declaration. Default true." })),
+      limit: limitParam,
       timeout_ms: Type.Optional(timeoutParam),
     }),
-    execute: async (_id, params, signal): Promise<ToolResult> => {
+    execute: async (_id, params, signal, _onUpdate, ctx): Promise<ToolResult> => {
       const bad = positionError(params);
       if (bad) return err({ kind: "invalid_position", file: params.path, message: bad });
       const totalTimeout = params.timeout_ms ?? DEFAULT_TIMEOUT_MS;
@@ -193,10 +243,12 @@ export function registerLspTools(pi: ExtensionAPI, manager: LspServerManager): v
           totalTimeout,
           signal,
         );
-        return ok(
-          formatLocations(locations, `${params.path}: no references found at ${params.line}:${params.character}`),
-          { ok: true, count: locations.length },
-        );
+        return locationResult(locations, {
+          cwd: ctx?.cwd,
+          limit: params.limit,
+          empty: `${params.path}: no references found at ${params.line}:${params.character}`,
+          symbol: await symbolAtPosition(resolved.result.abs, params),
+        });
       }), totalTimeout, "LSP references", signal);
     },
   });
@@ -210,12 +262,13 @@ export function registerLspTools(pi: ExtensionAPI, manager: LspServerManager): v
     promptGuidelines: [
       "Use lsp_document_symbols to find the line of a symbol before calling lsp_definition, lsp_references or lsp_rename, which need a position.",
     ],
-    renderResult: renderToolTextResult,
+    renderCall: makeCallRenderer("LSP: document symbols"),
+    renderResult: renderSymbolsResult,
     parameters: Type.Object({
       path: pathParam,
       timeout_ms: Type.Optional(timeoutParam),
     }),
-    execute: async (_id, params, signal): Promise<ToolResult> => {
+    execute: async (_id, params, signal, _onUpdate, ctx): Promise<ToolResult> => {
       const totalTimeout = params.timeout_ms ?? DEFAULT_TIMEOUT_MS;
       return withTimeout(attempt(params.path, signal, async () => {
         const resolved = await resolve(params.path, totalTimeout, signal);
@@ -225,7 +278,12 @@ export function registerLspTools(pi: ExtensionAPI, manager: LspServerManager): v
         );
         return ok(
           formatDocumentSymbols(params.path, symbols),
-          { ok: true, count: countSymbols(symbols), top_level: symbols.length },
+          {
+            ok: true,
+            count: countSymbols(symbols),
+            top_level: symbols.length,
+            symbols: flattenDocumentSymbols(symbols),
+          },
         );
       }), totalTimeout, "LSP document symbols", signal);
     },
@@ -246,7 +304,11 @@ export function registerLspTools(pi: ExtensionAPI, manager: LspServerManager): v
       "After an applied rename, read a renamed file again before patching it: the rename changed it on disk.",
       "Get the position from lsp_document_symbols or lsp_references first; a position that holds no symbol returns no edits.",
     ],
-    renderResult: renderToolTextResult,
+    renderCall: makeCallRenderer("LSP: rename", (args) => [
+      `→ ${args?.new_name ?? "?"}`,
+      ...(args?.preview ? ["preview"] : []),
+    ]),
+    renderResult: renderRenameResult,
     parameters: Type.Object({
       path: pathParam,
       line: lineParam,
@@ -255,7 +317,7 @@ export function registerLspTools(pi: ExtensionAPI, manager: LspServerManager): v
       preview: Type.Optional(Type.Boolean({ description: "Return the edits without writing them. Default false." })),
       timeout_ms: Type.Optional(timeoutParam),
     }),
-    execute: async (_id, params, signal): Promise<ToolResult> => {
+    execute: async (_id, params, signal, _onUpdate, ctx): Promise<ToolResult> => {
       const bad = positionError(params) ?? (params.new_name.trim() === "" ? "new_name must not be blank" : undefined);
       if (bad) return err({ kind: "invalid_position", file: params.path, message: bad });
       const totalTimeout = params.timeout_ms ?? DEFAULT_TIMEOUT_MS;
@@ -285,19 +347,21 @@ export function registerLspTools(pi: ExtensionAPI, manager: LspServerManager): v
           );
         }
 
-        if (params.preview) {
-          return ok(formatEditList(edits), { ok: true, preview: true, files: files.length });
-        }
-
         signal?.throwIfAborted?.();
 
         // Read and compute every file before writing any of them, so a missing
-        // file or an out-of-range edit stops the rename with the workspace intact.
-        const planned: Array<{ file: string; before: string; after: string; count: number }> = [];
+        // file or an out-of-range edit stops the rename with the workspace
+        // intact — and so a preview shows the same rows an apply would write.
+        const planned: Array<{ file: string; before: string; after: string; rows: ChangeRow[] }> = [];
         try {
           for (const file of files) {
             const before = await readFile(file, "utf-8");
-            planned.push({ file, before, after: applyTextEdits(before, edits[file]), count: edits[file].length });
+            planned.push({
+              file,
+              before,
+              after: applyTextEdits(before, edits[file]),
+              rows: edits[file].map((edit) => changeRow(file, before, edit)),
+            });
           }
         } catch (error) {
           const reason = error instanceof Error ? error.message : String(error);
@@ -307,9 +371,26 @@ export function registerLspTools(pi: ExtensionAPI, manager: LspServerManager): v
           );
         }
 
+        const flattenRows = (list: Array<{ rows: ChangeRow[] }>) => list.flatMap((plan) => plan.rows);
+
+        if (params.preview) {
+          const rows = flattenRows(planned);
+          return ok(
+            formatChangeGroups(planned.map((plan) => ({ file: plan.file, rows: plan.rows }))),
+            {
+              ok: true,
+              preview: true,
+              files: files.length,
+              edits: rows.length,
+              changes: rows,
+              newName: params.new_name,
+            },
+          );
+        }
+
         // Writing is the only step that can leave a partial result, so the
         // written list goes into the error the model sees.
-        const written: string[] = [];
+        const written: Array<{ file: string; rows: ChangeRow[] }> = [];
         const unchanged: string[] = [];
         let applied = 0;
         try {
@@ -319,23 +400,22 @@ export function registerLspTools(pi: ExtensionAPI, manager: LspServerManager): v
               continue;
             }
             await writeFile(plan.file, plan.after, "utf-8");
-            written.push(plan.file);
-            applied += plan.count;
+            written.push({ file: plan.file, rows: plan.rows });
+            applied += plan.rows.length;
           }
         } catch (error) {
           const reason = error instanceof Error ? error.message : String(error);
           return ok(
-            `Rename to "${params.new_name}" stopped after writing ${written.length} file(s): ${reason}\nAlready renamed:\n${written.join("\n")}`,
-            { ok: false, files: written.length, edits: applied },
+            `Rename to "${params.new_name}" stopped after writing ${written.length} file(s): ${reason}\nAlready renamed:\n${written.map((entry) => entry.file).join("\n")}`,
+            { ok: false, files: written.length, edits: applied, changes: flattenRows(written), newName: params.new_name },
           );
         }
 
-        const byFile = new Map(planned.map((plan) => [plan.file, plan]));
-        const lines = written.map((file) => `${file} (${byFile.get(file)!.count} edit(s))`);
+        const lines = written.map((entry) => `${entry.file} (${entry.rows.length} edit(s))`);
         if (unchanged.length > 0) lines.push(`Unchanged: ${unchanged.join(", ")}`);
         return ok(
           `Renamed to "${params.new_name}": ${applied} edit(s) in ${written.length} file(s).\n${lines.join("\n")}`,
-          { ok: true, files: written.length, edits: applied },
+          { ok: true, files: written.length, edits: applied, changes: flattenRows(written), newName: params.new_name },
         );
       }), totalTimeout, "LSP rename", signal);
     },
