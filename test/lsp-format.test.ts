@@ -78,6 +78,17 @@ describe("identifierAt", () => {
   it("covers identifiers that are not ASCII", () => {
     expect(identifierAt("const 总计 = 1;", 6)).toEqual({ name: "总计", start: 6 });
   });
+
+  it("covers identifiers outside the BMP", () => {
+    // U+10400 DESERET CAPITAL LETTER LONG I is one code point and two UTF-16
+    // units; testing a single unit would see a lone surrogate and reject it.
+    const line = "const 𐐀name = 1;";
+    expect(identifierAt(line, 6)).toEqual({ name: "𐐀name", start: 6 });
+    // A column that lands on the low surrogate still resolves the identifier.
+    expect(identifierAt(line, 7)).toEqual({ name: "𐐀name", start: 6 });
+    // The last unit of the identifier, four units past the surrogate pair.
+    expect(identifierAt(line, 11)).toEqual({ name: "𐐀name", start: 6 });
+  });
 });
 
 describe("relativeToCwd", () => {

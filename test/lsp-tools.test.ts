@@ -71,6 +71,21 @@ describe("registerLspTools", () => {
       "lsp_rename",
     ]);
   });
+
+  it("titles every call row with the tool's own name", () => {
+    // The call row is the only place a reader maps a line of transcript back to
+    // a tool; paraphrasing the name there lets the two drift apart.
+    const identityTheme = { fg: (_color: string, text: string) => text, bold: (text: string) => text };
+    const row = { expanded: false, cwd: process.cwd(), state: {}, keyHint: () => "" };
+    for (const tool of Object.values(captureTools(mockManager({})))) {
+      const text = tool
+        .renderCall({ path: "a.ts", line: 1, character: 1 }, identityTheme, row)
+        .render(200)
+        .join("")
+        .trim();
+      expect(text.startsWith(tool.name), `${tool.name} row reads "${text}"`).toBe(true);
+    }
+  });
 });
 
 // ═════════════════════════════════════════════════════════════════════════════

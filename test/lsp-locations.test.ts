@@ -76,6 +76,14 @@ describe("readLocationRows", () => {
     expect(found.rows[0].symbol).toBeUndefined();
   });
 
+  it("names an identifier outside the BMP", async () => {
+    // One code point, two UTF-16 units: the column is a UTF-16 offset, so the
+    // row has to keep it as one while the identifier is read as one code point.
+    const file = tempFile("a.ts", "const 𐐀name = 1;\n");
+    const found = await readLocationRows([location(file, 0, 6)]);
+    expect(found.rows[0]).toMatchObject({ symbol: "𐐀name", symbolStart: 6, character: 7 });
+  });
+
   it("reads a non-file URI verbatim and gives it no source", async () => {
     const found = await readLocationRows([{ uri: "untitled:Untitled-1", range: range(0, 0, 0, 1) }]);
     expect(found.rows[0]).toMatchObject({ file: "untitled:Untitled-1", line: 1, character: 1, source: "" });

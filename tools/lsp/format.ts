@@ -47,20 +47,59 @@ export const SOURCE_MAX_CHARS = 160;
 
 const IDENTIFIER_CHAR = /[\p{L}\p{N}_$]/u;
 
-/** The identifier covering `character` (zero-based, the LSP convention) and
- *  where it starts. Undefined when the column sits on whitespace or punctuation
- *  — a position that holds no symbol. */
+/** One identifier character, decided per code point. A non-BMP letter (Deseret,
+ *  some CJK extensions) is one code point and two UTF-16 units; testing a single
+ *  unit would see a lone surrogate and reject the whole identifier. */
+function isIdentifierCodePoint(codePoint: number): boolean {
+  return IDENTIFIER_CHAR.test(String.fromCodePoint(codePoint));
+}
+
+/** Where the code point before `index` starts, in UTF-16 units. */
+function previousCodePointStart(text: string, index: number): number {
+  if (index <= 0) return -1;
+  const unit = text.charCodeAt(index - 1);
+  const isLowSurrogate = unit >= 0xdc00 && unit <= 0xdfff;
+  if (isLowSurrogate && index >= 2) {
+    const high = text.charCodeAt(index - 2);
+    if (high >= 0xd800 && high <= 0xdbff) return index - 2;
+  }
+  return index - 1;
+}
+
+/** The identifier covering `character` (zero-based UTF-16 offset, the LSP
+ *  convention) and where it starts. Undefined when the column sits on
+ *  whitespace or punctuation — a position that holds no symbol. */
 export function identifierAt(
   lineText: string,
   character: number,
 ): { name: string; start: number } | undefined {
-  const isIdentifier = (index: number) =>
-    index >= 0 && index < lineText.length && IDENTIFIER_CHAR.test(lineText[index]);
-  if (!isIdentifier(character)) return undefined;
-  let start = character;
-  while (isIdentifier(start - 1)) start -= 1;
-  let end = character;
-  while (isIdentifier(end)) end += 1;
+  if (!Number.isInteger(character) || character < 0 || character >= lineText.length) return undefined;
+  // A column that names a symbol normally points at its first unit, but nothing
+  // stops it from pointing at the low half of a surrogate pair.
+  let at = character;
+  const unit = lineText.charCodeAt(at);
+  if (unit >= 0xdc00 && unit <= 0xdfff && at > 0) {
+    const high = lineText.charCodeAt(at - 1);
+    if (high >= 0xd800 && high <= 0xdbff) at -= 1;
+  }
+  const first = lineText.codePointAt(at);
+  if (first === undefined || !isIdentifierCodePoint(first)) return undefined;
+
+  let start = at;
+  for (;;) {
+    const previous = previousCodePointStart(lineText, start);
+    if (previous < 0) break;
+    const codePoint = lineText.codePointAt(previous);
+    if (codePoint === undefined || !isIdentifierCodePoint(codePoint)) break;
+    start = previous;
+  }
+
+  let end = at + (first > 0xffff ? 2 : 1);
+  for (;;) {
+    const codePoint = lineText.codePointAt(end);
+    if (codePoint === undefined || !isIdentifierCodePoint(codePoint)) break;
+    end += codePoint > 0xffff ? 2 : 1;
+  }
   return { name: lineText.slice(start, end), start };
 }
 

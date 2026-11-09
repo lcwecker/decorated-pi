@@ -180,7 +180,7 @@ export function registerLspTools(pi: ExtensionAPI, manager: LspServerManager): v
     promptGuidelines: [
       "Prefer lsp_definition over grepping for a definition: the server follows imports, re-exports and overloads that a text search misses.",
     ],
-    renderCall: makeCallRenderer("LSP: definition"),
+    renderCall: makeCallRenderer({ title: "lsp_definition", subject: "symbol" }),
     renderResult: makeLocationResultRenderer("definition"),
     parameters: Type.Object({
       path: pathParam,
@@ -216,10 +216,14 @@ export function registerLspTools(pi: ExtensionAPI, manager: LspServerManager): v
     promptGuidelines: [
       "Call lsp_references before changing a symbol's signature or meaning: it finds every call site the language server can see, including ones in files you have not opened.",
     ],
-    renderCall: makeCallRenderer("LSP: references", (args) => [
-      ...(args?.include_declaration === false ? ["no declaration"] : []),
-      ...(args?.limit === undefined ? [] : [`limit ${args.limit}`]),
-    ]),
+    renderCall: makeCallRenderer({
+      title: "lsp_references",
+      subject: "symbol",
+      flags: (args) => [
+        ...(args?.include_declaration === false ? ["no declaration"] : []),
+        ...(args?.limit === undefined ? [] : [`limit ${args.limit}`]),
+      ],
+    }),
     renderResult: makeLocationResultRenderer("reference"),
     parameters: Type.Object({
       path: pathParam,
@@ -262,7 +266,7 @@ export function registerLspTools(pi: ExtensionAPI, manager: LspServerManager): v
     promptGuidelines: [
       "Use lsp_document_symbols to find the line of a symbol before calling lsp_definition, lsp_references or lsp_rename, which need a position.",
     ],
-    renderCall: makeCallRenderer("LSP: document symbols"),
+    renderCall: makeCallRenderer({ title: "lsp_document_symbols", subject: "path" }),
     renderResult: renderSymbolsResult,
     parameters: Type.Object({
       path: pathParam,
@@ -304,10 +308,12 @@ export function registerLspTools(pi: ExtensionAPI, manager: LspServerManager): v
       "After an applied rename, read a renamed file again before patching it: the rename changed it on disk.",
       "Get the position from lsp_document_symbols or lsp_references first; a position that holds no symbol returns no edits.",
     ],
-    renderCall: makeCallRenderer("LSP: rename", (args) => [
-      `→ ${args?.new_name ?? "?"}`,
-      ...(args?.preview ? ["preview"] : []),
-    ]),
+    renderCall: makeCallRenderer({
+      title: "lsp_rename",
+      subject: "symbol",
+      newName: (args) => args?.new_name,
+      flags: (args) => (args?.preview ? ["preview"] : []),
+    }),
     renderResult: renderRenameResult,
     parameters: Type.Object({
       path: pathParam,
