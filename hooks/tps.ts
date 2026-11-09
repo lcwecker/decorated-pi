@@ -1,10 +1,10 @@
 /**
- * tps — live tokens-per-second in the footer status bar.
+ * tps — measured tokens-per-second in the footer status bar.
  *
- * One state machine per assistant message:
- *   message_start  → t0 = request start, reset state, revert to last completed
- *   message_update → first/last stream timestamps + estimated chars (live, `~`-prefixed)
- *   message_end    → authoritative `usage.output` over (tLast - tFirst), frozen
+ * One measurement per assistant message, all of it provider-reported:
+ *   message_start  → t0 = request start (TTFT reference), reset the window
+ *   message_update → first / last streamed event of this message
+ *   message_end    → `usage.output` over (tLast - tFirst) becomes a sample
  *
  * Decode window = first → last streamed event of ONE assistant message. Tool
  * execution happens between messages (results arrive as toolResult messages),
@@ -12,19 +12,36 @@
  * tool-argument streaming are model output: they belong in the numerator
  * (usage.output includes them) and in the denominator alike.
  *
- * Calibration follows OpenCode's rule — no numbers without data: aborted or
- * errored messages, and messages whose `usage.output` is missing/zero, clear
- * the status instead of freezing a possibly misleading estimate. The frozen
- * value survives agent_end so the last number stays readable; the next
- * assistant message_start clears it.
+ * No live estimate. A provider reports token counts only when a stream ends —
+ * openai-completions sends `usage` in the final chunk, anthropic-messages in
+ * `message_delta` — so a number rendered mid-stream could only come from a
+ * chars→tokens guess. Against real traffic a guess is off by more than half:
+ * measured 1.6–2.0 chars/token for tool-call JSON, 2.7–3.0 for thinking,
+ * 4.2–4.7 for prose, all against one hard-coded divisor. The reading then
+ * disagreed with the frozen value by up to 3x and jumped at the exact moment a
+ * tool call ended the message, which reads as a broken meter. So the footer
+ * shows measured numbers only and moves once per message — the shape inference
+ * servers use (ollama: `eval_count / eval_duration`).
  *
- * Persistence is keep-last-completed: the on-screen value only ever moves
- * forward to real measurements (live `~` estimate, frozen exact value, or
- * the non-streaming "—"). A new message_start reverts a live estimate to
- * the last completed value instead of blanking; aborts and empty messages
- * do the same. Only session boundaries (session_start / session_shutdown)
- * truly clear the display — so after the very first measurement there is
- * always something on screen, and a `~` estimate is never frozen in place.
+ * The reading is token-weighted over the last few messages rather than one
+ * message's value: per-message rates are wildly bursty (p10 21, p50 124, p90
+ * 169 tok/s on one model in one session), while the footer should say how fast
+ * this model decodes right now. Weighting by tokens keeps a 20-token reply from
+ * counting as much as a 1000-token one; the window rolls so a degraded provider
+ * or a model switch shows up within a few messages.
+ *
+ * No numbers without data (the rule this module borrows from OpenCode):
+ * aborted and errored messages, replies with a zero-width or sub-100ms window,
+ * and messages whose `usage.output` is missing/zero contribute no sample at all,
+ * so a partial or unrepresentative window can never drag the average. The
+ * reading survives agent_end; model_select drops the samples, since two
+ * models' rates do not belong in one average.
+ *
+ * Persistence is keep-last: the screen only ever shows a measured average. A
+ * new message_start, an abort, and a reply without a measurable window all keep
+ * it instead of blanking; only session boundaries (session_start /
+ * session_shutdown) and a model switch clear it, so after the first completed
+ * reply there is always something on screen.
  *
  * Display destination: two channels, one picked per session.
  *  - Interactive TUI: install a subclass of Pi's own FooterComponent
@@ -58,17 +75,15 @@ import type { Module } from "./skeleton.js";
 /** Footer status-bar slot owned by this module. */
 export const TPS_STATUS_KEY = "tps";
 
-/** Rough chars→tokens ratio for the live estimate. `message_end` replaces it
- *  with the provider's authoritative `usage.output`. ASCII-heavy text averages
- *  ~4 chars/token, but CJK (and other non-ASCII) text is close to 1
- *  token/char — dividing everything by 4 under-reads Chinese streams ~4x. */
-const CHARS_PER_TOKEN = 4;
+/** Samples the displayed average rolls over. Five keeps the reading steady
+ *  while a provider slowdown or a model switch still lands within a few
+ *  messages. */
+export const SAMPLE_WINDOW = 5;
 
-/** Skip live renders until the stream has produced something to average. */
-const MIN_LIVE_MS = 200;
-
-/** Cap live re-renders — message_update fires per content-block event. */
-const THROTTLE_MS = 400;
+/** Shortest decode window that becomes a sample. A tool call answered in
+ *  ~250ms carries a real but unrepresentative 200+ tok/s — letting it into the
+ *  average would leave the footer lying for the next five messages. */
+const MIN_WINDOW_MS = 100;
 
 /** API id of pi's virtual catalog entries. pi exports it as `VIRTUAL_MODEL_API`
  *  from its own virtual-model module but does not re-export it from the package
@@ -83,16 +98,10 @@ interface TpsState {
   t0?: number;
   /** First streamed event of this message; decode window start. */
   tFirst?: number;
-  /** Latest streamed event; decode window end (frozen at message_end). */
+  /** Latest streamed event; decode window end (read at message_end). */
   tLast?: number;
-  /** ASCII chars streamed since tFirst (text + thinking + tool arguments). */
-  asciiChars: number;
-  /** Non-ASCII (mostly CJK) chars streamed since tFirst. */
-  otherChars: number;
-  /** message_end froze the value — later updates must not overwrite it. */
+  /** message_end already measured this message. */
   finalized: boolean;
-  /** Date.now() of the last live render (throttle watermark). */
-  lastRender: number;
 }
 
 function freshState(): TpsState {
@@ -105,28 +114,19 @@ function freshState(): TpsState {
     t0: undefined,
     tFirst: undefined,
     tLast: undefined,
-    asciiChars: 0,
-    otherChars: 0,
     finalized: false,
-    lastRender: 0,
   };
 }
 
 // ─── Pure functions (unit-tested) ──────────────────────────────────────────
 
-/** Estimated output tokens for the streamed characters. Never below 1 —
- *  every delta proves the model produced at least one token. */
-export function estimateTokens(asciiChars: number, otherChars = 0): number {
-  return Math.max(1, Math.ceil(asciiChars / CHARS_PER_TOKEN + otherChars));
-}
-
-/** Split a delta into ASCII vs non-ASCII (mostly CJK) char counts. */
-export function splitChars(delta: string): { ascii: number; other: number } {
-  let ascii = 0;
-  for (let i = 0; i < delta.length; i++) {
-    if (delta.charCodeAt(i) < 128) ascii++;
-  }
-  return { ascii, other: delta.length - ascii };
+/** One measured message: authoritative tokens over its decode window. */
+export interface TpsSample {
+  tokens: number;
+  /** tLast - tFirst. */
+  windowMs: number;
+  /** tFirst - t0; absent when the request start is unknown. */
+  ttftMs?: number;
 }
 
 /** Decode throughput: tokens / (first → last token).
@@ -138,6 +138,34 @@ export function calcDecodeTps(tokens: number, tFirst: number, tLast: number): nu
   return tokens / (durationMs / 1000);
 }
 
+/** Token-weighted mean decode rate over the samples: Σtokens / Σwindow, not
+ *  the mean of the per-message rates — a 20-token reply must not weigh as much
+ *  as a 1000-token one. Undefined when the samples carry no usable time. */
+export function averageTps(samples: readonly TpsSample[]): number | undefined {
+  let tokens = 0;
+  let windowMs = 0;
+  for (const sample of samples) {
+    if (!Number.isFinite(sample.tokens) || sample.tokens <= 0) continue;
+    if (!(sample.windowMs > 0)) continue;
+    tokens += sample.tokens;
+    windowMs += sample.windowMs;
+  }
+  if (tokens <= 0 || !(windowMs > 0)) return undefined;
+  return (tokens / windowMs) * 1000;
+}
+
+/** Mean TTFT over the samples that recorded one. */
+export function averageTtft(samples: readonly TpsSample[]): number | undefined {
+  let total = 0;
+  let count = 0;
+  for (const sample of samples) {
+    if (sample.ttftMs === undefined || !Number.isFinite(sample.ttftMs) || sample.ttftMs < 0) continue;
+    total += sample.ttftMs;
+    count++;
+  }
+  return count > 0 ? total / count : undefined;
+}
+
 export function formatTps(tps: number): string {
   return `${tps.toFixed(1)} tok/s`;
 }
@@ -147,6 +175,15 @@ export function formatTtft(ms: number): string {
   // Round total seconds first — rounding the seconds part alone can yield "1m 60s".
   const totalSeconds = Math.round(ms / 1000);
   return `${Math.floor(totalSeconds / 60)}m ${totalSeconds % 60}s`;
+}
+
+/** Footer text for the rolling average: `128.4 tok/s · TTFT 1.2s`. */
+export function formatReading(samples: readonly TpsSample[]): string | undefined {
+  const tps = averageTps(samples);
+  if (tps === undefined) return undefined;
+  const ttft = averageTtft(samples);
+  if (ttft === undefined) return formatTps(tps);
+  return `${formatTps(tps)} · TTFT ${formatTtft(ttft)}`;
 }
 
 // ─── Status writer ─────────────────────────────────────────────────────────
@@ -170,10 +207,8 @@ export function createTpsModule(): Module {
   /** Context of the live session, kept so a failing merge can still move the
    *  reading to the status line. Undefined outside a session. */
   let activeCtx: ExtensionContext | undefined;
-  /** Last completed measurement (frozen exact value or "—"). The display
-   *  reverts to this whenever a run produces no new data, so the footer
-   *  never goes blank mid-session. */
-  let lastFinal: string | undefined;
+  /** Rolling measurements behind the displayed average, oldest first. */
+  let samples: TpsSample[] = [];
   /** True while a custom footer (stats-line merge) is installed for this
    *  session; false → fall back to setStatus (line 3). */
   let footerMerged = false;
@@ -190,12 +225,6 @@ export function createTpsModule(): Module {
       return;
     }
     setStatusSafe(ctx, text);
-  }
-
-  /** Revert the display to the last completed measurement (no-op when
-   *  already showing it) — used wherever a run yields no new data. */
-  function revertDisplay(ctx: ExtensionContext): void {
-    if (runtime.display !== lastFinal) applyDisplay(ctx, lastFinal);
   }
 
   /** Abandon the stats-line merge: restore Pi's built-in footer and republish
@@ -224,11 +253,11 @@ export function createTpsModule(): Module {
       session_start: [
         (_event: unknown, ctx: ExtensionContext) => {
           Object.assign(state, freshState());
+          samples = [];
           footerMerged = false;
           runtime.requestRender = undefined;
           runtime.updateSession = undefined;
           runtime.display = undefined;
-          lastFinal = undefined;
           activeCtx = ctx;
           // Leftover tps status from a previous fallback session — keep the
           // status line clean so TPS never shows twice.
@@ -240,13 +269,12 @@ export function createTpsModule(): Module {
       ],
 
       message_start: [
-        (event: MessageStartEvent, ctx: ExtensionContext) => {
+        (event: MessageStartEvent) => {
           if (event.message.role !== "assistant") return;
-          // New decode window. The display reverts to the last completed
-          // measurement (or stays blank before the very first one) instead
-          // of blanking — fresh data replaces it within ~half a second.
+          // New decode window, and nothing to display yet: the screen keeps the
+          // last measured average (or stays blank before the first sample) and
+          // the next measurement replaces it at message_end.
           Object.assign(state, freshState(), { active: true, t0: Date.now() });
-          revertDisplay(ctx);
         },
       ],
 
@@ -254,7 +282,16 @@ export function createTpsModule(): Module {
       // calls setSession() only on its own built-in footer, so refresh the
       // proxy our TpsFooter reads through instead.
       model_select: [
-        (event: ModelSelectEvent) => {
+        (event: ModelSelectEvent, ctx: ExtensionContext) => {
+          // A rate belongs to one model: drop the samples of the previous one,
+          // blank the reading until this model has answered once, and abandon
+          // any response still streaming. That response was requested from the
+          // model that is no longer selected, so its message_end must not
+          // become a sample of the new one — freshState() leaves tFirst
+          // undefined, which the window check in message_end rejects.
+          samples = [];
+          Object.assign(state, freshState());
+          applyDisplay(ctx, undefined);
           // Pi derives its own routedModel only for a virtual selection, and
           // from the latest response in the session — which may predate this
           // selection. Dropping the recorded route is the conservative read:
@@ -270,23 +307,13 @@ export function createTpsModule(): Module {
       ],
 
       message_update: [
-        (event: MessageUpdateEvent, ctx: ExtensionContext) => {
+        (event: MessageUpdateEvent) => {
           if (!state.active || state.finalized || event.message.role !== "assistant") return;
+          // Only the decode window is recorded here: the token count arrives
+          // with `usage` at message_end, so there is nothing to display yet.
           const now = Date.now();
           state.tFirst ??= now;
           state.tLast = now;
-          const streamEvent = event.assistantMessageEvent;
-          if (streamEvent && "delta" in streamEvent && typeof streamEvent.delta === "string") {
-            const { ascii, other } = splitChars(streamEvent.delta);
-            state.asciiChars += ascii;
-            state.otherChars += other;
-          }
-          const elapsed = now - state.tFirst;
-          if (elapsed < MIN_LIVE_MS || now - state.lastRender < THROTTLE_MS) return;
-          const tps = calcDecodeTps(estimateTokens(state.asciiChars, state.otherChars), state.tFirst, now);
-          if (tps === undefined) return;
-          state.lastRender = now;
-          applyDisplay(ctx, `~${formatTps(tps)}`);
         },
       ],
 
@@ -320,48 +347,33 @@ export function createTpsModule(): Module {
           state.active = false;
           state.finalized = true;
           const { stopReason, usage } = event.message;
-          // Aborted / errored runs would report a partial window as a rate:
-          // revert to the last completed measurement instead. A live `~`
-          // estimate is never frozen in place.
-          if (stopReason !== "stop" && stopReason !== "length" && stopReason !== "toolUse") {
-            revertDisplay(ctx);
-            return;
-          }
-          if (state.tFirst === undefined) {
-            revertDisplay(ctx);
-            return;
-          }
-          if (state.tLast === state.tFirst) {
-            // Non-streaming reply: one instant, no rate to show.
-            lastFinal = "—";
-            applyDisplay(ctx, lastFinal);
-            return;
-          }
-          const tps = calcDecodeTps(usage.output, state.tFirst, state.tLast!);
-          // No authoritative usage → keep the last completed value rather
-          // than freezing an estimate.
-          if (tps === undefined) {
-            revertDisplay(ctx);
-            return;
-          }
-          let text = formatTps(tps);
-          if (state.t0 !== undefined) {
-            const ttft = state.tFirst - state.t0;
-            if (ttft >= 0) text += ` · TTFT ${formatTtft(ttft)}`;
-          }
-          lastFinal = text;
-          applyDisplay(ctx, text);
+          // Aborted / errored runs, a missing decode window, a window too short
+          // to be representative, and a zero-width (non-streaming) reply carry
+          // no usable rate: none of them becomes a sample, so an unmeasured or
+          // partial window can never drag the average.
+          if (stopReason !== "stop" && stopReason !== "length" && stopReason !== "toolUse") return;
+          if (state.tFirst === undefined || state.tLast === undefined) return;
+          const windowMs = state.tLast - state.tFirst;
+          if (windowMs < MIN_WINDOW_MS) return;
+          if (calcDecodeTps(usage.output, state.tFirst, state.tLast) === undefined) return;
+          const sample: TpsSample = { tokens: usage.output, windowMs };
+          const ttft = state.t0 === undefined ? undefined : state.tFirst - state.t0;
+          if (ttft !== undefined && ttft >= 0) sample.ttftMs = ttft;
+          samples.push(sample);
+          if (samples.length > SAMPLE_WINDOW) samples.shift();
+          const reading = formatReading(samples);
+          if (reading === undefined) return;
+          applyDisplay(ctx, reading);
         },
       ],
 
       agent_end: [
-        (_event: AgentEndEvent, ctx: ExtensionContext) => {
-          // A run normally ends after message_end froze (or reverted) the
-          // display — keep that value readable. Only clean up when the run
-          // died mid-stream without a message_end.
+        (_event: AgentEndEvent) => {
+          // A run normally ends after message_end measured (or kept) the
+          // reading. Only clean up a run that died mid-stream without a
+          // message_end, so its window cannot leak into the next message.
           if (state.active && !state.finalized) {
             Object.assign(state, freshState());
-            revertDisplay(ctx);
           }
         },
       ],
@@ -380,7 +392,7 @@ export function createTpsModule(): Module {
           runtime.requestRender = undefined;
           runtime.updateSession = undefined;
           activeCtx = undefined;
-          lastFinal = undefined;
+          samples = [];
           Object.assign(state, freshState());
           applyDisplay(ctx, undefined);
         },

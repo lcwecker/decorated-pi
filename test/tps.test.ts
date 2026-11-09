@@ -1,16 +1,21 @@
 /**
- * tps — live tokens-per-second in the footer status bar.
+ * tps — measured tokens-per-second in the footer status bar.
  *
  * Pins:
- *  - pure math: estimateTokens / calcDecodeTps / formatTps / formatTtft
- *  - the message lifecycle: window reset on assistant message_start, throttled
- *    `~` estimate during message_update, frozen exact value at message_end
- *  - keep-last-completed: a new message_start, an aborted run, or an empty
- *    message_end reverts to the last completed value instead of blanking;
- *    only session boundaries truly clear; a live `~` estimate is never frozen
- *  - "no misleading numbers": aborted / missing usage never freezes a partial
- *    window; a non-streaming reply shows an em dash instead of a rate
- *  - the frozen value survives agent_end; stale/headless ctx never throws
+ *  - pure math: calcDecodeTps / averageTps / averageTtft / formatReading /
+ *    formatTps / formatTtft
+ *  - the message lifecycle: window reset on assistant message_start, first and
+ *    last stream timestamps on message_update, one sample measured at
+ *    message_end — nothing is estimated or rendered while streaming
+ *  - the reading is token-weighted over the last SAMPLE_WINDOW messages, so a
+ *    short reply cannot outweigh a long one and one bursty message cannot
+ *    define the number
+ *  - "no misleading numbers": aborted, errored, non-streaming, sub-100ms and
+ *    usage-less replies contribute no sample at all
+ *  - keep-last: a new message_start, an abort, or an unusable reply keeps the
+ *    reading instead of blanking; only session boundaries and a model switch
+ *    clear it
+ *  - the reading survives agent_end; stale/headless ctx never throws
  *  - the footer merge (hooks/tps-footer.ts): insertIntoStatsLine inlines TPS
  *    into the stats line (length-preserving), tui mode installs a
  *    FooterComponent subclass via setFooter, rpc mode falls back to the
@@ -24,11 +29,13 @@ import { initTheme } from "@earendil-works/pi-coding-agent";
 import { visibleWidth } from "@earendil-works/pi-tui";
 import {
   createTpsModule,
-  estimateTokens,
   calcDecodeTps,
+  averageTps,
+  averageTtft,
+  formatReading,
   formatTps,
   formatTtft,
-  splitChars,
+  SAMPLE_WINDOW,
   TPS_STATUS_KEY,
 } from "../hooks/tps.js";
 import {
@@ -107,25 +114,39 @@ afterEach(() => {
 // ─── Pure functions ───────────────────────────────────────────────────────
 
 describe("tps — pure functions", () => {
-  it("estimateTokens converts chars at 4 chars/token, minimum 1", () => {
-    expect(estimateTokens(0)).toBe(1);
-    expect(estimateTokens(4)).toBe(1);
-    expect(estimateTokens(5)).toBe(2);
-    expect(estimateTokens(1_000)).toBe(250);
+  it("averageTps weights by tokens and window, not by message", () => {
+    // One long message and one short one: the short one must not weigh half.
+    expect(averageTps([{ tokens: 1_000, windowMs: 10_000 }, { tokens: 10, windowMs: 100 }])).toBeCloseTo(
+      (1_010 / 10_100) * 1_000,
+      6,
+    );
+    expect(averageTps([{ tokens: 100, windowMs: 1_000 }])).toBe(100);
   });
 
-  it("estimateTokens counts non-ASCII (CJK) chars near 1 token each", () => {
-    // 4 Chinese chars ≈ 4 tokens, not 1 — the old chars/4 read ~4x low.
-    expect(estimateTokens(0, 4)).toBe(4);
-    expect(estimateTokens(4, 4)).toBe(5);
-    expect(estimateTokens(0, 0)).toBe(1);
+  it("averageTps returns undefined without usable samples", () => {
+    expect(averageTps([])).toBeUndefined();
+    expect(averageTps([{ tokens: 0, windowMs: 1_000 }])).toBeUndefined();
+    expect(averageTps([{ tokens: 10, windowMs: 0 }])).toBeUndefined();
+    expect(averageTps([{ tokens: 10, windowMs: -5 }])).toBeUndefined();
+    expect(averageTps([{ tokens: NaN, windowMs: 1_000 }])).toBeUndefined();
   });
 
-  it("splitChars separates ASCII from non-ASCII", () => {
-    expect(splitChars("abcd")).toEqual({ ascii: 4, other: 0 });
-    expect(splitChars("你好")).toEqual({ ascii: 0, other: 2 });
-    expect(splitChars("a你b好")).toEqual({ ascii: 2, other: 2 });
-    expect(splitChars("")).toEqual({ ascii: 0, other: 0 });
+  it("averageTtft averages only the samples that recorded one", () => {
+    expect(averageTtft([{ tokens: 1, windowMs: 1, ttftMs: 200 }, { tokens: 1, windowMs: 1 }])).toBe(200);
+    expect(
+      averageTtft([{ tokens: 1, windowMs: 1, ttftMs: 200 }, { tokens: 1, windowMs: 1, ttftMs: 400 }]),
+    ).toBe(300);
+    expect(averageTtft([{ tokens: 1, windowMs: 1 }])).toBeUndefined();
+  });
+
+  it("formatReading drops the TTFT suffix when no sample has one", () => {
+    expect(formatReading([{ tokens: 50, windowMs: 500, ttftMs: 1_200 }])).toBe("100.0 tok/s · TTFT 1.2s");
+    expect(formatReading([{ tokens: 50, windowMs: 500 }])).toBe("100.0 tok/s");
+    expect(formatReading([])).toBeUndefined();
+  });
+
+  it("SAMPLE_WINDOW is the few-messages window the footer rolls over", () => {
+    expect(SAMPLE_WINDOW).toBe(5);
   });
 
   it("calcDecodeTps computes tokens over the decode window", () => {
@@ -160,38 +181,30 @@ describe("tps — pure functions", () => {
 // ─── Message lifecycle ────────────────────────────────────────────────────
 
 describe("tps — message lifecycle", () => {
-  it("freezes the exact value at message_end after a throttled live estimate", () => {
+  it("measures a message at message_end and shows nothing while it streams", () => {
     const h = moduleHandlers();
 
     now = 1_000;
     h.start(assistantStart(), ctx);
-    expect(setStatus).not.toHaveBeenCalled(); // fresh: nothing completed yet
+    expect(setStatus).not.toHaveBeenCalled(); // fresh: nothing measured yet
 
     now = 1_100;
     h.start({ type: "message_start", message: { role: "user" } }, ctx);
     expect(setStatus).not.toHaveBeenCalled(); // non-assistant messages are ignored
 
     now = 1_200;
-    h.update(update(), ctx); // first streamed event → tFirst; too early to render
-    expect(setStatus).not.toHaveBeenCalled();
-
+    h.update(update(), ctx); // first streamed event → tFirst
     now = 1_500;
-    h.update(update("abcd"), ctx); // 1 est token over 300ms
-    expect(setStatus).toHaveBeenLastCalledWith(TPS_STATUS_KEY, "~3.3 tok/s");
-
-    now = 1_600;
-    h.update(update("efgh"), ctx); // within the 400ms throttle window
-    expect(setStatus).toHaveBeenCalledTimes(1);
-
+    h.update(update("abcd"), ctx);
     now = 1_900;
-    h.update(update("ijkl"), ctx); // 3 est tokens over 700ms
-    expect(setStatus).toHaveBeenLastCalledWith(TPS_STATUS_KEY, "~4.3 tok/s");
+    h.update(update("ijkl"), ctx); // still streaming: no token count to show
+    expect(setStatus).not.toHaveBeenCalled();
 
     now = 2_200;
     h.end(assistantEnd({ usage: { output: 50 } }), ctx); // 50 tokens / 700ms
     expect(setStatus).toHaveBeenLastCalledWith(TPS_STATUS_KEY, "71.4 tok/s · TTFT 0.2s");
 
-    // Frozen: later updates and agent_end must not overwrite it.
+    // Measured: later updates and agent_end must not overwrite it.
     const calls = setStatus.mock.calls.length;
     now = 2_300;
     h.update(update("more"), ctx);
@@ -205,36 +218,37 @@ describe("tps — message lifecycle", () => {
     expect(setStatus).not.toHaveBeenCalled();
   });
 
-  it("reverts to the last completed value instead of blanking", () => {
+  it("keeps the reading across a new message instead of blanking", () => {
     const h = moduleHandlers();
-    // First run freezes an exact value (50 tokens over 300ms).
+    // First run: 50 tokens over a 300ms window.
     h.start(assistantStart(), ctx);
     now = 1_200;
     h.update(update(), ctx);
     now = 1_500;
     h.update(update("abcd"), ctx);
     h.end(assistantEnd({ usage: { output: 50 } }), ctx);
-    const frozen = "166.7 tok/s · TTFT 0.2s";
-    expect(setStatus).toHaveBeenLastCalledWith(TPS_STATUS_KEY, frozen);
+    const measured = "166.7 tok/s · TTFT 0.2s";
+    expect(setStatus).toHaveBeenLastCalledWith(TPS_STATUS_KEY, measured);
 
-    // Second run: message_start must not blank the screen (prefill gap) —
-    // the frozen value stays until fresh data arrives.
+    // Second run: message_start must not blank the screen (prefill gap), and
+    // the new message's streamed events must not touch the reading either.
     const calls = setStatus.mock.calls.length;
+    now = 3_400;
     h.start(assistantStart(), ctx);
+    now = 3_600;
+    h.update(update(), ctx);
+    now = 4_000;
+    h.update(update("xy"), ctx);
     expect(setStatus).toHaveBeenCalledTimes(calls);
 
-    now = 3_000;
-    h.update(update(), ctx);
-    now = 3_400;
-    h.update(update("xy"), ctx); // live "~2.5 tok/s" replaces the frozen value
-    expect(setStatus).toHaveBeenLastCalledWith(TPS_STATUS_KEY, "~2.5 tok/s");
-
-    // ...and a new message_start reverts that live estimate back to frozen.
-    h.start(assistantStart(), ctx);
-    expect(setStatus).toHaveBeenLastCalledWith(TPS_STATUS_KEY, frozen);
+    // The second sample moves the average: 100 tokens over 300+400ms, TTFT
+    // averaged too.
+    now = 4_100;
+    h.end(assistantEnd({ usage: { output: 50 } }), ctx);
+    expect(setStatus).toHaveBeenLastCalledWith(TPS_STATUS_KEY, "142.9 tok/s · TTFT 0.2s");
   });
 
-  it("an aborted run reverts to the last completed value (never freezes `~`)", () => {
+  it("an aborted run contributes no sample", () => {
     const h = moduleHandlers();
     h.start(assistantStart(), ctx);
     now = 1_200;
@@ -242,18 +256,21 @@ describe("tps — message lifecycle", () => {
     now = 1_500;
     h.update(update("abcd"), ctx);
     h.end(assistantEnd({ usage: { output: 50 } }), ctx);
-    const frozen = "166.7 tok/s · TTFT 0.2s";
+    const measured = "166.7 tok/s · TTFT 0.2s";
 
     h.start(assistantStart(), ctx);
     now = 3_000;
     h.update(update(), ctx);
     now = 3_400;
     h.update(update("xy"), ctx);
+    const calls = setStatus.mock.calls.length;
     h.end(assistantEnd({ stopReason: "aborted" }), ctx);
-    expect(setStatus).toHaveBeenLastCalledWith(TPS_STATUS_KEY, frozen);
+    // A partial window would read as a rate — the average stays untouched.
+    expect(setStatus).toHaveBeenCalledTimes(calls);
+    expect(setStatus).toHaveBeenLastCalledWith(TPS_STATUS_KEY, measured);
   });
 
-  it("a message with no usage reverts to the last completed value", () => {
+  it("a message without usage contributes no sample", () => {
     const h = moduleHandlers();
     h.start(assistantStart(), ctx);
     now = 1_200;
@@ -261,15 +278,17 @@ describe("tps — message lifecycle", () => {
     now = 1_500;
     h.update(update("abcd"), ctx);
     h.end(assistantEnd({ usage: { output: 50 } }), ctx);
-    const frozen = "166.7 tok/s · TTFT 0.2s";
+    const measured = "166.7 tok/s · TTFT 0.2s";
 
     h.start(assistantStart(), ctx);
     now = 3_000;
     h.update(update(), ctx);
     now = 3_400;
     h.update(update("xy"), ctx);
+    const calls = setStatus.mock.calls.length;
     h.end(assistantEnd({ usage: { output: 0 } }), ctx);
-    expect(setStatus).toHaveBeenLastCalledWith(TPS_STATUS_KEY, frozen);
+    expect(setStatus).toHaveBeenCalledTimes(calls);
+    expect(setStatus).toHaveBeenLastCalledWith(TPS_STATUS_KEY, measured);
   });
 
   it("each message gets a fresh decode window (no cross-message leak)", () => {
@@ -284,12 +303,14 @@ describe("tps — message lifecycle", () => {
     // A much later message must measure from its own first token. A leaked
     // tFirst from the previous message inflated the denominator ~23x here
     // (systematically low TPS in multi-round runs).
-    h.start(assistantStart(), ctx);
     now = 10_000;
+    h.start(assistantStart(), ctx);
+    now = 10_200;
     h.update(update(), ctx);
-    now = 10_400;
-    h.update(update("xy"), ctx); // 1 est token over 400ms of THIS message
-    expect(setStatus).toHaveBeenLastCalledWith(TPS_STATUS_KEY, "~2.5 tok/s");
+    now = 10_600;
+    h.update(update("xy"), ctx);
+    h.end(assistantEnd({ usage: { output: 50 } }), ctx);    // 100 tokens over 300+400ms, not over the 9s gap between the messages.
+    expect(setStatus).toHaveBeenLastCalledWith(TPS_STATUS_KEY, "142.9 tok/s · TTFT 0.2s");
   });
 
   it("stays blank when nothing ever completed", () => {
@@ -299,23 +320,102 @@ describe("tps — message lifecycle", () => {
     expect(setStatus).not.toHaveBeenCalled();
   });
 
-  it("shows an em dash for a non-streaming reply (zero-width window)", () => {
+  it("a non-streaming reply contributes no sample", () => {
     const h = moduleHandlers();
     h.start(assistantStart(), ctx);
     now = 1_200;
-    h.update(update("done in one shot"), ctx);
+    h.update(update("done in one shot"), ctx); // tFirst === tLast
     h.end(assistantEnd({ stopReason: "stop" }), ctx);
-    expect(setStatus).toHaveBeenLastCalledWith(TPS_STATUS_KEY, "—");
+    expect(setStatus).not.toHaveBeenCalled();
   });
 
-  it("live estimate counts Chinese near 1 token per char", () => {
+  it("a decode window too short to represent a rate contributes no sample", () => {
+    const h = moduleHandlers();
+    h.start(assistantStart(), ctx);
+    now = 1_200;
+    h.update(update(), ctx);
+    now = 1_250;
+    h.update(update("xy"), ctx); // 50ms window: a burst, not a rate
+    h.end(assistantEnd({ usage: { output: 12 } }), ctx); // would read 240 tok/s
+    expect(setStatus).not.toHaveBeenCalled();
+  });
+
+  it("averages the last five samples, weighted by tokens", () => {
+    const h = moduleHandlers();
+    const measure = (tokens: number, windowMs: number) => {
+      now += 1_000;
+      h.start(assistantStart(), ctx);
+      now += 1_000;
+      h.update(update(), ctx);
+      now += windowMs;
+      h.update(update("x"), ctx);
+      h.end(assistantEnd({ usage: { output: tokens } }), ctx);
+    };
+
+    // One long message and then four tiny ones. A plain mean of the per-message
+    // rates would read 28 tok/s here; weighting by tokens keeps the long
+    // message's weight.
+    measure(1_000, 10_000);
+    for (let i = 0; i < 4; i++) measure(10, 1_000);
+    expect(setStatus).toHaveBeenLastCalledWith(TPS_STATUS_KEY, "74.3 tok/s · TTFT 1.0s");
+
+    // The sixth sample evicts the long message — only then may the reading be
+    // defined by the small replies alone.
+    measure(10, 1_000);
+    expect(setStatus).toHaveBeenLastCalledWith(TPS_STATUS_KEY, "10.0 tok/s · TTFT 1.0s");
+  });
+
+  it("a model switch drops the samples of the previous model", () => {
     const h = moduleHandlers();
     h.start(assistantStart(), ctx);
     now = 1_200;
     h.update(update(), ctx);
     now = 1_500;
-    h.update(update("你好世界"), ctx); // 4 CJK chars ≈ 4 tokens over 300ms
-    expect(setStatus).toHaveBeenLastCalledWith(TPS_STATUS_KEY, "~13.3 tok/s");
+    h.update(update("abcd"), ctx);
+    h.end(assistantEnd({ usage: { output: 50 } }), ctx);
+    expect(setStatus).toHaveBeenLastCalledWith(TPS_STATUS_KEY, "166.7 tok/s · TTFT 0.2s");
+
+    h.modelSelect(
+      { type: "model_select", model: { id: "m2" }, previousModel: { id: "m" }, source: "set" },
+      ctx,
+    );
+    // Two models' rates do not belong in one average: blank until the new
+    // model answers once.
+    expect(setStatus).toHaveBeenLastCalledWith(TPS_STATUS_KEY, undefined);
+  });
+
+  it("a model switch mid-stream drops the in-flight response", () => {
+    const h = moduleHandlers();
+    h.start(assistantStart(), ctx);
+    now = 1_200;
+    h.update(update(), ctx);
+    now = 1_500;
+    h.update(update("abcd"), ctx);
+
+    // /model pressed while this response is still streaming.
+    h.modelSelect(
+      { type: "model_select", model: { id: "m2" }, previousModel: { id: "m" }, source: "set" },
+      ctx,
+    );
+    expect(setStatus).toHaveBeenLastCalledWith(TPS_STATUS_KEY, undefined);
+
+    // Its message_end was requested from the model that is no longer selected:
+    // no sample, so the reading stays blank rather than reporting the old
+    // model's rate under the new one.
+    const calls = setStatus.mock.calls.length;
+    now = 1_600;
+    h.end(assistantEnd({ usage: { output: 50 } }), ctx);
+    expect(setStatus).toHaveBeenCalledTimes(calls);
+
+    // The new model's own response measures normally.
+    now = 2_000;
+    h.start(assistantStart(), ctx);
+    now = 2_200;
+    h.update(update(), ctx);
+    now = 2_600;
+    h.update(update("x"), ctx);
+    h.end(assistantEnd({ usage: { output: 40 } }), ctx);
+    expect(setStatus).toHaveBeenLastCalledWith(TPS_STATUS_KEY, "100.0 tok/s · TTFT 0.2s");
   });
 
   it("ignores message_update without a stream event instead of throwing", () => {
@@ -326,18 +426,27 @@ describe("tps — message lifecycle", () => {
     // shape change (or refactor dropping the guard) fails loudly, not silently.
     const malformed = { type: "message_update", message: { role: "assistant" }, assistantMessageEvent: undefined };
     expect(() => h.update(malformed, ctx)).not.toThrow();
-    expect(setStatus).not.toHaveBeenCalled(); // fresh module: start no longer clears, nothing rendered yet
+    expect(setStatus).not.toHaveBeenCalled(); // fresh module: nothing rendered yet
   });
 
-  it("agent_end only clears a run that died mid-stream", () => {
+  it("agent_end cleans up a run that died mid-stream", () => {
     const h = moduleHandlers();
     h.start(assistantStart(), ctx);
     now = 1_200;
     h.update(update(), ctx);
-    now = 1_500;
-    h.update(update("abcd"), ctx);
     h.agentEnd({ type: "agent_end", messages: [] }, ctx);
-    expect(setStatus).toHaveBeenLastCalledWith(TPS_STATUS_KEY, undefined);
+    expect(setStatus).not.toHaveBeenCalled(); // no message_end, no measurement
+
+    // The abandoned window must not leak: the next message measures from its
+    // own first token.
+    now = 1_800;
+    h.start(assistantStart(), ctx);
+    now = 2_000;
+    h.update(update(), ctx);
+    now = 2_400;
+    h.update(update("x"), ctx);
+    h.end(assistantEnd({ usage: { output: 40 } }), ctx); // 40 tokens / 400ms
+    expect(setStatus).toHaveBeenLastCalledWith(TPS_STATUS_KEY, "100.0 tok/s · TTFT 0.2s");
   });
 
   it("session_shutdown clears state and the status", () => {
@@ -358,12 +467,19 @@ describe("tps — message lifecycle", () => {
       now = 1_200;
       h.update(update(), staleCtx);
       now = 1_500;
-      h.update(update("abcd"), staleCtx); // live render → throwing setStatus
-      h.end(assistantEnd({ stopReason: "aborted" }), staleCtx); // revert → throwing setStatus
+      h.update(update("abcd"), staleCtx);
+      h.end(assistantEnd(), staleCtx); // measurement → throwing setStatus
+      h.end(assistantEnd({ stopReason: "aborted" }), staleCtx); // skipped → no call
     }).not.toThrow();
     // Headless mode: hasUI false → no footer, no call.
     const headless: any = { hasUI: false, ui: { setStatus } };
+    now = 2_000;
     h.start(assistantStart(), headless);
+    now = 2_200;
+    h.update(update(), headless);
+    now = 2_600;
+    h.update(update("x"), headless);
+    h.end(assistantEnd({ usage: { output: 40 } }), headless);
     expect(setStatus).not.toHaveBeenCalled();
     // hasUI getter itself can throw on a stale ctx.
     const throwing: any = {
@@ -401,13 +517,12 @@ describe("tps — footer merge", () => {
     expect(insertIntoStatsLine(`a${" ".repeat(5)}b`, "~0.6 tok/s")).toBeUndefined();
   });
 
-  it("tpsDisplayVariants stops at the rate, never a bare number", () => {
+  it("tpsDisplayVariants always keeps the unit next to the number", () => {
     // The TTFT suffix goes first; the unit stays, because `54.2` dropped into
     // a row of token and cost figures would not be readable on its own.
     expect(tpsDisplayVariants("54.2 tok/s · TTFT 3.0s")).toEqual(["54.2 tok/s · TTFT 3.0s", "54.2 tok/s"]);
-    // A live estimate has no TTFT suffix and never repeats a variant.
-    expect(tpsDisplayVariants("~3.3 tok/s")).toEqual(["~3.3 tok/s"]);
-    expect(tpsDisplayVariants("—")).toEqual(["—"]);
+    // A reading without a TTFT suffix never repeats a variant.
+    expect(tpsDisplayVariants("128.4 tok/s")).toEqual(["128.4 tok/s"]);
   });
 
   it("insertBestFit shortens the reading to the room available", () => {
@@ -511,13 +626,15 @@ describe("tps — footer merge", () => {
     h.update(update(), ctx);
     now = 1_600;
     h.update(update("abcd"), ctx);
-    // Merged path: no setStatus for the live value, but a re-render is requested.
+    now = 1_700;
+    h.end(assistantEnd({ usage: { output: 50 } }), ctx);
+    // Merged path: no setStatus for the reading, but a re-render is requested.
     expect(setStatus).toHaveBeenCalledTimes(1);
     expect(requestRender).toHaveBeenCalled();
 
     const lines = comp.render(100);
     expect(lines).toHaveLength(2); // no status line — TPS lives on line 2
-    expect(lines[1]).toContain("~3.3 tok/s");
+    expect(lines[1]).toContain("166.7 tok/s");
     expect(visibleWidth(lines[1])).toBe(100);
 
     // Cramped width: the gap fits no variant of the reading, so the footer
@@ -550,7 +667,9 @@ describe("tps — footer merge", () => {
     h.update(update(), rpcCtx);
     now = 1_600;
     h.update(update("abcd"), rpcCtx);
-    expect(setStatus).toHaveBeenLastCalledWith(TPS_STATUS_KEY, "~3.3 tok/s");
+    now = 1_700;
+    h.end(assistantEnd({ usage: { output: 50 } }), rpcCtx);
+    expect(setStatus).toHaveBeenLastCalledWith(TPS_STATUS_KEY, "166.7 tok/s · TTFT 0.3s");
   });
 
   it("two consecutive render failures abandon the merge for the status line", async () => {
@@ -564,7 +683,9 @@ describe("tps — footer merge", () => {
     h.update(update(), ctx);
     now = 1_600;
     h.update(update("abcd"), ctx);
-    expect(comp.render(100)[1]).toContain("~3.3 tok/s");
+    now = 1_700;
+    h.end(assistantEnd({ usage: { output: 50 } }), ctx);
+    expect(comp.render(100)[1]).toContain("166.7 tok/s");
     // Merged readings never touch the status channel; the one call so far is
     // session_start clearing a leftover status.
     expect(setStatus).toHaveBeenCalledTimes(1);
@@ -585,14 +706,19 @@ describe("tps — footer merge", () => {
     comp.render(100);
     await Promise.resolve(); // the swap is deferred past the failing render
     expect(setFooter).toHaveBeenLastCalledWith(undefined);
-    expect(setStatus).toHaveBeenLastCalledWith(TPS_STATUS_KEY, "~3.3 tok/s");
+    expect(setStatus).toHaveBeenLastCalledWith(TPS_STATUS_KEY, "166.7 tok/s · TTFT 0.3s");
 
-    // Subsequent updates now go to the status screen line: same reading,
-    // shorter window, and no more re-render requests.
+    // Subsequent measurements now go to the status screen line, and the
+    // abandoned merge asks for no more re-renders.
     const renders = requestRender.mock.calls.length;
     now = 2_000;
+    h.start(assistantStart(), ctx);
+    now = 2_400;
+    h.update(update(), ctx);
+    now = 2_800;
     h.update(update("efgh"), ctx);
-    expect(setStatus).toHaveBeenLastCalledWith(TPS_STATUS_KEY, "~2.9 tok/s");
+    h.end(assistantEnd({ usage: { output: 50 } }), ctx);
+    expect(setStatus).toHaveBeenLastCalledWith(TPS_STATUS_KEY, "142.9 tok/s · TTFT 0.3s");
     expect(requestRender.mock.calls.length).toBe(renders);
   });
 
