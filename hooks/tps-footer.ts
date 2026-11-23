@@ -180,7 +180,11 @@ class TpsFooter extends FooterComponent {
 
   render(width: number): string[] {
     try {
-      const lines = super.render(width);
+      // Pi hands out its rendered lines as read-only — `Container` and friends
+      // return the same cached array while nothing changed — so the merge works
+      // on a copy of this frame instead of editing that array in place. The
+      // return type stays mutable because `FooterComponent` still declares one.
+      const lines = [...super.render(width)];
       if (lines.length >= 2) lines[1] = restoreEllipsisStyle(lines[1]);
       const tps = this.runtime.display;
       if (tps && lines.length >= 2) {

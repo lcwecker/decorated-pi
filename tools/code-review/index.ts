@@ -613,9 +613,26 @@ export function renderReviewDetails(
   return component;
 }
 
+/** Card content for a run the runtime no longer knows about, e.g. one restored
+ *  from a session entry that was dropped. Hoisted so the card keeps one identity
+ *  for its state and therefore keeps its cached frame. */
+const UNAVAILABLE_DETAILS: ReviewRunDetails = {
+  status: "error",
+  model: "unknown",
+  messages: [],
+  error: "Code review state is unavailable.",
+  usage: emptyUsage(),
+};
+
 class LiveReviewComponent extends Container {
   /** Shared with the runtime, so a rebuild keeps a click's answer. */
   private readonly expansion: { wrapper: boolean; override?: boolean };
+  /** What the child tree below was built from. The transcript re-renders every
+   *  component on each frame, and rebuilding this card would re-lex its Markdown
+   *  each time; the runtime hands out a fresh `details` object per update, so its
+   *  identity is the revision to compare. `width` needs no entry: the children
+   *  wrap themselves. */
+  private built?: { details: ReviewRunDetails; expanded: boolean };
 
   constructor(
     private readonly runtime: CodeReviewRuntime,
@@ -643,16 +660,20 @@ class LiveReviewComponent extends Container {
     this.invalidate();
   }
 
-  render(width: number): string[] {
-    this.clear();
-    const details = this.runtime.get(this.runId) ?? {
-      status: "error" as const,
-      model: "unknown",
-      messages: [],
-      error: "Code review state is unavailable.",
-      usage: emptyUsage(),
-    };
+  render(width: number): readonly string[] {
+    const details = this.runtime.get(this.runId) ?? UNAVAILABLE_DETAILS;
     const expanded = this.isExpanded();
+    if (this.built?.details !== details || this.built.expanded !== expanded) {
+      this.rebuild(details, expanded);
+      this.built = { details, expanded };
+    }
+    // A kept tree renders from its own caches, and pi-tui returns the same array
+    // while nothing under it changed.
+    return super.render(width);
+  }
+
+  private rebuild(details: ReviewRunDetails, expanded: boolean): void {
+    this.clear();
     // Mirror Pi's ToolExecutionComponent shell: one padded Box whose background
     // changes from pending to success/error, with renderCall then renderResult.
     const bg = details.status === "running" ? "toolPendingBg"
@@ -675,7 +696,6 @@ class LiveReviewComponent extends Container {
       this.setExpanded(!this.isExpanded());
       return { handled: true };
     }));
-    return super.render(width);
   }
 
   private collapsedHint(expanded: boolean): string | undefined {

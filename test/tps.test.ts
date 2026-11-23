@@ -25,7 +25,7 @@
  *    message_end (compose, no replacement) to the module
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { initTheme } from "@earendil-works/pi-coding-agent";
+import { initTheme, FooterComponent } from "@earendil-works/pi-coding-agent";
 import { visibleWidth } from "@earendil-works/pi-tui";
 import {
   createTpsModule,
@@ -653,6 +653,42 @@ describe("tps — footer merge", () => {
 
     h.shutdown({ type: "session_shutdown" }, ctx);
     expect(setFooter).toHaveBeenCalledWith(undefined); // built-in footer restored
+  });
+
+  it("merges into a copy, leaving the array pi returned untouched", () => {
+    const h = moduleHandlers();
+    const { ctx, getFooter } = makeTuiCtx();
+    h.sessionStart({ type: "session_start" }, ctx);
+    const comp = getFooter();
+
+    h.start(assistantStart(), ctx);
+    now = 1_300;
+    h.update(update(), ctx);
+    now = 1_600;
+    h.update(update("abcd"), ctx);
+    now = 1_700;
+    h.end(assistantEnd({ usage: { output: 50 } }), ctx);
+
+    // Pi hands out its rendered lines as read-only and returns the same cached
+    // array while nothing changed, so the merge has to write into a copy of the
+    // frame rather than into the frame itself.
+    const baseFrames: string[][] = [];
+    const base = FooterComponent.prototype.render;
+    (FooterComponent.prototype as any).render = function (this: any, width: number) {
+      const lines = base.call(this, width);
+      baseFrames.push(lines);
+      return lines;
+    };
+    try {
+      const merged = comp.render(100);
+      const baseLines = baseFrames.at(-1)!;
+      expect(merged).not.toBe(baseLines);
+      expect(baseLines[1]).not.toContain("tok/s");
+      expect(merged[1]).toContain("166.7 tok/s");
+      expect(visibleWidth(merged[1])).toBe(100);
+    } finally {
+      (FooterComponent.prototype as any).render = base;
+    }
   });
 
   it("rpc mode: falls back to the setStatus status line", () => {

@@ -152,7 +152,9 @@ class CategorySubmenu extends Container {
     this.list.handleInput(data);
   }
 
-  render(width: number): string[] {
+  // SettingsList caches its output, so this hands out a shared array the
+  // caller must leave alone — the component contract since pi-tui 1.6.
+  render(width: number): readonly string[] {
     return this.list.render(width);
   }
 }
@@ -229,7 +231,7 @@ class DependencyBinarySubmenu extends Container {
     this.list.updateValue("path", dependencyDisplayValue(this.name));
   }
 
-  render(width: number): string[] {
+  render(width: number): readonly string[] {
     return this.list.render(width);
   }
 }
@@ -270,7 +272,7 @@ class DependenciesSubmenu extends Container {
     this.list.handleInput(data);
   }
 
-  render(width: number): string[] {
+  render(width: number): readonly string[] {
     return this.list.render(width);
   }
 }

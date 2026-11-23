@@ -32,6 +32,7 @@ decorated-pi/
 - A command does not participate in the agent loop. When it needs agent-loop state (e.g. `/retry`'s in-flight flag), the state object is created by the command module and the reset lives in a hook module (see `hooks/retry.ts`).
 - The skeleton (`hooks/skeleton.ts`) is the only place that calls `pi.on(...)`.
 - MCP is owned by pi's built-in MCP extension: it reads `mcp.json`, connects, registers the `mcp__<server>__<tool>` tools and serves `/mcp`. `tools/mcp.ts` is not a tool module — it registers the pack's two server definitions with `pi.registerMcpServer()` and migrates the legacy project server list.
+- A component's `render()` output is read-only (pi-tui 1.6+): `Container`, `Box`, `Text` and `Markdown` hand back the same cached array while nothing changed, so a subclass copies before editing (`[...super.render(width)]`) and returns a new array when its output changed. Rebuilding a child tree on every frame also throws away the children's own caches — key the rebuild on the state it was built from (see `LiveReviewComponent` in `tools/code-review/index.ts`).
 
 ### Skeleton — `hooks/skeleton.ts`
 

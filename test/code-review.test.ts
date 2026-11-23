@@ -514,6 +514,36 @@ describe("history rendering", () => {
     expect(component.render(120).join("\n")).toContain("[toolErrorBg]");
   });
 
+  it("keeps its frame and its child tree while the review is unchanged", () => {
+    const runtime = new CodeReviewRuntime();
+    runtime.restore("run-1", details({ status: "done", messages: [assistant("Final report")] }));
+    const pi: any = { registerMessageRenderer: vi.fn() };
+    registerCodeReviewRenderer(pi, runtime);
+    const renderer = pi.registerMessageRenderer.mock.calls[0][1];
+    const component = renderer({ details: { runId: "run-1" } }, { expanded: true }, theme);
+
+    const first = component.render(80);
+    const card = component.children[0];
+    // Pi re-renders the whole transcript on every frame and only reuses a
+    // subtree whose children and lines are unchanged. A card rebuilt each pass
+    // would re-lex its Markdown every time.
+    expect(component.render(80)).toBe(first);
+    expect(component.children[0]).toBe(card);
+
+    // The runtime hands out a fresh `details` object per update: a new revision,
+    // so the card rebuilds and shows the new report.
+    runtime.restore("run-1", details({ status: "done", messages: [assistant("Second report")] }));
+    const second = component.render(80);
+    expect(second).not.toBe(first);
+    expect(component.children[0]).not.toBe(card);
+    expect(second.join("\n")).toContain("Second report");
+
+    // A click is the other half of the same key.
+    clickCard(component);
+    expect(component.render(80).join("\n")).not.toContain("Second report");
+    expect(component.render(80)).not.toBe(second);
+  });
+
   it("opens and closes the card on a left click, as often as asked", () => {
     const runtime = new CodeReviewRuntime();
     runtime.restore("run-1", details({ status: "done", messages: [assistant("Final report")] }));
