@@ -13,7 +13,8 @@ export function registerDpModelCommand(pi: ExtensionAPI): void {
       if (ctx.hasUI) {
         await ctx.ui.custom<void>(
           (tui, theme, _kb, done) =>
-            new ModelPickerComponent(tui, theme, ctx.modelRegistry, () => done(undefined))
+            new ModelPickerComponent(tui, theme, ctx.modelRegistry, () => done(undefined)),
+          { blocked: { kind: "question", message: "decorated-pi models" } },
         );
         return;
       }

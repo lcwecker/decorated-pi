@@ -117,8 +117,12 @@ export function registerAskTool(pi: ExtensionAPI): void {
         };
       }
 
+      // Report blocked program status (OSC 7501) while the wizard waits, so a
+      // supporting terminal shows pi as waiting for an answer. The message
+      // stays generic: status reports never carry prompts or model output.
       const answers = await ctx.ui.custom<AskAnswer[] | undefined>(
         (tui, theme, _kb, done) => new AskComponent(tui, theme, questions, done),
+        { blocked: { kind: "question", message: "Waiting for answers" } },
       );
 
       if (!answers) {

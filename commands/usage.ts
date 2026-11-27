@@ -521,7 +521,7 @@ export function registerUsageCommand(pi: ExtensionAPI): void {
             }
           },
         };
-      });
+      }, { blocked: { kind: "question", message: "Usage statistics" } });
 
       if (!report) return;
 
@@ -537,7 +537,7 @@ export function registerUsageCommand(pi: ExtensionAPI): void {
           }
         };
         return new UsageReportComponent(theme, report, () => tui.requestRender?.(), () => done(), rebuild);
-      });
+      }, { blocked: { kind: "question", message: "Usage statistics" } });
     },
   });
 }

@@ -13,7 +13,8 @@ export function registerDpSettingsCommand(pi: ExtensionAPI): void {
       if (ctx.hasUI) {
         await ctx.ui.custom<void>(
           (tui, theme, _kb, done) =>
-            new ModuleSettingsComponent(tui, theme, ctx.ui, () => done(undefined))
+            new ModuleSettingsComponent(tui, theme, ctx.ui, () => done(undefined)),
+          { blocked: { kind: "question", message: "decorated-pi settings" } },
         );
         // Only prompt for reload when the effective settings differ from
         // the snapshot taken when pi loaded the extension.

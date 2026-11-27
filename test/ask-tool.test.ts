@@ -53,6 +53,16 @@ describe("ask tool — wizard path", () => {
     }
   });
 
+  it("reports blocked program status while the wizard waits", async () => {
+    const ctx = meCtx([{ id: "q1", value: "staging" }]);
+    await captureTool().execute("1", { questions: [single] }, undefined, undefined, ctx);
+
+    // The message stays generic: status reports never carry prompts.
+    expect(ctx.ui.custom.mock.calls[0][1]).toEqual({
+      blocked: { kind: "question", message: "Waiting for answers" },
+    });
+  });
+
   it("joins a multi-choice answer into one line", async () => {
     const ctx = meCtx([{ id: "q2", value: ["lint", "tests"] }]);
     const result = await captureTool().execute("1", { questions: [multi] }, undefined, undefined, ctx);

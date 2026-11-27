@@ -75,6 +75,9 @@ describe("/dp-model", () => {
 
     expect(mockCustom).toHaveBeenCalledTimes(1);
     expect(mockCustom.mock.calls[0][0]).toBeTypeOf("function"); // factory
+    expect(mockCustom.mock.calls[0][1]).toEqual({
+      blocked: { kind: "question", message: "decorated-pi models" },
+    });
     expect(mockNotify).not.toHaveBeenCalled();
   });
 
@@ -122,6 +125,9 @@ describe("/dp-settings", () => {
     await lastCommand!.handler([], ctx);
 
     expect(mockCustom).toHaveBeenCalledTimes(1);
+    expect(mockCustom.mock.calls[0][1]).toEqual({
+      blocked: { kind: "question", message: "decorated-pi settings" },
+    });
     expect(mockNotify).not.toHaveBeenCalledWith(
       "dp-settings requires interactive mode.",
       expect.anything(),
@@ -182,6 +188,37 @@ describe("/dp-settings", () => {
       (call) => call[0] === "Module settings updated. /reload to apply.",
     );
     expect(reloadNotify).toBeUndefined();
+  });
+});
+
+// ─── /usage ───────────────────────────────────────────────────────────────
+
+describe("/usage", () => {
+  const empty = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, turns: 0, hitRate: 0 };
+
+  it("reports blocked program status for the loading dialog and the report", async () => {
+    const { registerUsageCommand } = await import("../commands/usage.js");
+    const pi = makePi();
+    registerUsageCommand(pi as any);
+
+    mockCustom
+      .mockResolvedValueOnce({
+        currentSession: empty,
+        today: empty,
+        thisWeek: empty,
+        thisMonth: empty,
+        allTime: empty,
+        byModel: [],
+      })
+      .mockResolvedValueOnce(undefined);
+
+    const ctx = { ...makeCtx(), sessionManager: {} };
+    await lastCommand!.handler([], ctx);
+
+    expect(mockCustom).toHaveBeenCalledTimes(2);
+    for (const call of mockCustom.mock.calls) {
+      expect(call[1]).toEqual({ blocked: { kind: "question", message: "Usage statistics" } });
+    }
   });
 });
 
