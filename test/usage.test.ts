@@ -3,6 +3,7 @@
  *
  * Pure-function tests for commands/usage.ts:
  *   - formatTokens / formatCost / formatHitRate
+ *   - formatOutputBreakdown
  *   - pickColumns
  *   - aggregate
  *   - formatCell
@@ -17,6 +18,7 @@ import {
   pickColumns,
   aggregate,
   formatCell,
+  formatOutputBreakdown,
   formatRow,
   pickModelDisplay,
   type Aggregate,
@@ -137,6 +139,8 @@ describe("formatCell", () => {
   const agg: Aggregate = {
     input: 12_400,
     output: 800,
+    reasoning: 0,
+    imageOutput: 0,
     cacheRead: 41_200,
     cacheWrite: 0,
     cost: 0.07,
@@ -179,6 +183,36 @@ describe("formatCell", () => {
   });
 });
 
+// ─── formatOutputBreakdown ──────────────────────────────────────────────────
+
+describe("formatOutputBreakdown", () => {
+  const base: Aggregate = {
+    input: 0,
+    output: 1000,
+    reasoning: 0,
+    imageOutput: 0,
+    cacheRead: 0,
+    cacheWrite: 0,
+    cost: 0,
+    turns: 1,
+    hitRate: 0,
+  };
+
+  it("returns undefined when no provider reported a split", () => {
+    expect(formatOutputBreakdown(base)).toBeUndefined();
+  });
+
+  it("labels reasoning and image tokens as inside Output", () => {
+    expect(formatOutputBreakdown({ ...base, reasoning: 1200, imageOutput: 300 })).toBe(
+      "Reasoning 1.2k  ·  Image 300  (both inside Output)",
+    );
+  });
+
+  it("names only the reported half of the split", () => {
+    expect(formatOutputBreakdown({ ...base, reasoning: 500 })).toBe("Reasoning 500  (inside Output)");
+  });
+});
+
 // ─── pickModelDisplay ───────────────────────────────────────────────────────
 
 describe("pickModelDisplay", () => {
@@ -205,6 +239,8 @@ describe("formatRow", () => {
   const agg: Aggregate = {
     input: 1000,
     output: 200,
+    reasoning: 0,
+    imageOutput: 0,
     cacheRead: 500,
     cacheWrite: 300,
     cost: 0.05,
@@ -258,6 +294,25 @@ describe("aggregate", () => {
     expect(report.allTime.hitRate).toBeCloseTo(64.5, 1);
     expect(report.byModel).toHaveLength(1);
     expect(report.byModel[0]!.model).toBe("test/m");
+  });
+
+  it("sums the reasoning and image breakdown without adding it to output", () => {
+    const report = aggregate([
+      mk({ output: 100, reasoning: 60, imageOutput: 10 }),
+      mk({ output: 50, reasoning: 20 }),
+    ]);
+    expect(report.allTime.output).toBe(150);
+    expect(report.allTime.reasoning).toBe(80);
+    expect(report.allTime.imageOutput).toBe(10);
+    expect(report.byModel[0]!.allTime.reasoning).toBe(80);
+    expect(report.byModel[0]!.allTime.imageOutput).toBe(10);
+  });
+
+  it("keeps the breakdown at zero for entries written before pi 1.7.0", () => {
+    const report = aggregate([mk({ output: 40 })]);
+    expect(report.allTime.reasoning).toBe(0);
+    expect(report.allTime.imageOutput).toBe(0);
+    expect(report.allTime.output).toBe(40);
   });
 
   it("filters currentSession when file matches", () => {

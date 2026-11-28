@@ -20,6 +20,7 @@ import type {
 import {
   formatCell,
   formatCost,
+  formatOutputBreakdown,
   pickColumns,
   pickModelDisplay,
 } from "../commands/usage.js";
@@ -305,6 +306,14 @@ export class UsageReportComponent extends Container {
       lines.push("");
       lines.push(t.fg("dim", "  Input = all input tokens (user input + context)  ·  Output = model output tokens"));
       lines.push(t.fg("dim", "  CacheR = cached hits  ·  CacheW = created cache  ·  CacheHit = CacheR / Input"));
+
+      // Reasoning and image tokens are subsets of Output (pi reports them as a
+      // breakdown), so they are shown as such and never added to a total.
+      // Only rendered once a provider has reported one of them.
+      const breakdown = formatOutputBreakdown(this.report.allTime);
+      if (breakdown) {
+        lines.push(t.fg("dim", `  ${breakdown}`));
+      }
 
       this.linesComponent.setText(lines.join("\n"));
     }

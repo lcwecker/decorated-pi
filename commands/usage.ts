@@ -39,11 +39,23 @@ interface UsageEntry {
   cacheRead: number;
   cacheWrite: number;
   cost: number;
+  /** Thinking tokens reported by the provider. A subset of `output`, so it is
+   *  a breakdown and never added to it. Absent in entries written before pi
+   *  1.7.0 and for providers that report no split. */
+  reasoning?: number;
+  /** Image output tokens reported by the provider. A subset of `output`, like
+   *  `reasoning`. pi 1.7.0 added it. */
+  imageOutput?: number;
 }
 
 export interface Aggregate {
   input: number;
   output: number;
+  /** Thinking tokens inside `output` (breakdown, not additional tokens). */
+  reasoning: number;
+  /** Image output tokens inside `output`; visible only after a codemode image
+   *  generation or a provider that reports the split. */
+  imageOutput: number;
   cacheRead: number;
   cacheWrite: number;
   cost: number;
@@ -172,6 +184,10 @@ async function ingestSessionFile(
           cacheRead: usage.cacheRead || 0,
           cacheWrite: usage.cacheWrite || 0,
           cost: usage.cost?.total || 0,
+          // `undefined` when the provider reports no split — kept distinct
+          // from a reported 0 so a stale index still reads back correctly.
+          ...(typeof usage.reasoning === "number" ? { reasoning: usage.reasoning } : {}),
+          ...(typeof usage.imageOutput === "number" ? { imageOutput: usage.imageOutput } : {}),
         });
       } catch {
         // skip malformed lines
@@ -274,7 +290,7 @@ export function readUsageEntries(): UsageEntry[] {
 // ─── Aggregation ───────────────────────────────────────────────────────────
 
 function emptyAggregate(): Aggregate {
-  return { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, turns: 0, hitRate: 0 };
+  return { input: 0, output: 0, reasoning: 0, imageOutput: 0, cacheRead: 0, cacheWrite: 0, cost: 0, turns: 0, hitRate: 0 };
 }
 
 function getPeriods(): { todayMs: number; weekStartMs: number; monthStartMs: number } {
@@ -293,6 +309,8 @@ function getPeriods(): { todayMs: number; weekStartMs: number; monthStartMs: num
 function accum(a: Aggregate, e: UsageEntry): void {
   a.input += e.input;
   a.output += e.output;
+  a.reasoning += e.reasoning ?? 0;
+  a.imageOutput += e.imageOutput ?? 0;
   a.cacheRead += e.cacheRead;
   a.cacheWrite += e.cacheWrite;
   a.cost += e.cost;
@@ -392,6 +410,17 @@ export function formatCost(c: number): string {
   if (c < 1000) return `$${c.toFixed(2)}`;
   const k = c / 1000;
   return `$${k.toFixed(1)}k`;
+}
+
+/** Return a one-line breakdown of the reasoning and image tokens inside
+ *  `output`, or undefined when no provider reported either. Both fields are
+ *  subsets of `output`, so the line labels a split and never adds a total. */
+export function formatOutputBreakdown(agg: Aggregate): string | undefined {
+  const parts: string[] = [];
+  if (agg.reasoning > 0) parts.push(`Reasoning ${formatTokens(agg.reasoning)}`);
+  if (agg.imageOutput > 0) parts.push(`Image ${formatTokens(agg.imageOutput)}`);
+  if (parts.length === 0) return undefined;
+  return `${parts.join("  ·  ")}  (${parts.length > 1 ? "both " : ""}inside Output)`;
 }
 
 export function formatHitRate(hitRate: number, turns: number): string {

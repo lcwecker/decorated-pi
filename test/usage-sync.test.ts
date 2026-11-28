@@ -66,6 +66,8 @@ interface MsgOpts {
   cacheRead?: number;
   cacheWrite?: number;
   cost?: number;
+  reasoning?: number;
+  imageOutput?: number;
 }
 
 function assistantMessage(opts: MsgOpts): string {
@@ -94,6 +96,10 @@ function assistantMessage(opts: MsgOpts): string {
         cacheWrite,
         totalTokens: input + output + cacheRead + cacheWrite,
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: cost },
+        // Only present when the fixture asks for them, mimicking a provider
+        // that reports no reasoning/image split.
+        ...(opts.reasoning !== undefined ? { reasoning: opts.reasoning } : {}),
+        ...(opts.imageOutput !== undefined ? { imageOutput: opts.imageOutput } : {}),
       },
     },
   });
@@ -242,6 +248,34 @@ describe("syncUsageIndex — dedup across forked files", () => {
     expect(entries).toHaveLength(3);
     const totalInput = entries.reduce((s, e) => s + e.input, 0);
     expect(totalInput).toBe(1 + 100 + 9);
+  });
+});
+
+describe("ingest — output breakdown", () => {
+  it("records the reasoning and image split when the provider reports it", async () => {
+    await writeSessionFile("s1.jsonl", [
+      sessionHeader(),
+      assistantMessage({ ts: 1_000, provider: "p", model: "m", output: 100, reasoning: 60, imageOutput: 10 }),
+    ]);
+    await syncUsageIndex();
+
+    const [entry] = readUsageEntries();
+    expect(entry!.output).toBe(100);
+    expect(entry!.reasoning).toBe(60);
+    expect(entry!.imageOutput).toBe(10);
+  });
+
+  it("leaves the split undefined when the provider reports none", async () => {
+    await writeSessionFile("s1.jsonl", [
+      sessionHeader(),
+      assistantMessage({ ts: 1_000, provider: "p", model: "m", output: 40 }),
+    ]);
+    await syncUsageIndex();
+
+    const [entry] = readUsageEntries();
+    expect(entry!.output).toBe(40);
+    expect(entry!.reasoning).toBeUndefined();
+    expect(entry!.imageOutput).toBeUndefined();
   });
 });
 

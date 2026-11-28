@@ -194,7 +194,17 @@ describe("/dp-settings", () => {
 // ─── /usage ───────────────────────────────────────────────────────────────
 
 describe("/usage", () => {
-  const empty = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, turns: 0, hitRate: 0 };
+  const empty = {
+    input: 0,
+    output: 0,
+    reasoning: 0,
+    imageOutput: 0,
+    cacheRead: 0,
+    cacheWrite: 0,
+    cost: 0,
+    turns: 0,
+    hitRate: 0,
+  };
 
   it("reports blocked program status for the loading dialog and the report", async () => {
     const { registerUsageCommand } = await import("../commands/usage.js");
