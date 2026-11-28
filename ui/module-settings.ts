@@ -6,7 +6,7 @@
  * category so the user can toggle each one.
  */
 
-import type { Theme as PiTheme, ExtensionUIContext } from "@earendil-works/pi-coding-agent";
+import { keyText, type Theme as PiTheme, type ExtensionUIContext } from "@earendil-works/pi-coding-agent";
 import { Container, SettingsList, type TUI, type SettingsListTheme, type SettingItem, type Component } from "@earendil-works/pi-tui";
 import { getAllModuleSettings, setModuleEnabled, isModuleEnabled, type ModuleSettings, getDependencyPath, setDependencyPath, isDontBother, setDontBother, getDependencyView, listDependencyViewNames } from "../settings.js";
 import { listLspBinaryNames } from "../tools/lsp/servers.js";
@@ -98,6 +98,14 @@ function getSettingsListTheme(theme: PiTheme): SettingsListTheme {
   };
 }
 
+/** The key that activates a row (submenu or value cycle), read from the live
+ *  keybindings so a remapped `tui.select.confirm` shows up in the description
+ *  instead of a hardcoded "Enter". Capitalized because it opens the sentence. */
+function confirmKeyHint(): string {
+  const key = keyText("tui.select.confirm");
+  return key.charAt(0).toUpperCase() + key.slice(1);
+}
+
 const MODULE_TO_CATEGORY: Record<ModuleName, CategoryId> = {
   patchOverrideEdit: "tools",
   ask: "tools",
@@ -184,7 +192,7 @@ class DependencyBinarySubmenu extends Container {
       {
         id: "path",
         label: "Path override",
-        description: "Enter to edit; empty to clear override",
+        description: `${confirmKeyHint()} to edit; empty to clear override`,
         currentValue: dependencyDisplayValue(name),
         values: ["edit"],
       },
@@ -253,7 +261,7 @@ class DependenciesSubmenu extends Container {
     const items: SettingItem[] = this.binaryNames.map((name) => ({
       id: name,
       label: name,
-      description: "Enter to configure path override and dontBother",
+      description: `${confirmKeyHint()} to configure path override and dontBother`,
       currentValue: dependencyDisplayValue(name),
       submenu: (_currentValue, submenuDone) => new DependencyBinarySubmenu(name, theme, ui, submenuDone),
     }));

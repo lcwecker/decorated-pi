@@ -9,7 +9,7 @@
  */
 
 import type { Theme } from "@earendil-works/pi-coding-agent";
-import { DynamicBorder } from "@earendil-works/pi-coding-agent";
+import { DynamicBorder, keyHint, rawKeyHint } from "@earendil-works/pi-coding-agent";
 import { Container, getKeybindings, Spacer, Text } from "@earendil-works/pi-tui";
 import type {
   Aggregate,
@@ -318,16 +318,19 @@ export class UsageReportComponent extends Container {
       this.linesComponent.setText(lines.join("\n"));
     }
 
-    // Hint
+    // Hint. The two TUI bindings come from the keybindings registry (a
+    // remapped confirm key must not still read "Enter"); q and r are this
+    // component's own keys, so they are spelled out.
     const hintParts: string[] = [];
     if (modelCount > 0) {
-      hintParts.push("↑↓ select");
+      hintParts.push(rawKeyHint("↑↓", "select"));
       const sel = this.report.byModel[this.selectedIndex];
-      hintParts.push(sel && this.expanded.has(sel.model) ? "Enter collapse" : "Enter expand");
+      hintParts.push(keyHint("tui.select.confirm", sel && this.expanded.has(sel.model) ? "collapse" : "expand"));
     }
-    hintParts.push("q close");
-    hintParts.push("r rebuild");
-    this.hintComponent.setText(t.fg("dim", "  " + hintParts.join(" · ")));
+    hintParts.push(rawKeyHint("q", "close"));
+    hintParts.push(rawKeyHint("r", "rebuild"));
+    const separator = t.fg("dim", " · ");
+    this.hintComponent.setText(t.fg("dim", "  ") + hintParts.join(separator));
 
     this.requestRender();
   }

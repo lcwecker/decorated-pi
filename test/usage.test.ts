@@ -8,9 +8,16 @@
  *   - aggregate
  *   - formatCell
  *   - pickModelDisplay
+ *
+ * Plus one render test for ui/usage.ts: the hint line must name the keys the
+ * component actually listens for, so a remapped `tui.select.confirm` cannot
+ * still read "Enter".
  */
 
-import { describe, it, expect } from "vitest";
+import { afterEach, describe, it, expect } from "vitest";
+import { initTheme } from "@earendil-works/pi-coding-agent";
+import { KeybindingsManager, TUI_KEYBINDINGS, setKeybindings, stripTerminalSequences } from "@earendil-works/pi-tui";
+import { UsageReportComponent } from "../ui/usage.js";
 import {
   formatTokens,
   formatCost,
@@ -387,5 +394,54 @@ describe("aggregate", () => {
     ]);
     expect(report.byModel[0]!.model).toBe("a/a");
     expect(report.byModel[1]!.model).toBe("b/b");
+  });
+});
+
+// ─── UsageReportComponent hint ─────────────────────────────────────────────
+
+/** Only the theme surface the report touches. */
+const plainTheme = {
+  fg: (_key: string, text: string) => text,
+  bold: (text: string) => text,
+} as any;
+
+function reportWith(models: string[]): ReturnType<typeof aggregate> {
+  return aggregate(
+    models.map((model) => ({
+      ts: Date.now(),
+      model,
+      sessionFile: "s",
+      input: 1,
+      output: 1,
+      cacheRead: 0,
+      cacheWrite: 0,
+      cost: 0,
+    })),
+  );
+}
+
+function renderReport(report: ReturnType<typeof aggregate>): string {
+  const component = new UsageReportComponent(plainTheme, report, () => {}, () => {});
+  return stripTerminalSequences(component.render(100).join("\n"));
+}
+
+afterEach(() => {
+  // Keybindings live in a module-level singleton; reset it per spec.
+  setKeybindings(new KeybindingsManager(TUI_KEYBINDINGS));
+});
+
+describe("UsageReportComponent hint", () => {
+  it("names the default confirm key", () => {
+    initTheme(undefined, false);
+    setKeybindings(new KeybindingsManager(TUI_KEYBINDINGS));
+    expect(renderReport(reportWith(["a/a"]))).toContain("enter expand");
+  });
+
+  it("names a remapped confirm key instead", () => {
+    initTheme(undefined, false);
+    setKeybindings(new KeybindingsManager(TUI_KEYBINDINGS, { "tui.select.confirm": "space" }));
+    const rendered = renderReport(reportWith(["a/a"]));
+    expect(rendered).toContain("space expand");
+    expect(rendered).not.toContain("enter expand");
   });
 });

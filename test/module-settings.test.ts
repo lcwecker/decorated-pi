@@ -92,4 +92,16 @@ describe("Dependencies submenu", () => {
     expect(seen).toContain("pdfinfo");
     expect(seen).toContain("pdftoppm");
   });
+
+  it("names the configured confirm key in its row descriptions", () => {
+    setKeybindings(new KeybindingsManager(TUI_KEYBINDINGS, { "tui.select.confirm": "space" }));
+
+    const component = new ModuleSettingsComponent({} as any, theme, makeUi(), () => {});
+    walk(component, [DOWN, " "]); // Commands → Dependencies (space is now confirm)
+    expect(walk(component, [])).toContain("Space to configure path override and dontBother");
+
+    walk(component, [" "]); // first binary → its own submenu
+    expect(walk(component, [])).toContain("Space to edit; empty to clear override");
+    expect(walk(component, [])).not.toContain("Enter to");
+  });
 });
